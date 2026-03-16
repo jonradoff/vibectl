@@ -1,6 +1,8 @@
 import { Routes, Route } from 'react-router-dom'
 import RebuildOverlay from './components/shared/RebuildOverlay'
 import Layout from './components/layout/Layout'
+import { AuthProvider } from './contexts/AuthContext'
+import AuthGate from './components/auth/AuthGate'
 import Dashboard from './pages/Dashboard'
 import ProjectPage from './pages/ProjectPage'
 import IssuePage from './pages/IssuePage'
@@ -17,6 +19,8 @@ import CLIDocsPage from './pages/docs/CLIDocsPage'
 
 function App() {
   return (
+    <AuthProvider>
+    <AuthGate>
     <>
     <RebuildOverlay />
     <Routes>
@@ -37,6 +41,8 @@ function App() {
       </Route>
     </Routes>
     </>
+    </AuthGate>
+    </AuthProvider>
   )
 }
 

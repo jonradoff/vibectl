@@ -19,9 +19,17 @@ import type {
 
 const BASE = '/api/v1';
 
+export const TOKEN_KEY = 'vibectl_token';
+export const getStoredToken = () => localStorage.getItem(TOKEN_KEY);
+export const setStoredToken = (t: string) => localStorage.setItem(TOKEN_KEY, t);
+export const clearStoredToken = () => localStorage.removeItem(TOKEN_KEY);
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    headers: { ...headers, ...(options?.headers as Record<string, string>) },
     ...options,
   });
   if (!res.ok) {
@@ -212,6 +220,16 @@ export const ensureDir = (path: string) =>
   });
 
 // Admin
+export const getAuthStatus = async (): Promise<{ passwordSet: boolean; tokenValid: boolean }> => {
+  const token = getStoredToken();
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(`${BASE}/admin/auth-status`, { headers });
+  if (!res.ok) throw new Error('auth-status failed');
+  return res.json();
+};
+export const adminLogin = (password: string) =>
+  request<{ token: string }>('/admin/login', { method: 'POST', body: JSON.stringify({ password }) });
 export const triggerRebuild = () =>
   request<{ status: string }>('/admin/rebuild', { method: 'POST' });
 export const getSelfInfo = () =>

@@ -248,7 +248,8 @@ func main() {
 		r.Get("/check-dir", filesystemHandler.CheckDir)
 
 		// Admin endpoints
-		r.Post("/admin/login", adminHandler.Login)          // public — no auth required
+		r.Get("/admin/auth-status", adminHandler.AuthStatus)    // public — check if password set + token validity
+		r.Post("/admin/login", adminHandler.Login)              // public — no auth required
 		r.Post("/admin/set-password", adminHandler.SetPassword) // public — protects with current password
 		r.With(middleware.AdminAuth(adminService)).Post("/admin/rebuild", adminHandler.Rebuild)
 		r.Get("/admin/self-info", adminHandler.SelfInfo)

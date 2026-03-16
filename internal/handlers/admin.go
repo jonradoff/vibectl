@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/jonradoff/vibectl/internal/middleware"
@@ -28,6 +29,39 @@ func NewAdminHandler(sourceDir string, onBeforeExec func(), adminService *servic
 		onBeforeExec: onBeforeExec,
 		adminService: adminService,
 	}
+}
+
+// AuthStatus handles GET /api/v1/admin/auth-status.
+// Public endpoint. Returns whether a password is configured and whether the supplied token is valid.
+func (h *AdminHandler) AuthStatus(w http.ResponseWriter, r *http.Request) {
+	has, err := h.adminService.HasPassword(r.Context())
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		return
+	}
+
+	tokenValid := false
+	if !has {
+		// No password configured — open access, treat as authenticated.
+		tokenValid = true
+	} else {
+		auth := r.Header.Get("Authorization")
+		token := ""
+		if strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimPrefix(auth, "Bearer ")
+		} else {
+			token = r.Header.Get("X-Vibectl-Token")
+		}
+		if token != "" {
+			ok, _ := h.adminService.VerifyToken(r.Context(), token)
+			tokenValid = ok
+		}
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"passwordSet": has,
+		"tokenValid":  tokenValid,
+	})
 }
 
 // Rebuild handles POST /api/v1/admin/rebuild.
