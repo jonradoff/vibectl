@@ -27,7 +27,9 @@ VibeCtl provides:
 ### Projects & Issues
 - Projects with codes (`LCMS`, `MYAPP`, etc.), goals, links, and deployment config
 - Issues with types (bug / feature / idea), priorities (P0–P5), and type-specific status workflows
-- Full-text search across all issues
+- Issue comments / thread for discussion on each issue
+- Bulk operations: change priority or archive multiple issues at once
+- Full-text global search across all issues
 - Decision audit log — every status change is recorded
 
 ### Health Monitoring
@@ -36,16 +38,25 @@ VibeCtl provides:
 - Frontend uses simple 200-response check (no /healthz required)
 - 24-hour uptime timeline, 7-day history stored in MongoDB
 - Auto-polls every 10 minutes in the background
+- Webhook alerts when a service goes down or comes back up
 
 ### VIBECTL.md Generation
 - Auto-generates a structured markdown file in your project directory
 - Contains: open issues by priority, deployment info, recent decisions, architecture summary
 - Claude Code reads this on startup — `include: VIBECTL.md` in `settings.json`
+- Configurable auto-regen schedule (hourly / daily / weekly) in Settings
+
+### Webhooks
+- Per-project webhook endpoints (any number of URLs per project)
+- HMAC-SHA256 signature on every payload (`X-Vibectl-Signature: sha256=...`)
+- Events: `p0_issue_created`, `health_check_down`, `health_check_up`, `feedback_triaged`
+- See [API docs](docs/api.md) for payload format and signature verification
 
 ### Feedback Queue
 - Collect feedback from GitHub comments, manual input, or API
 - AI triage with Claude: matches to existing issues or proposes new ones
 - Recurring theme detection across feedback
+- Webhook fires after each AI triage completes
 
 ### Sessions & Activity
 - Work session tracking — log what was worked on, summaries
@@ -63,9 +74,15 @@ VibeCtl provides:
 - See [skill.md](skill.md) for full tool reference
 
 ### Admin Authentication
+- Password-gate on first launch — setup screen guides you through CLI setup
 - Admin password stored bcrypt-hashed in MongoDB (never in a file)
-- Session tokens generated on login, rotated on each auth
+- Session tokens generated on login, rotate on each login, expire after 30 days
+- Sign-out button in sidebar; 401 auto-redirects to login
 - Protected endpoints: rebuild, password change
+
+### Settings
+- Global settings page (gear icon in sidebar)
+- VIBECTL.md auto-regen schedule: off / hourly / daily / weekly
 
 ---
 
@@ -371,17 +388,20 @@ frontend/
 
 ## Roadmap
 
-### v0.1 (current)
-- Project, issue, feedback management
-- VIBECTL.md generation
-- Claude Code MCP integration
-- Health check monitoring
-- Admin authentication
+### v0.8 (current)
+- Project, issue, feedback management with AI triage
+- Issue comments and bulk operations
+- VIBECTL.md generation with configurable auto-regen schedule
+- Claude Code MCP integration (20 tools)
+- Health check monitoring with webhook alerting
+- Admin auth gate: bcrypt password, 30-day token expiry, auto-logout on 401
+- Webhooks: HMAC-signed HTTP POST for P0 issues, health transitions, feedback triage
+- Global search across all issues
+- Settings page
 - CLI with full feature parity
 
 ### Next
 - Multi-user access with role-based permissions
-- Webhooks for external integrations
 - Scheduled PM reviews
 - Mobile-friendly PWA
 
