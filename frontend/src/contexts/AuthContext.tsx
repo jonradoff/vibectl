@@ -33,6 +33,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { recheck(); }, [recheck]);
 
+  useEffect(() => {
+    const handle = () => {
+      setAuthenticated(false);
+    };
+    window.addEventListener('vibectl:unauthorized', handle);
+    return () => window.removeEventListener('vibectl:unauthorized', handle);
+  }, []);
+
   const login = useCallback(async (password: string) => {
     const { token } = await adminLogin(password);
     setStoredToken(token);

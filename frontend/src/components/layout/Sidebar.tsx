@@ -1,5 +1,6 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useActiveProject } from '../../contexts/ActiveProjectContext';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface SidebarProject {
   id: string;
@@ -13,6 +14,7 @@ interface SidebarProps {
 
 function Sidebar({ projects }: SidebarProps) {
   const { activeProjectId, setActiveProjectId, projectStatuses, openProject } = useActiveProject();
+  const { logout, passwordSet } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -203,11 +205,24 @@ function Sidebar({ projects }: SidebarProps) {
       </nav>
 
       {/* Footer */}
-      <div className="px-4 py-3 border-t border-gray-800 text-[11px] text-gray-600">
-        <a href="https://metavert.io" target="_blank" rel="noopener noreferrer" className="hover:text-gray-400 transition-colors">
-          © 2026 Metavert LLC
-        </a>
-        <span className="ml-2">· MIT License</span>
+      <div className="px-4 py-3 border-t border-gray-800">
+        <div className="flex items-center justify-between mb-1.5">
+          <a href="https://metavert.io" target="_blank" rel="noopener noreferrer" className="text-[11px] text-gray-600 hover:text-gray-400 transition-colors">
+            © 2026 Metavert LLC
+          </a>
+          <span className="text-[11px] text-gray-700">MIT License</span>
+        </div>
+        {passwordSet && (
+          <button
+            onClick={logout}
+            className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-[11px] text-gray-600 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
+            </svg>
+            Sign out
+          </button>
+        )}
       </div>
     </aside>
   );

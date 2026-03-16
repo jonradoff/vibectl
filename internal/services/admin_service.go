@@ -16,10 +16,11 @@ import (
 const adminDocID = "admin"
 
 type adminDoc struct {
-	ID           string    `bson:"_id"`
-	PasswordHash string    `bson:"passwordHash,omitempty"`
-	Token        string    `bson:"token,omitempty"`
-	UpdatedAt    time.Time `bson:"updatedAt"`
+	ID             string    `bson:"_id"`
+	PasswordHash   string    `bson:"passwordHash,omitempty"`
+	Token          string    `bson:"token,omitempty"`
+	TokenCreatedAt time.Time `bson:"tokenCreatedAt,omitempty"`
+	UpdatedAt      time.Time `bson:"updatedAt"`
 }
 
 // AdminService manages the single admin account stored in MongoDB.
@@ -74,10 +75,11 @@ func (s *AdminService) SetPassword(ctx context.Context, currentPassword, newPass
 	}
 
 	newDoc := adminDoc{
-		ID:           adminDocID,
-		PasswordHash: string(hash),
-		Token:        token,
-		UpdatedAt:    time.Now().UTC(),
+		ID:             adminDocID,
+		PasswordHash:   string(hash),
+		Token:          token,
+		TokenCreatedAt: time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
 	}
 	_, err = s.collection.ReplaceOne(
 		ctx,
@@ -115,6 +117,7 @@ func (s *AdminService) Login(ctx context.Context, password string) (string, erro
 		bson.D{{Key: "_id", Value: adminDocID}},
 		bson.D{{Key: "$set", Value: bson.D{
 			{Key: "token", Value: token},
+			{Key: "tokenCreatedAt", Value: time.Now().UTC()},
 			{Key: "updatedAt", Value: time.Now().UTC()},
 		}}},
 	)
@@ -137,7 +140,13 @@ func (s *AdminService) VerifyToken(ctx context.Context, token string) (bool, err
 	if err != nil {
 		return false, fmt.Errorf("lookup admin: %w", err)
 	}
-	return doc.Token != "" && doc.Token == token, nil
+	if doc.Token == "" || doc.Token != token {
+		return false, nil
+	}
+	if !doc.TokenCreatedAt.IsZero() && time.Since(doc.TokenCreatedAt) > 30*24*time.Hour {
+		return false, nil // token expired
+	}
+	return true, nil
 }
 
 func generateAdminToken() (string, error) {

@@ -33,6 +33,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     ...options,
   });
   if (!res.ok) {
+    if (res.status === 401) {
+      clearStoredToken();
+      window.dispatchEvent(new CustomEvent('vibectl:unauthorized'));
+    }
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || res.statusText);
   }
