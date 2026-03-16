@@ -15,6 +15,14 @@ export default defineConfig({
         target: 'http://localhost:4380',
         changeOrigin: true,
       },
+      '/docs': {
+        target: 'http://localhost:4380',
+        changeOrigin: true,
+      },
+      '/skill.md': {
+        target: 'http://localhost:4380',
+        changeOrigin: true,
+      },
       '/ws': {
         target: 'ws://localhost:4380',
         ws: true,

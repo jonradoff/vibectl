@@ -102,7 +102,7 @@ function Sidebar({ projects }: SidebarProps) {
               Projects
             </h3>
             <div className="space-y-0.5">
-              {projects.map((project) => {
+              {[...projects].sort((a, b) => a.name.localeCompare(b.name)).map((project) => {
                 const status = projectStatuses[project.id];
                 const isSelected = activeProjectId === project.id && location.pathname === '/';
                 const isConnected = status && ['started', 'running', 'connecting', 'connected', 'reconnected', 'restarted'].includes(status.terminalStatus);
@@ -201,6 +201,14 @@ function Sidebar({ projects }: SidebarProps) {
           </div>
         </div>
       </nav>
+
+      {/* Footer */}
+      <div className="px-4 py-3 border-t border-gray-800 text-[11px] text-gray-600">
+        <a href="https://metavert.io" target="_blank" rel="noopener noreferrer" className="hover:text-gray-400 transition-colors">
+          © 2026 Metavert LLC
+        </a>
+        <span className="ml-2">· MIT License</span>
+      </div>
     </aside>
   );
 }
