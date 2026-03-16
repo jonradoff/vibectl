@@ -2,11 +2,11 @@ node_modules/
 dist/
 .env
 *.exe
-vibectl-server
-vibectl
-vibectl-mcp
-server
-cli
+/vibectl-server
+/vibectl
+/vibectl-mcp
+/server
+/cli
 .vite/
 uploads/*
 !uploads/.gitkeep
