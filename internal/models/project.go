@@ -72,6 +72,21 @@ type RecurringTheme struct {
 	UpdatedAt     time.Time `json:"updatedAt" bson:"updatedAt"`
 }
 
+type WebhookEvent string
+
+const (
+	WebhookEventP0Created       WebhookEvent = "p0_issue_created"
+	WebhookEventHealthDown      WebhookEvent = "health_check_down"
+	WebhookEventHealthUp        WebhookEvent = "health_check_up"
+	WebhookEventFeedbackTriaged WebhookEvent = "feedback_triaged"
+)
+
+type WebhookConfig struct {
+	URL    string         `json:"url" bson:"url"`
+	Events []WebhookEvent `json:"events" bson:"events"`
+	Secret string         `json:"secret,omitempty" bson:"secret,omitempty"` // for HMAC-SHA256
+}
+
 type Project struct {
 	ID                    bson.ObjectID      `json:"id" bson:"_id,omitempty"`
 	Name                  string             `json:"name" bson:"name"`
@@ -81,6 +96,7 @@ type Project struct {
 	Goals                 []string           `json:"goals" bson:"goals"`
 	HealthCheck           *HealthCheckConfig `json:"healthCheck,omitempty" bson:"healthCheck,omitempty"`
 	Deployment            *DeploymentConfig  `json:"deployment,omitempty" bson:"deployment,omitempty"`
+	Webhooks              []WebhookConfig    `json:"webhooks,omitempty" bson:"webhooks,omitempty"`
 	IssueCounter          int                `json:"issueCounter" bson:"issueCounter"`
 	Archived              bool               `json:"archived" bson:"archived"`
 	RecurringThemes       []RecurringTheme   `json:"recurringThemes,omitempty" bson:"recurringThemes,omitempty"`
@@ -106,4 +122,5 @@ type UpdateProjectRequest struct {
 	Goals       *[]string          `json:"goals,omitempty"`
 	HealthCheck *HealthCheckConfig `json:"healthCheck,omitempty"`
 	Deployment  *DeploymentConfig  `json:"deployment,omitempty"`
+	Webhooks    *[]WebhookConfig   `json:"webhooks,omitempty"`
 }

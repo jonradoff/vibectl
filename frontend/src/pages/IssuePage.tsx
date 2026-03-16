@@ -7,8 +7,11 @@ import {
   updateIssue,
   transitionIssueStatus,
   deleteIssue,
+  listComments,
+  createComment,
+  deleteComment,
 } from '../api/client';
-import type { Issue, Priority } from '../types';
+import type { Issue, Priority, IssueComment } from '../types';
 import { priorityColors, typeColors, statusTransitions } from '../types';
 import StatusBadge from '../components/issues/StatusBadge';
 
@@ -25,6 +28,8 @@ function IssuePage() {
   const [editReproSteps, setEditReproSteps] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [commentBody, setCommentBody] = useState('');
+  const [commentAuthor, setCommentAuthor] = useState('admin');
 
   const showToast = (message: string) => {
     setToast(message);
@@ -62,6 +67,28 @@ function IssuePage() {
     mutationFn: () => deleteIssue(issueKey!),
     onSuccess: () => {
       navigate(`/projects/${code}`);
+    },
+  });
+
+  const { data: comments } = useQuery({
+    queryKey: ['comments', issueKey],
+    queryFn: () => listComments(issueKey!),
+    enabled: !!issueKey,
+  });
+
+  const addCommentMutation = useMutation({
+    mutationFn: (data: { body: string; author: string }) => createComment(issueKey!, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['comments', issueKey] });
+      setCommentBody('');
+      showToast('Comment added');
+    },
+  });
+
+  const deleteCommentMutation = useMutation({
+    mutationFn: (commentId: string) => deleteComment(issueKey!, commentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['comments', issueKey] });
     },
   });
 
@@ -379,6 +406,71 @@ function IssuePage() {
           </div>
         </div>
       )}
+
+      {/* Comments */}
+      <div className="mb-6 rounded-lg bg-gray-800 p-6">
+        <h2 className="mb-4 text-sm font-semibold text-gray-300 uppercase tracking-wide">
+          Comments ({comments?.length ?? 0})
+        </h2>
+
+        {/* Comment list */}
+        {comments && comments.length > 0 && (
+          <div className="mb-4 space-y-3">
+            {comments.map((comment: IssueComment) => (
+              <div key={comment.id} className="rounded-lg border border-gray-700 bg-gray-900 p-4">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-gray-200">{comment.author}</span>
+                    <span className="text-xs text-gray-500">
+                      {new Date(comment.createdAt).toLocaleString()}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => deleteCommentMutation.mutate(comment.id)}
+                    disabled={deleteCommentMutation.isPending}
+                    className="rounded px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-700 hover:text-red-400 transition-colors"
+                    title="Delete comment"
+                  >
+                    Delete
+                  </button>
+                </div>
+                <p className="text-sm text-gray-300 whitespace-pre-wrap">{comment.body}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add comment form */}
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={commentAuthor}
+              onChange={(e) => setCommentAuthor(e.target.value)}
+              placeholder="Author"
+              className="w-32 rounded bg-gray-700 px-3 py-2 text-sm text-gray-100 outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <textarea
+            value={commentBody}
+            onChange={(e) => setCommentBody(e.target.value)}
+            placeholder="Add a comment..."
+            rows={3}
+            className="w-full rounded bg-gray-700 px-3 py-2 text-sm text-gray-100 outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <button
+            onClick={() => {
+              if (commentBody.trim()) {
+                addCommentMutation.mutate({ body: commentBody, author: commentAuthor || 'admin' });
+              }
+            }}
+            disabled={addCommentMutation.isPending || !commentBody.trim()}
+            className="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {addCommentMutation.isPending ? 'Adding...' : 'Add Comment'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

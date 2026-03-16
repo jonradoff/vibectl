@@ -2,7 +2,14 @@ import { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { updateProject, deleteProject } from '../../api/client';
-import type { Project, CustomLink, HealthCheckConfig, DeploymentConfig } from '../../types';
+import type { Project, CustomLink, HealthCheckConfig, DeploymentConfig, WebhookConfig } from '../../types';
+
+const WEBHOOK_EVENTS = [
+  { value: 'p0_issue_created', label: 'P0 Issue Created' },
+  { value: 'health_check_down', label: 'Health Check Down' },
+  { value: 'health_check_up', label: 'Health Check Up' },
+  { value: 'feedback_triaged', label: 'Feedback Triaged' },
+];
 
 interface ProjectSettingsProps {
   project: Project;
@@ -31,6 +38,10 @@ function ProjectSettings({ project }: ProjectSettingsProps) {
   const [deployment, setDeployment] = useState<DeploymentConfig>(
     project.deployment || {}
   );
+  const [webhooks, setWebhooks] = useState<WebhookConfig[]>(project.webhooks || []);
+  const [newWebhookUrl, setNewWebhookUrl] = useState('');
+  const [newWebhookEvents, setNewWebhookEvents] = useState<string[]>([]);
+  const [newWebhookSecret, setNewWebhookSecret] = useState('');
 
   // Toast state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -51,6 +62,7 @@ function ProjectSettings({ project }: ProjectSettingsProps) {
       project.healthCheck || { frontend: {}, backend: {}, monitorEnv: '' }
     );
     setDeployment(project.deployment || {});
+    setWebhooks(project.webhooks || []);
   }, [project]);
 
   // Auto-dismiss toast
@@ -74,6 +86,7 @@ function ProjectSettings({ project }: ProjectSettingsProps) {
         goals,
         healthCheck,
         deployment,
+        webhooks: webhooks.length > 0 ? webhooks : [],
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project', project.code] });
@@ -466,6 +479,108 @@ function ProjectSettings({ project }: ProjectSettingsProps) {
           </div>
         </div>
       </form>
+
+      {/* Webhooks */}
+      <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+        <h3 className="text-lg font-semibold text-gray-100 mb-4">Webhooks</h3>
+        <p className="text-sm text-gray-400 mb-4">
+          Receive HTTP POST notifications when project events occur. Changes are saved with the project settings above.
+        </p>
+
+        {/* Existing webhooks */}
+        {webhooks.length > 0 && (
+          <div className="space-y-2 mb-4">
+            {webhooks.map((wh, idx) => (
+              <div key={idx} className="rounded border border-gray-700 bg-gray-900/50 p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-mono text-gray-200 truncate">{wh.url}</p>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {wh.events.map((e) => (
+                        <span key={e} className="rounded bg-indigo-900/40 px-1.5 py-0.5 text-xs text-indigo-300">
+                          {e}
+                        </span>
+                      ))}
+                    </div>
+                    {wh.secret && (
+                      <p className="mt-1 text-xs text-gray-600">HMAC secret configured</p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setWebhooks(webhooks.filter((_, i) => i !== idx))}
+                    className="shrink-0 text-red-400 hover:text-red-300 text-sm px-2 py-1"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add new webhook */}
+        <div className="rounded border border-gray-700 bg-gray-900/30 p-4 space-y-3">
+          <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">Add Webhook</p>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">URL</label>
+            <input
+              type="url"
+              value={newWebhookUrl}
+              onChange={(e) => setNewWebhookUrl(e.target.value)}
+              placeholder="https://hooks.example.com/vibectl"
+              className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-2">Events</label>
+            <div className="flex flex-wrap gap-2">
+              {WEBHOOK_EVENTS.map((ev) => (
+                <label key={ev.value} className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newWebhookEvents.includes(ev.value)}
+                    onChange={(e) => {
+                      if (e.target.checked) setNewWebhookEvents([...newWebhookEvents, ev.value]);
+                      else setNewWebhookEvents(newWebhookEvents.filter((v) => v !== ev.value));
+                    }}
+                    className="rounded border-gray-600 bg-gray-700 text-indigo-600"
+                  />
+                  <span className="text-xs text-gray-300">{ev.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Secret (optional, for HMAC-SHA256 signature)</label>
+            <input
+              type="text"
+              value={newWebhookSecret}
+              onChange={(e) => setNewWebhookSecret(e.target.value)}
+              placeholder="my-secret-key"
+              className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!newWebhookUrl || newWebhookEvents.length === 0) return;
+              setWebhooks([...webhooks, {
+                url: newWebhookUrl,
+                events: newWebhookEvents,
+                secret: newWebhookSecret || undefined,
+              }]);
+              setNewWebhookUrl('');
+              setNewWebhookEvents([]);
+              setNewWebhookSecret('');
+            }}
+            disabled={!newWebhookUrl || newWebhookEvents.length === 0}
+            className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
+          >
+            Add Webhook
+          </button>
+        </div>
+      </div>
 
       {/* Danger Zone */}
       <div className="bg-gray-800 rounded-lg p-6 border border-red-900/50">

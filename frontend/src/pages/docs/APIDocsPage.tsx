@@ -90,6 +90,31 @@ function APIDocsPage() {
         <Endpoint method="WS" path="/ws/terminal" desc="PTY terminal session (xterm.js)." />
         <Endpoint method="WS" path="/ws/chat" desc="Claude Code stream-json chat session." />
       </EndpointGroup>
+
+      <EndpointGroup name="Issue Comments">
+        <Endpoint method="GET" path="/api/v1/issues/{issueKey}/comments" desc="List all comments for an issue, sorted by creation time ascending." />
+        <Endpoint method="POST" path="/api/v1/issues/{issueKey}/comments" desc="Add a comment to an issue." body='{ "body": "string", "author": "string" }' />
+        <Endpoint method="DELETE" path="/api/v1/issues/{issueKey}/comments/{commentId}" desc="Delete a comment by ID." />
+      </EndpointGroup>
+
+      <EndpointGroup name="Settings">
+        <Endpoint method="GET" path="/api/v1/settings" desc="Get application-wide settings (VIBECTL.md auto-regen schedule, etc.)." />
+        <Endpoint method="PUT" path="/api/v1/settings" desc="Update application settings." body='{ "vibectlMdAutoRegen": bool, "vibectlMdSchedule": "hourly|daily|weekly" }' />
+      </EndpointGroup>
+
+      <EndpointGroup name="Webhooks">
+        <Endpoint
+          method="PUT"
+          path="/api/v1/projects/{id}"
+          desc="Register webhooks by including a webhooks array in the project update payload. Each webhook has: url, events[], and optional secret for HMAC-SHA256 verification."
+          body='{ "webhooks": [{ "url": "https://...", "events": ["p0_issue_created", "health_check_down", "health_check_up", "feedback_triaged"], "secret": "optional" }] }'
+        />
+        <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-3 text-xs text-gray-400 space-y-1">
+          <p><strong className="text-gray-300">Payload:</strong> <code>{"{ event, projectId, timestamp, data }"}</code></p>
+          <p><strong className="text-gray-300">Signature:</strong> When a secret is set, <code>X-Vibectl-Signature: sha256=&lt;hex&gt;</code> is included (HMAC-SHA256 over raw body).</p>
+          <p><strong className="text-gray-300">Events:</strong> <code>p0_issue_created</code>, <code>health_check_down</code>, <code>health_check_up</code>, <code>feedback_triaged</code></p>
+        </div>
+      </EndpointGroup>
     </div>
   );
 }

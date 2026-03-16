@@ -20,10 +20,11 @@ type FeedbackHandler struct {
 	decisionService  *services.DecisionService
 	vibectlMdService *services.VibectlMdService
 	projectService   *services.ProjectService
+	webhookService   *services.WebhookService
 }
 
-func NewFeedbackHandler(fs *services.FeedbackService, ta *agents.TriageAgent, tha *agents.ThemesAgent, ds *services.DecisionService, vm *services.VibectlMdService, ps *services.ProjectService) *FeedbackHandler {
-	return &FeedbackHandler{feedbackService: fs, triageAgent: ta, themesAgent: tha, decisionService: ds, vibectlMdService: vm, projectService: ps}
+func NewFeedbackHandler(fs *services.FeedbackService, ta *agents.TriageAgent, tha *agents.ThemesAgent, ds *services.DecisionService, vm *services.VibectlMdService, ps *services.ProjectService, ws *services.WebhookService) *FeedbackHandler {
+	return &FeedbackHandler{feedbackService: fs, triageAgent: ta, themesAgent: tha, decisionService: ds, vibectlMdService: vm, projectService: ps, webhookService: ws}
 }
 
 // FeedbackRoutes returns a router mounted at /api/v1/feedback.
@@ -120,6 +121,20 @@ func (h *FeedbackHandler) TriggerTriage(w http.ResponseWriter, r *http.Request) 
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "TRIAGE_ERROR")
 		return
 	}
+
+	// Fire webhook after triage completes
+	if h.webhookService != nil {
+		go func() {
+			ctx := context.Background()
+			item, fetchErr := h.feedbackService.GetByID(ctx, id)
+			if fetchErr == nil && item != nil && item.ProjectID != nil {
+				h.webhookService.Fire(ctx, *item.ProjectID, models.WebhookEventFeedbackTriaged, map[string]any{
+					"feedbackId": id,
+				})
+			}
+		}()
+	}
+
 	middleware.WriteJSON(w, http.StatusOK, analysis)
 }
 

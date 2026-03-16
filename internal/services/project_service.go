@@ -222,6 +222,9 @@ func (s *ProjectService) Update(ctx context.Context, id string, req *models.Upda
 	if req.Deployment != nil {
 		setFields = append(setFields, bson.E{Key: "deployment", Value: *req.Deployment})
 	}
+	if req.Webhooks != nil {
+		setFields = append(setFields, bson.E{Key: "webhooks", Value: *req.Webhooks})
+	}
 
 	update := bson.D{{Key: "$set", Value: setFields}}
 

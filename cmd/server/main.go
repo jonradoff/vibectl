@@ -58,6 +58,9 @@ func main() {
 	sessionService := services.NewSessionService(db)
 	healthRecordService := services.NewHealthRecordService(db)
 	decisionService := services.NewDecisionService(db)
+	commentService := services.NewCommentService(db)
+	settingsService := services.NewSettingsService(db)
+	webhookService := services.NewWebhookService(db)
 
 	// Ensure indexes
 	idxCtx := context.Background()
@@ -78,6 +81,12 @@ func main() {
 	}
 	if err := decisionService.EnsureIndexes(idxCtx); err != nil {
 		slog.Error("failed to ensure decision indexes", "error", err)
+	}
+	if err := commentService.EnsureIndexes(idxCtx); err != nil {
+		slog.Error("failed to ensure comment indexes", "error", err)
+	}
+	if err := settingsService.EnsureIndexes(idxCtx); err != nil {
+		slog.Error("failed to ensure settings indexes", "error", err)
 	}
 
 	// Initialize AI agents (nil-safe if no API key)
@@ -112,8 +121,9 @@ func main() {
 
 	// Initialize handlers
 	projectHandler := handlers.NewProjectHandler(projectService, issueService, sessionService, feedbackService, activityLogService)
-	issueHandler := handlers.NewIssueHandler(issueService, decisionService, vibectlMdService, activityLogService)
-	feedbackHandler := handlers.NewFeedbackHandler(feedbackService, triageAgent, themesAgent, decisionService, vibectlMdService, projectService)
+	issueHandler := handlers.NewIssueHandler(issueService, decisionService, vibectlMdService, activityLogService, commentService, webhookService)
+	feedbackHandler := handlers.NewFeedbackHandler(feedbackService, triageAgent, themesAgent, decisionService, vibectlMdService, projectService, webhookService)
+	settingsHandler := handlers.NewSettingsHandler(settingsService)
 	sessionHandler := handlers.NewSessionHandler(sessionService)
 	dashboardHandler := handlers.NewDashboardHandler(projectService, issueService, sessionService, feedbackService)
 	// GitHub sweeper (nil-safe if no token)
@@ -263,6 +273,7 @@ func main() {
 		r.Mount("/uploads", uploadHandler.Routes())
 		r.Mount("/prompts", promptHandler.PromptRoutes())
 		r.Mount("/activity-log", activityLogHandler.Routes())
+		r.Mount("/settings", settingsHandler.Routes())
 	})
 
 	// Serve uploaded files
@@ -299,13 +310,55 @@ func main() {
 		slog.Info("GitHub comment sweeper enabled (15m interval)")
 	}
 
+	// Background VIBECTL.md auto-regen goroutine (checks settings every 5 minutes)
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		lastRegen := map[string]time.Time{}
+		for range ticker.C {
+			ctx := context.Background()
+			settings, err := settingsService.Get(ctx)
+			if err != nil || !settings.VibectlMdAutoRegen || settings.VibectlMdSchedule == "" {
+				continue
+			}
+			projects, err := projectService.List(ctx)
+			if err != nil {
+				continue
+			}
+			now := time.Now().UTC()
+			for _, p := range projects {
+				if p.Archived {
+					continue
+				}
+				last := lastRegen[p.ID.Hex()]
+				var interval time.Duration
+				switch settings.VibectlMdSchedule {
+				case "hourly":
+					interval = time.Hour
+				case "daily":
+					interval = 24 * time.Hour
+				case "weekly":
+					interval = 7 * 24 * time.Hour
+				default:
+					continue
+				}
+				if now.Sub(last) >= interval {
+					vibectlMdService.UpdateSection(ctx, p.ID.Hex(), "status", "focus", "themes", "decisions")
+					lastRegen[p.ID.Hex()] = now
+				}
+			}
+		}
+	}()
+	slog.Info("VIBECTL.md auto-regen scheduler enabled (5m interval)")
+
 	// Background health check recorder (every 10 minutes)
 	go func() {
 		ticker := time.NewTicker(10 * time.Minute)
 		defer ticker.Stop()
 
 		runChecks := func() {
-			projects, err := projectService.List(context.Background())
+			ctx := context.Background()
+			projects, err := projectService.List(ctx)
 			if err != nil {
 				slog.Error("health recorder: failed to list projects", "error", err)
 				return
@@ -314,14 +367,14 @@ func main() {
 				if p.HealthCheck == nil || p.HealthCheck.MonitorEnv == "" {
 					continue
 				}
-				cfg := p.HealthCheck
+				hcfg := p.HealthCheck
 				var frontendURL, backendURL string
-				if cfg.MonitorEnv == "dev" {
-					frontendURL = cfg.Frontend.DevURL
-					backendURL = cfg.Backend.DevURL
-				} else if cfg.MonitorEnv == "prod" {
-					frontendURL = cfg.Frontend.ProdURL
-					backendURL = cfg.Backend.ProdURL
+				if hcfg.MonitorEnv == "dev" {
+					frontendURL = hcfg.Frontend.DevURL
+					backendURL = hcfg.Backend.DevURL
+				} else if hcfg.MonitorEnv == "prod" {
+					frontendURL = hcfg.Frontend.ProdURL
+					backendURL = hcfg.Backend.ProdURL
 				}
 				var results []models.HealthCheckResult
 				if frontendURL != "" {
@@ -331,8 +384,38 @@ func main() {
 					results = append(results, healthCheckHandler.Probe("Backend", backendURL))
 				}
 				if len(results) > 0 {
-					if err := healthRecordService.Insert(context.Background(), p.ID, results); err != nil {
+					// Get the previous health record to detect status changes
+					prevRecord, _ := healthRecordService.GetLatest(ctx, p.ID)
+
+					if err := healthRecordService.Insert(ctx, p.ID, results); err != nil {
 						slog.Error("health recorder: failed to insert record", "projectID", p.ID, "error", err)
+						continue
+					}
+
+					// Fire webhooks for status transitions
+					if prevRecord != nil {
+						prevStatusMap := map[string]string{}
+						for _, r := range prevRecord.Results {
+							prevStatusMap[r.Name] = r.Status
+						}
+						for _, newResult := range results {
+							prevStatus := prevStatusMap[newResult.Name]
+							isNowDown := newResult.Status == "down" || newResult.Status == "degraded"
+							wasDown := prevStatus == "down" || prevStatus == "degraded"
+							if prevStatus != "" && !wasDown && isNowDown {
+								webhookService.Fire(ctx, p.ID, models.WebhookEventHealthDown, map[string]any{
+									"service": newResult.Name,
+									"status":  newResult.Status,
+									"url":     newResult.URL,
+								})
+							} else if prevStatus != "" && wasDown && !isNowDown && newResult.Status == "up" {
+								webhookService.Fire(ctx, p.ID, models.WebhookEventHealthUp, map[string]any{
+									"service": newResult.Name,
+									"status":  newResult.Status,
+									"url":     newResult.URL,
+								})
+							}
+						}
 					}
 				}
 			}

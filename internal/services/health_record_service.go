@@ -54,6 +54,22 @@ func (s *HealthRecordService) Insert(ctx context.Context, projectID bson.ObjectI
 	return nil
 }
 
+// GetLatest returns the most recent health record for a project, or nil if none exists.
+func (s *HealthRecordService) GetLatest(ctx context.Context, projectID bson.ObjectID) (*models.HealthRecord, error) {
+	filter := bson.D{{Key: "projectId", Value: projectID}}
+	opts := options.FindOne().SetSort(bson.D{{Key: "checkedAt", Value: -1}})
+
+	var record models.HealthRecord
+	err := s.collection.FindOne(ctx, filter, opts).Decode(&record)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get latest health record: %w", err)
+	}
+	return &record, nil
+}
+
 // GetHistory returns health records for a project within the given duration (e.g. last 24h).
 func (s *HealthRecordService) GetHistory(ctx context.Context, projectID string, since time.Duration) ([]models.HealthRecord, error) {
 	oid, err := bson.ObjectIDFromHex(projectID)

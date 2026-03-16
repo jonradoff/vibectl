@@ -299,3 +299,82 @@ List Claude Code chat sessions for a project.
 
 ### `GET /api/v1/chat-history/{historyId}`
 Get full chat history by ID.
+
+---
+
+## Issue Comments
+
+### `GET /api/v1/issues/{issueKey}/comments`
+List all comments for an issue, sorted by creation time ascending.
+
+### `POST /api/v1/issues/{issueKey}/comments`
+Add a comment to an issue.
+
+**Body**: `{ "body": "string", "author": "string" }`
+
+### `DELETE /api/v1/issues/{issueKey}/comments/{commentId}`
+Delete a comment by ID.
+
+---
+
+## Settings
+
+### `GET /api/v1/settings`
+Get application-wide settings.
+
+**Response**: `{ "vibectlMdAutoRegen": bool, "vibectlMdSchedule": "hourly|daily|weekly|", "updatedAt": "..." }`
+
+### `PUT /api/v1/settings`
+Update application settings.
+
+**Body**: `{ "vibectlMdAutoRegen": bool, "vibectlMdSchedule": "hourly|daily|weekly" }`
+
+---
+
+## Webhooks
+
+Webhooks are configured per-project by storing `WebhookConfig` entries in the project's `webhooks` array via `PUT /api/v1/projects/{id}`.
+
+### Registration
+
+```json
+PUT /api/v1/projects/{id}
+{
+  "webhooks": [
+    {
+      "url": "https://hooks.example.com/vibectl",
+      "events": ["p0_issue_created", "health_check_down"],
+      "secret": "optional-hmac-secret"
+    }
+  ]
+}
+```
+
+### Events
+
+| Event | Trigger |
+|-------|---------|
+| `p0_issue_created` | A P0 priority issue is created |
+| `health_check_down` | A monitored service transitions from up to down/degraded |
+| `health_check_up` | A monitored service transitions from down/degraded to up |
+| `feedback_triaged` | AI triage completes for a feedback item |
+
+### Payload Format
+
+```json
+{
+  "event": "p0_issue_created",
+  "projectId": "hex-object-id",
+  "timestamp": "2026-03-16T00:00:00Z",
+  "data": { ... }
+}
+```
+
+### HMAC Signature
+
+If a `secret` is configured, the `X-Vibectl-Signature` header is set to `sha256=<hex-hmac>` where the HMAC is computed over the raw JSON body using the secret as the key. Verify with:
+
+```
+signature = HMAC-SHA256(secret, body)
+header == "sha256=" + hex(signature)
+```

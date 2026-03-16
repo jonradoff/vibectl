@@ -16,6 +16,7 @@ import ActivityLogPage from './pages/ActivityLogPage'
 import MCPDocsPage from './pages/docs/MCPDocsPage'
 import APIDocsPage from './pages/docs/APIDocsPage'
 import CLIDocsPage from './pages/docs/CLIDocsPage'
+import SettingsPage from './pages/SettingsPage'
 
 function App() {
   return (
@@ -38,6 +39,7 @@ function App() {
         <Route path="/docs/mcp" element={<MCPDocsPage />} />
         <Route path="/docs/api" element={<APIDocsPage />} />
         <Route path="/docs/cli" element={<CLIDocsPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
       </Route>
     </Routes>
     </>

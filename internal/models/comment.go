@@ -1,0 +1,17 @@
+package models
+
+import (
+	"time"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+type IssueComment struct {
+	ID        bson.ObjectID `json:"id" bson:"_id,omitempty"`
+	IssueKey  string        `json:"issueKey" bson:"issueKey"`
+	ProjectID bson.ObjectID `json:"projectId" bson:"projectId"`
+	Body      string        `json:"body" bson:"body"`
+	Author    string        `json:"author" bson:"author"`
+	CreatedAt time.Time     `json:"createdAt" bson:"createdAt"`
+	UpdatedAt time.Time     `json:"updatedAt" bson:"updatedAt"`
+}

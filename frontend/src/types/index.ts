@@ -52,6 +52,22 @@ export interface HealthRecord {
   checkedAt: string;
 }
 
+export interface IssueComment {
+  id: string;
+  issueKey: string;
+  projectId: string;
+  body: string;
+  author: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WebhookConfig {
+  url: string;
+  events: string[];
+  secret?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -61,6 +77,7 @@ export interface Project {
   goals: string[];
   healthCheck?: HealthCheckConfig;
   deployment?: DeploymentConfig;
+  webhooks?: WebhookConfig[];
   issueCounter: number;
   archived: boolean;
   recurringThemes?: RecurringTheme[];
@@ -68,6 +85,12 @@ export interface Project {
   architectureUpdatedAt?: string;
   vibectlMdGeneratedAt?: string;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface AppSettings {
+  vibectlMdAutoRegen: boolean;
+  vibectlMdSchedule: string;
   updatedAt: string;
 }
 

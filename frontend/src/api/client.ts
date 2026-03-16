@@ -15,6 +15,8 @@ import type {
   Decision,
   Prompt,
   ActivityLogResponse,
+  IssueComment,
+  AppSettings,
 } from '../types';
 
 const BASE = '/api/v1';
@@ -222,6 +224,19 @@ export const ensureDir = (path: string) =>
     method: 'POST',
     body: JSON.stringify({ path }),
   });
+
+// Comments
+export const listComments = (issueKey: string) =>
+  request<IssueComment[]>(`/issues/${issueKey}/comments`);
+export const createComment = (issueKey: string, data: { body: string; author: string }) =>
+  request<IssueComment>(`/issues/${issueKey}/comments`, { method: 'POST', body: JSON.stringify(data) });
+export const deleteComment = (issueKey: string, commentId: string) =>
+  request<void>(`/issues/${issueKey}/comments/${commentId}`, { method: 'DELETE' });
+
+// Settings
+export const getSettings = () => request<AppSettings>('/settings');
+export const updateSettings = (data: Partial<AppSettings>) =>
+  request<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(data) });
 
 // Admin
 export const getAuthStatus = async (): Promise<{ passwordSet: boolean; tokenValid: boolean }> => {

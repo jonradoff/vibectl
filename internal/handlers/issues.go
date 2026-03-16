@@ -18,11 +18,13 @@ type IssueHandler struct {
 	decisionService    *services.DecisionService
 	vibectlMdService   *services.VibectlMdService
 	activityLogService *services.ActivityLogService
+	commentService     *services.CommentService
+	webhookService     *services.WebhookService
 }
 
 // NewIssueHandler creates a new IssueHandler.
-func NewIssueHandler(is *services.IssueService, ds *services.DecisionService, vm *services.VibectlMdService, als *services.ActivityLogService) *IssueHandler {
-	return &IssueHandler{issueService: is, decisionService: ds, vibectlMdService: vm, activityLogService: als}
+func NewIssueHandler(is *services.IssueService, ds *services.DecisionService, vm *services.VibectlMdService, als *services.ActivityLogService, cs *services.CommentService, ws *services.WebhookService) *IssueHandler {
+	return &IssueHandler{issueService: is, decisionService: ds, vibectlMdService: vm, activityLogService: als, commentService: cs, webhookService: ws}
 }
 
 // ProjectIssueRoutes returns a chi.Router for project-scoped issue endpoints.
@@ -45,6 +47,9 @@ func (h *IssueHandler) IssueRoutes() chi.Router {
 	r.Delete("/{issueKey}", h.Delete)
 	r.Post("/{issueKey}/restore", h.Restore)
 	r.Delete("/{issueKey}/permanent", h.PermanentDelete)
+	r.Get("/{issueKey}/comments", h.ListComments)
+	r.Post("/{issueKey}/comments", h.CreateComment)
+	r.Delete("/{issueKey}/comments/{commentId}", h.DeleteComment)
 	return r
 }
 
@@ -121,6 +126,13 @@ func (h *IssueHandler) Create(w http.ResponseWriter, r *http.Request) {
 			pid := issue.ProjectID
 			h.activityLogService.Log(ctx, "issue_created",
 				fmt.Sprintf("Created issue %s: %s", issue.IssueKey, issue.Title), &pid, "", nil)
+		}
+		// Fire webhook for P0 issues
+		if issue.Priority == "P0" && h.webhookService != nil {
+			h.webhookService.Fire(ctx, issue.ProjectID, models.WebhookEventP0Created, map[string]any{
+				"issueKey": issue.IssueKey,
+				"title":    issue.Title,
+			})
 		}
 	}()
 
@@ -269,3 +281,65 @@ func (h *IssueHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 	middleware.WriteJSON(w, http.StatusOK, issues)
 }
+
+// ListComments returns all comments for an issue.
+func (h *IssueHandler) ListComments(w http.ResponseWriter, r *http.Request) {
+	issueKey := chi.URLParam(r, "issueKey")
+
+	comments, err := h.commentService.ListByIssue(r.Context(), issueKey)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_COMMENTS_FAILED")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, comments)
+}
+
+// CreateComment adds a new comment to an issue.
+func (h *IssueHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
+	issueKey := chi.URLParam(r, "issueKey")
+
+	var req struct {
+		Body   string `json:"body"`
+		Author string `json:"author"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid request body", "INVALID_BODY")
+		return
+	}
+	if req.Body == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "body is required", "MISSING_BODY")
+		return
+	}
+	if req.Author == "" {
+		req.Author = "admin"
+	}
+
+	// Look up the issue to get projectID
+	issue, err := h.issueService.GetByKey(r.Context(), issueKey)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, err.Error(), "ISSUE_NOT_FOUND")
+		return
+	}
+
+	comment, err := h.commentService.Create(r.Context(), issueKey, issue.ProjectID, req.Body, req.Author)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "CREATE_COMMENT_FAILED")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusCreated, comment)
+}
+
+// DeleteComment removes a comment by ID.
+func (h *IssueHandler) DeleteComment(w http.ResponseWriter, r *http.Request) {
+	commentID := chi.URLParam(r, "commentId")
+
+	if err := h.commentService.Delete(r.Context(), commentID); err != nil {
+		middleware.WriteError(w, http.StatusNotFound, err.Error(), "COMMENT_NOT_FOUND")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
