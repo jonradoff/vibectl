@@ -5,6 +5,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.0] - 2026-03-16
+
+### Security
+- **Token hashing** — session tokens are now stored as SHA-256 hashes in MongoDB; a database dump no longer yields a usable bearer token.
+- **Global API authentication** — `AdminAuth` middleware applied to the entire `/api/v1` route group. `auth-status`, `login`, and `set-password` remain public. First-run open access preserved when no password is set.
+- **`EnsureDir` / `CheckDir` protected** — these filesystem endpoints now require auth (previously unauthenticated and accepted arbitrary absolute paths).
+- **Path traversal fix** — `resolveAndValidate` now uses `root + filepath.Separator` prefix check to prevent `/proj2` matching `/proj`.
+- **Upload MIME detection** — file type detected from actual bytes via `http.DetectContentType`, not the client-supplied header. Extension allowlist enforced (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`). Uploaded files served with `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`.
+- **Login rate limiting** — `POST /admin/login` allows max 10 attempts per IP per 5-minute window; returns 429 when exceeded.
+- **Webhook SSRF protection** — webhook URLs validated on save; private/loopback ranges (RFC1918, 127.x, ::1, 169.254.x, fc00::/7) rejected.
+- **Webhook secret redaction** — `Project.MaskSecrets()` strips secret values from all API responses; `hasSecret: true` flag indicates a secret is configured without exposing the value.
+- **XSS fix in ChatView** — HTML entities escaped in the `hljs` fallback path that used `dangerouslySetInnerHTML`; raw user content can no longer inject script tags via unsupported code block languages.
+- **Prompt injection mitigation** — external feedback content wrapped in `<user-content>` tags in the triage agent prompt, instructing Claude to treat it as data not instructions.
+
+### Added
+- **Issue comments** — `GET/POST /api/v1/issues/{issueKey}/comments` and `DELETE /api/v1/issues/{issueKey}/comments/{commentId}`. MongoDB-backed `CommentService`. Comment thread UI at the bottom of the issue detail page.
+- **Bulk issue operations** — checkbox selection on the issue table; bulk toolbar for changing priority (P0–P5) or archiving multiple issues at once.
+- **Settings page** — global settings at `/settings` (gear icon in sidebar). VIBECTL.md auto-regen schedule (off / hourly / daily / weekly). `GET/PUT /api/v1/settings`.
+- **VIBECTL.md background auto-regen** — server goroutine checks the configured schedule every 5 minutes and regenerates VIBECTL.md for all non-archived projects.
+- **Webhooks** — per-project webhook configuration (URL, events, optional HMAC-SHA256 secret). Events: `p0_issue_created`, `health_check_down`, `health_check_up`, `feedback_triaged`. Async delivery with 10-second timeout. `X-Vibectl-Signature: sha256=...` header when a secret is set.
+- **Health check alerting** — background recorder compares new results against the previous record and fires `health_check_down` / `health_check_up` webhooks on status transitions.
+- **Admin auth gate** — frontend shows a setup screen (CLI instructions) on first run; shows login form when a password exists.
+- **Sign-out button** — sidebar footer, visible when a password is configured.
+- **30-day token expiry** — tokens rejected after 30 days; `TokenCreatedAt` stored in admin doc.
+- **401 auto-redirect** — client dispatches `vibectl:unauthorized` on 401; `AuthContext` resets to login screen.
+- **Global search** — debounced header search calls `/api/v1/issues/search`; dropdown with priority color-coding and click-to-navigate.
+- **Webhooks UI** — per-project webhook management panel (list, add, remove; URL, events checkboxes, optional secret).
+- **API docs updated** — webhooks, issue comments, and settings sections added to `docs/api.md` and `APIDocsPage.tsx`.
+
+### Changed
+- **Version** bumped to `0.9.0`.
+- **CORS default** tightened from `*` to `http://localhost:4370`.
+- **Projects list sorted alphabetically** in the sidebar.
+- **Sidebar footer** — © 2026 Metavert LLC (metavert.io) · MIT License.
+- **README roadmap** updated to reflect v0.9 feature set.
+
+---
+
 ## [0.8.0] - 2026-03-16
 
 ### Added
