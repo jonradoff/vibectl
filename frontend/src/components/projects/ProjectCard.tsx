@@ -1,0 +1,1402 @@
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { createPortal } from 'react-dom'
+import { Link } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { listIssues, updateProject, createIssue, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild } from '../../api/client'
+import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ChatHistoryEntry, ActivityLogEntry } from '../../types'
+import { priorityColors, typeColors } from '../../types'
+import ChatView from '../chat/ChatView'
+import type { ChatSessionSnapshot } from '../chat/ChatView'
+import { useActiveProject } from '../../contexts/ActiveProjectContext'
+import FilesBrowser from './FilesBrowser'
+
+interface ProjectCardProps {
+  summary: ProjectSummary
+}
+
+type CardTab = 'terminal' | 'issues' | 'files' | 'history' | 'health' | 'log' | 'settings'
+
+export default function ProjectCard({ summary }: ProjectCardProps) {
+  const { project, openIssueCount } = summary
+  const [activeTab, setActiveTab] = useState<CardTab>('health')
+  const [terminalStatus, setTerminalStatus] = useState<string>('disconnected')
+  const [isActive, setIsActive] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [currentSession, setCurrentSession] = useState<ChatSessionSnapshot | null>(null)
+  const [isWaiting, setIsWaiting] = useState(false)
+  const { activeProjectId, setActiveProjectId, updateProjectStatus, closeProject } = useActiveProject()
+  const isActiveProject = activeProjectId === project.id
+
+  const handleSessionSnapshot = useCallback((snapshot: ChatSessionSnapshot) => {
+    setCurrentSession(snapshot)
+  }, [])
+
+  const handleWaitingChange = useCallback((waiting: boolean) => {
+    setIsWaiting(waiting)
+  }, [])
+
+  const handleStatusChange = useCallback((status: string) => {
+    setTerminalStatus(status)
+  }, [])
+
+  const handleActivityChange = useCallback((active: boolean) => {
+    setIsActive(active)
+  }, [])
+
+  // Escape key exits fullscreen
+  useEffect(() => {
+    if (!isFullscreen) return
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsFullscreen(false)
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [isFullscreen])
+
+  const monitorEnv = project.healthCheck?.monitorEnv
+  const { data: healthResults } = useQuery({
+    queryKey: ['healthcheck', project.id],
+    queryFn: () => runHealthCheck(project.id),
+    enabled: !!monitorEnv,
+    refetchInterval: 30_000,
+  })
+
+  // Detect if this project IS VibeCtl itself (self-project)
+  const { data: selfInfo } = useQuery({
+    queryKey: ['selfInfo'],
+    queryFn: getSelfInfo,
+    staleTime: Infinity,
+  })
+  const isSelfProject = !!(selfInfo?.sourceDir && project.links.localPath && selfInfo.sourceDir === project.links.localPath)
+
+  const [rebuilding, setRebuilding] = useState(false)
+  const handleRebuild = useCallback(async () => {
+    setRebuilding(true)
+    try {
+      await triggerRebuild()
+    } catch {
+      // The request may fail if the server restarts before responding — that's OK
+    }
+    // The RebuildOverlay handles the rest via WS broadcast
+  }, [])
+
+  const isConnected = ['started', 'running', 'connecting', 'connected', 'reconnected', 'restarted'].includes(terminalStatus)
+  const isWorking = isConnected && isActive && !isWaiting
+  const isReady = isConnected && !isActive && !isWaiting
+  const isWaitingForApproval = isConnected && isWaiting
+
+  const healthAllUp = healthResults && healthResults.length > 0 && healthResults.every((r: HealthCheckResult) => r.status === 'up')
+  const healthAllDown = healthResults && healthResults.length > 0 && healthResults.every((r: HealthCheckResult) => r.status === 'down')
+  const healthHasResults = healthResults && healthResults.length > 0
+
+  // Report status to context for sidebar
+  useEffect(() => {
+    updateProjectStatus(project.id, {
+      terminalStatus,
+      isActive,
+      isWaiting,
+      healthUp: !!healthAllUp,
+      healthDown: !!healthAllDown,
+      healthHasResults: !!healthHasResults,
+    })
+  }, [project.id, terminalStatus, isActive, isWaiting, healthAllUp, healthAllDown, healthHasResults, updateProjectStatus])
+
+  const tabs: { key: CardTab; label: string; icon: string; tooltip: string }[] = [
+    { key: 'health', label: 'Health', icon: 'health', tooltip: 'Health & KPIs' },
+    { key: 'terminal', label: 'Claude Code', icon: 'terminal', tooltip: 'Claude Code' },
+    { key: 'issues', label: 'Issues', icon: 'issues', tooltip: 'Issues' },
+    { key: 'files', label: 'Files', icon: 'files', tooltip: 'File Explorer' },
+    { key: 'history', label: 'History', icon: 'history', tooltip: 'Chat History' },
+    { key: 'log', label: 'Log', icon: 'log', tooltip: 'Activity Log' },
+    { key: 'settings', label: 'Settings', icon: 'settings', tooltip: 'Settings' },
+  ]
+
+  const handleCardClick = useCallback(() => {
+    setActiveProjectId(project.id)
+  }, [project.id, setActiveProjectId])
+
+  const cardContent = (
+    <div
+      onClick={handleCardClick}
+      className={isFullscreen
+        ? 'fixed inset-0 z-50 flex flex-col bg-gray-800'
+        : `flex flex-col h-full rounded-lg border bg-gray-800 overflow-hidden transition-all duration-200 ${
+            isActiveProject
+              ? 'border-indigo-500 shadow-[0_0_12px_rgba(99,102,241,0.4)] ring-1 ring-indigo-500/50'
+              : 'border-gray-700'
+          }`
+      }>
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 bg-gray-900 border-b border-gray-700 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="drag-handle text-sm font-semibold text-white truncate cursor-grab select-none">
+            {project.name}
+          </span>
+          <span className="drag-handle text-[10px] font-mono text-gray-500 shrink-0 cursor-grab select-none">({project.code})</span>
+          {(() => {
+            const frontendUrl = monitorEnv === 'dev'
+              ? project.healthCheck?.frontend.devUrl
+              : monitorEnv === 'prod'
+                ? project.healthCheck?.frontend.prodUrl
+                : (project.healthCheck?.frontend.devUrl || project.healthCheck?.frontend.prodUrl);
+            if (!frontendUrl) return null;
+            return (
+              <a
+                href={frontendUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="relative z-20 inline-flex items-center gap-1 rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-indigo-500 transition-colors shrink-0"
+                title={`Open ${frontendUrl}`}
+              >
+                Go
+                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </a>
+            );
+          })()}
+          {openIssueCount > 0 && (
+            <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-indigo-600 text-xs font-mono text-white shrink-0">
+              {openIssueCount}
+            </span>
+          )}
+        </div>
+        {/* Drag handle spacer — textured grip area */}
+        <div className="drag-handle flex-1 min-w-4 h-full cursor-grab flex items-center justify-center mx-1 opacity-30 hover:opacity-60 transition-opacity">
+          <div className="flex gap-[3px] flex-wrap justify-center max-w-[40px]">
+            {[...Array(6)].map((_, i) => (
+              <span key={i} className="w-1 h-1 rounded-full bg-gray-500" />
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {activeTab === 'terminal' && isWorking && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              Working
+            </span>
+          )}
+          {activeTab === 'terminal' && isWaitingForApproval && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-purple-500/20 px-2 py-0.5 text-xs font-medium text-purple-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+              Waiting
+            </span>
+          )}
+          {activeTab === 'terminal' && isReady && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+              Ready
+            </span>
+          )}
+          {monitorEnv && healthHasResults && (
+            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+              healthAllUp
+                ? 'bg-green-600/20 text-green-400'
+                : healthAllDown
+                  ? 'bg-red-600/20 text-red-400'
+                  : 'bg-yellow-600/20 text-yellow-400'
+            }`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${
+                healthAllUp ? 'bg-green-400' : healthAllDown ? 'bg-red-400' : 'bg-yellow-400'
+              }`} />
+              {healthAllUp ? 'Up' : healthAllDown ? 'Down' : 'Degraded'}
+            </span>
+          )}
+          {isSelfProject && activeTab === 'terminal' && (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleRebuild() }}
+              disabled={rebuilding}
+              className="inline-flex items-center gap-1 rounded-full bg-cyan-600/20 px-2 py-0.5 text-[10px] font-medium text-cyan-400 hover:bg-cyan-600/30 transition-colors disabled:opacity-50"
+              title="Rebuild & restart VibeCtl server"
+            >
+              <svg className={`w-3 h-3 ${rebuilding ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              {rebuilding ? 'Rebuilding' : 'Rebuild'}
+            </button>
+          )}
+          <button
+            onClick={() => setIsFullscreen(!isFullscreen)}
+            className="text-gray-500 hover:text-gray-300 transition-colors"
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {isFullscreen ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+              )}
+            </svg>
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); closeProject(project.id) }}
+            className="text-gray-500 hover:text-red-400 transition-colors"
+            title="Close window"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-gray-700 shrink-0">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            title={tab.tooltip}
+            className={`px-2.5 py-1.5 transition-colors ${
+              activeTab === tab.key
+                ? 'text-white border-b-2 border-indigo-500 bg-gray-800'
+                : 'text-gray-500 hover:text-gray-300 bg-gray-850'
+            }`}
+          >
+            <TabIcon name={tab.icon} />
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content — stop drag propagation so inputs work */}
+      <div className="flex-1 overflow-hidden" onMouseDown={(e) => e.stopPropagation()}>
+        {activeTab === 'terminal' && (
+          <ChatView
+            projectId={project.id}
+            projectCode={project.code}
+            localPath={project.links.localPath}
+            compact={!isFullscreen}
+            onStatusChange={handleStatusChange}
+            onActivityChange={handleActivityChange}
+            onSessionSnapshot={handleSessionSnapshot}
+            onWaitingChange={handleWaitingChange}
+          />
+        )}
+        {activeTab === 'issues' && (
+          <CompactIssueList projectId={project.id} projectCode={project.code} />
+        )}
+        {activeTab === 'files' && (
+          <FilesBrowser projectId={project.id} localPath={project.links.localPath} />
+        )}
+        {activeTab === 'history' && (
+          <ChatHistoryTab projectId={project.id} currentSession={currentSession} />
+        )}
+        {activeTab === 'health' && (
+          <CompactHealthChecks project={project} results={healthResults} />
+        )}
+        {activeTab === 'log' && (
+          <CompactActivityLog projectId={project.id} />
+        )}
+        {activeTab === 'settings' && (
+          <CompactSettings project={project} />
+        )}
+      </div>
+    </div>
+  )
+
+  if (isFullscreen) {
+    return createPortal(cardContent, document.body)
+  }
+  return cardContent
+}
+
+function TabIcon({ name }: { name: string }) {
+  const cls = "w-4 h-4"
+  switch (name) {
+    case 'terminal':
+      return (
+        <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" />
+        </svg>
+      )
+    case 'issues':
+      return (
+        <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+        </svg>
+      )
+    case 'files':
+      return (
+        <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
+        </svg>
+      )
+    case 'history':
+      return (
+        <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+        </svg>
+      )
+    case 'health':
+      return (
+        <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3 12h3l3-6 3 12 3-6h6" />
+        </svg>
+      )
+    case 'log':
+      return (
+        <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z" />
+        </svg>
+      )
+    case 'settings':
+      return (
+        <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+        </svg>
+      )
+    default:
+      return <span className="text-xs">{name}</span>
+  }
+}
+
+function CompactIssueList({ projectId, projectCode }: { projectId: string; projectCode: string }) {
+  const [showNewIssue, setShowNewIssue] = useState(false)
+  const { data: issues, isLoading } = useQuery({
+    queryKey: ['issues', projectId],
+    queryFn: () => listIssues(projectId),
+  })
+
+  if (isLoading) {
+    return (
+      <div className="p-3 space-y-2">
+        {[...Array(3)].map((_, i) => (
+          <div key={i} className="h-6 animate-pulse rounded bg-gray-700" />
+        ))}
+      </div>
+    )
+  }
+
+  const openIssues = (issues ?? []).filter((i: Issue) => i.status === 'open')
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* New Issue button */}
+      <div className="px-3 py-1.5 border-b border-gray-700/30 shrink-0">
+        <button
+          onClick={() => setShowNewIssue(true)}
+          className="w-full rounded bg-indigo-600/80 px-2 py-1 text-[10px] font-medium text-white hover:bg-indigo-500 transition-colors"
+        >
+          + New Issue
+        </button>
+      </div>
+
+      {openIssues.length === 0 ? (
+        <div className="flex items-center justify-center flex-1 text-sm text-gray-500">
+          No open issues
+        </div>
+      ) : (
+        <div className="overflow-y-auto flex-1">
+          {openIssues.slice(0, 20).map((issue: Issue) => (
+            <Link
+              key={issue.id}
+              to={`/projects/${projectCode}/issues/${issue.issueKey}`}
+              className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-gray-700/50 border-b border-gray-700/30"
+            >
+              <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${priorityColors[issue.priority as Priority] ?? ''}`}>
+                {issue.priority}
+              </span>
+              <span className="text-gray-300 truncate">{issue.title}</span>
+              <span className="ml-auto text-gray-600 font-mono text-[10px] shrink-0">{issue.issueKey}</span>
+            </Link>
+          ))}
+          {openIssues.length > 20 && (
+            <div className="px-3 py-1.5 text-xs text-gray-500 text-center">
+              +{openIssues.length - 20} more
+            </div>
+          )}
+        </div>
+      )}
+
+      {showNewIssue && (
+        <NewIssueModal
+          projectId={projectId}
+          onClose={() => setShowNewIssue(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+function NewIssueModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+  const queryClient = useQueryClient()
+  const [title, setTitle] = useState('')
+  const [type, setType] = useState<IssueType>('bug')
+  const [priority, setPriority] = useState<Priority>('P2')
+  const [description, setDescription] = useState('')
+  const [reproSteps, setReproSteps] = useState('')
+  const [reproError, setReproError] = useState('')
+
+  const mutation = useMutation({
+    mutationFn: (data: Partial<Issue>) => createIssue(projectId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['issues', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
+      onClose()
+    },
+  })
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!title.trim()) return
+    if (type === 'bug' && !reproSteps.trim()) {
+      setReproError('Repro steps are required for bugs')
+      return
+    }
+    setReproError('')
+    mutation.mutate({
+      title: title.trim(),
+      type,
+      priority,
+      description: description.trim(),
+      createdBy: 'user',
+      ...(type === 'bug' && reproSteps.trim() && { reproSteps: reproSteps.trim() }),
+    })
+  }
+
+  const issueTypes: { value: IssueType; label: string }[] = [
+    { value: 'bug', label: 'Bug' },
+    { value: 'feature', label: 'Feature' },
+    { value: 'idea', label: 'Idea' },
+  ]
+  const priorities: Priority[] = ['P0', 'P1', 'P2', 'P3', 'P4', 'P5']
+
+  const inputClass = 'w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-200 focus:border-indigo-500 focus:outline-none'
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="bg-gray-800 rounded-lg border border-gray-700 w-full max-w-3xl mx-4 p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-white mb-4">New Issue</h2>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1">Title *</label>
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Issue title"
+              className={inputClass}
+              autoFocus
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">Type</label>
+              <div className="flex gap-2">
+                {issueTypes.map((t) => (
+                  <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => { setType(t.value); setReproError('') }}
+                    className={`rounded border px-3 py-1.5 text-xs font-medium transition ${
+                      type === t.value
+                        ? `${typeColors[t.value]} ring-1 ring-white/30`
+                        : 'border-gray-600 bg-gray-700 text-gray-400 hover:border-gray-500'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">Priority</label>
+              <div className="flex gap-1.5">
+                {priorities.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setPriority(p)}
+                    className={`rounded px-2.5 py-1 text-xs font-bold transition ${priorityColors[p]} ${
+                      priority === p ? 'ring-1 ring-white/40' : 'opacity-40 hover:opacity-80'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1">Description</label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={5}
+              placeholder="Describe the issue (markdown supported)"
+              className={inputClass + ' resize-y'}
+            />
+          </div>
+
+          {type === 'bug' && (
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">
+                Repro Steps <span className="text-red-400">*</span>
+              </label>
+              <textarea
+                value={reproSteps}
+                onChange={(e) => { setReproSteps(e.target.value); setReproError('') }}
+                rows={4}
+                placeholder="1. Go to...&#10;2. Click on...&#10;3. Observe..."
+                className={inputClass + ' resize-y'}
+              />
+              {reproError && (
+                <p className="mt-1 text-xs text-red-400">{reproError}</p>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              type="submit"
+              disabled={mutation.isPending || !title.trim()}
+              className="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+            >
+              {mutation.isPending ? 'Creating...' : 'Create Issue'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded bg-gray-700 px-4 py-2 text-sm font-medium text-gray-300 hover:bg-gray-600"
+            >
+              Cancel
+            </button>
+            {mutation.isError && (
+              <span className="text-xs text-red-400">
+                {mutation.error instanceof Error ? mutation.error.message : 'Failed'}
+              </span>
+            )}
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function CompactSettings({ project }: { project: ProjectSummary['project'] }) {
+  const queryClient = useQueryClient()
+  const [name, setName] = useState(project.name)
+  const [description, setDescription] = useState(project.description || '')
+  const [localPath, setLocalPath] = useState(project.links.localPath || '')
+  const [githubUrl, setGithubUrl] = useState(project.links.githubUrl || '')
+  const [goals, setGoals] = useState((project.goals ?? []).join('\n'))
+  const [healthCheck, setHealthCheck] = useState<HealthCheckConfig>(
+    project.healthCheck || { frontend: {}, backend: {}, monitorEnv: '' }
+  )
+  const [saved, setSaved] = useState(false)
+
+  const mutation = useMutation({
+    mutationFn: (data: Partial<Project>) => updateProject(project.id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['healthcheck', project.id] })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    },
+  })
+
+  const archiveMutation = useMutation({
+    mutationFn: () => archiveProject(project.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+    },
+  })
+
+  const handleSave = () => {
+    mutation.mutate({
+      name,
+      description,
+      links: {
+        localPath: localPath || undefined,
+        githubUrl: githubUrl || undefined,
+      },
+      goals: goals.split('\n').map((g) => g.trim()).filter(Boolean),
+      healthCheck,
+    })
+  }
+
+  const inputClass = 'w-full rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none'
+  const labelClass = 'block text-[10px] font-medium text-gray-500 mb-0.5'
+
+  return (
+    <div className="p-3 text-xs space-y-2 overflow-y-auto h-full">
+      <div>
+        <label className={labelClass}>Name</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
+      </div>
+      <div>
+        <label className={labelClass}>Description</label>
+        <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className={inputClass + ' resize-none'} />
+      </div>
+      <div>
+        <label className={labelClass}>Local Path</label>
+        <input value={localPath} onChange={(e) => setLocalPath(e.target.value)} className={inputClass + ' font-mono'} placeholder="/path/to/project" />
+      </div>
+      <div>
+        <label className={labelClass}>GitHub URL</label>
+        <input value={githubUrl} onChange={(e) => setGithubUrl(e.target.value)} className={inputClass} placeholder="https://github.com/..." />
+      </div>
+      <div>
+        <label className={labelClass}>Goals (one per line)</label>
+        <textarea value={goals} onChange={(e) => setGoals(e.target.value)} rows={3} className={inputClass + ' resize-none'} placeholder="Ship v2 by Q2&#10;Fix critical bugs" />
+      </div>
+      {/* Health Check Config */}
+      <div className="border-t border-gray-700/50 pt-2 mt-2">
+        <label className={labelClass}>Health Checks</label>
+        <div className="flex gap-1 mb-1.5">
+          {[
+            { value: '', label: 'Off' },
+            { value: 'dev', label: 'Dev' },
+            { value: 'prod', label: 'Prod' },
+          ].map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setHealthCheck({ ...healthCheck, monitorEnv: opt.value })}
+              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                healthCheck.monitorEnv === opt.value
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <div className="space-y-1">
+          <div className="grid grid-cols-2 gap-1">
+            <input
+              value={healthCheck.frontend.devUrl || ''}
+              onChange={(e) => setHealthCheck({ ...healthCheck, frontend: { ...healthCheck.frontend, devUrl: e.target.value } })}
+              placeholder="Frontend dev URL"
+              className={inputClass + ' text-[10px]'}
+            />
+            <input
+              value={healthCheck.frontend.prodUrl || ''}
+              onChange={(e) => setHealthCheck({ ...healthCheck, frontend: { ...healthCheck.frontend, prodUrl: e.target.value } })}
+              placeholder="Frontend prod URL"
+              className={inputClass + ' text-[10px]'}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-1">
+            <input
+              value={healthCheck.backend.devUrl || ''}
+              onChange={(e) => setHealthCheck({ ...healthCheck, backend: { ...healthCheck.backend, devUrl: e.target.value } })}
+              placeholder="Backend dev URL"
+              className={inputClass + ' text-[10px]'}
+            />
+            <input
+              value={healthCheck.backend.prodUrl || ''}
+              onChange={(e) => setHealthCheck({ ...healthCheck, backend: { ...healthCheck.backend, prodUrl: e.target.value } })}
+              placeholder="Backend prod URL"
+              className={inputClass + ' text-[10px]'}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          onClick={handleSave}
+          disabled={mutation.isPending}
+          className="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+        >
+          {mutation.isPending ? 'Saving...' : 'Save'}
+        </button>
+        {saved && <span className="text-green-400 text-[10px]">Saved</span>}
+        {mutation.isError && <span className="text-red-400 text-[10px]">{mutation.error instanceof Error ? mutation.error.message : 'Failed to save'}</span>}
+      </div>
+
+      {/* Archive */}
+      <div className="border-t border-gray-700/50 pt-2 mt-2">
+        <button
+          onClick={() => { if (confirm(`Archive "${project.name}"? It can be restored later.`)) archiveMutation.mutate() }}
+          disabled={archiveMutation.isPending}
+          className="rounded bg-red-900/40 border border-red-800/50 px-3 py-1 text-xs font-medium text-red-400 hover:bg-red-900/60 disabled:opacity-50 transition-colors"
+        >
+          {archiveMutation.isPending ? 'Archiving...' : 'Archive Project'}
+        </button>
+        {archiveMutation.isError && (
+          <span className="ml-2 text-red-400 text-[10px]">
+            {archiveMutation.error instanceof Error ? archiveMutation.error.message : 'Failed to archive'}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ChatHistoryTab({ projectId, currentSession }: { projectId: string; currentSession: ChatSessionSnapshot | null }) {
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [viewingCurrent, setViewingCurrent] = useState(false)
+
+  const { data: history, isLoading } = useQuery({
+    queryKey: ['chatHistory', projectId],
+    queryFn: () => listChatHistory(projectId),
+  })
+
+  const { data: entry, isLoading: entryLoading } = useQuery({
+    queryKey: ['chatHistoryEntry', selectedId],
+    queryFn: () => getChatHistoryEntry(selectedId!),
+    enabled: !!selectedId,
+  })
+
+  if (isLoading) {
+    return (
+      <div className="p-3 space-y-2">
+        {[...Array(3)].map((_, i) => (
+          <div key={i} className="h-8 animate-pulse rounded bg-gray-700" />
+        ))}
+      </div>
+    )
+  }
+
+  const hasCurrentMessages = currentSession && currentSession.messages.length > 0
+  const hasHistory = history && history.length > 0
+
+  if (!hasCurrentMessages && !hasHistory) {
+    return (
+      <div className="flex items-center justify-center h-full p-4 text-center text-gray-500 text-xs">
+        No chat history yet.
+      </div>
+    )
+  }
+
+  // Viewing current session
+  if (viewingCurrent && currentSession) {
+    return (
+      <HistoryDetailView
+        label="Active Session"
+        labelColor="text-green-400"
+        subtitle={`started ${new Date(currentSession.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+        messages={currentSession.messages}
+        messageType="chat"
+        onBack={() => setViewingCurrent(false)}
+      />
+    )
+  }
+
+  // Viewing a past entry
+  if (selectedId && entry) {
+    return (
+      <HistoryDetailView
+        label={`${new Date(entry.startedAt).toLocaleDateString()} ${new Date(entry.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+        subtitle={`${entry.messageCount} messages`}
+        messages={entry.messages}
+        messageType="raw"
+        onBack={() => setSelectedId(null)}
+      />
+    )
+  }
+
+  if (selectedId && entryLoading) {
+    return (
+      <div className="flex items-center justify-center h-full text-gray-500 text-xs">
+        Loading...
+      </div>
+    )
+  }
+
+  // List view
+  return (
+    <div className="overflow-y-auto h-full">
+      {/* Current session at the top */}
+      {hasCurrentMessages && (
+        <button
+          onClick={() => setViewingCurrent(true)}
+          className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-700/50 border-b border-gray-700/30 transition-colors bg-green-900/10"
+        >
+          <div className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs text-green-400 font-medium">Active Session</div>
+            <div className="text-[10px] text-gray-500">
+              started {new Date(currentSession!.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {' \u00b7 '}
+              {currentSession!.messages.length} messages
+            </div>
+          </div>
+          <svg className="w-3 h-3 text-gray-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+          </svg>
+        </button>
+      )}
+
+      {/* Past sessions */}
+      {(history ?? []).map((item: ChatHistorySummary) => {
+        const startDate = new Date(item.startedAt)
+        const endDate = new Date(item.endedAt)
+        const duration = Math.round((endDate.getTime() - startDate.getTime()) / 60000)
+
+        return (
+          <button
+            key={item.id}
+            onClick={() => setSelectedId(item.id)}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-700/50 border-b border-gray-700/30 transition-colors"
+          >
+            <div className="flex-1 min-w-0">
+              <div className="text-xs text-gray-300">
+                {startDate.toLocaleDateString()} {startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </div>
+              <div className="text-[10px] text-gray-500">
+                {duration > 0 ? `${duration}m` : '<1m'} &middot; {item.messageCount} messages
+              </div>
+            </div>
+            <svg className="w-3 h-3 text-gray-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+            </svg>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function HistoryDetailView({
+  label,
+  labelColor,
+  subtitle,
+  messages,
+  messageType,
+  onBack,
+}: {
+  label: string
+  labelColor?: string
+  subtitle: string
+  messages: unknown[]
+  messageType: 'chat' | 'raw'
+  onBack: () => void
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Find indices of user messages (the "turns" where the user gave input)
+  const userIndices = useMemo(() => {
+    const indices: number[] = []
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i] as Record<string, unknown>
+      if (messageType === 'chat') {
+        if (msg.role === 'user' && msg.text) indices.push(i)
+      } else {
+        // Raw messages from backend: user messages with text content
+        if (msg.type === 'user') {
+          const message = msg.message as { content?: Array<{ type: string; text?: string }> } | undefined
+          if (message?.content?.some((b) => b.type === 'text' && b.text)) indices.push(i)
+        }
+      }
+    }
+    return indices
+  }, [messages, messageType])
+
+  // Start at the last user message
+  const [turnIndex, setTurnIndex] = useState(() => Math.max(0, userIndices.length - 1))
+
+  // Reset when messages change (e.g. live session updates)
+  useEffect(() => {
+    setTurnIndex(Math.max(0, userIndices.length - 1))
+  }, [userIndices.length])
+
+  const currentUserMsgIndex = userIndices[turnIndex] ?? 0
+  // Show from this user message up to (but not including) the next user message
+  const nextUserMsgIndex = turnIndex < userIndices.length - 1
+    ? userIndices[turnIndex + 1]
+    : messages.length
+
+  const visibleMessages = messages.slice(currentUserMsgIndex, nextUserMsgIndex)
+
+  // Scroll to top when stepping
+  useEffect(() => {
+    scrollRef.current?.scrollTo(0, 0)
+  }, [turnIndex])
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700/50 shrink-0">
+        <button
+          onClick={onBack}
+          className="text-[10px] text-indigo-400 hover:text-indigo-300 shrink-0"
+        >
+          &larr; Back
+        </button>
+        <span className={`text-[10px] font-medium ${labelColor || 'text-gray-500'}`}>{label}</span>
+        <span className="text-[10px] text-gray-600 ml-auto shrink-0">{subtitle}</span>
+      </div>
+
+      {/* Turn navigator */}
+      {userIndices.length > 0 && (
+        <div className="flex items-center justify-between px-3 py-1 border-b border-gray-700/30 shrink-0 bg-gray-800/50">
+          <button
+            onClick={() => setTurnIndex((i) => Math.max(0, i - 1))}
+            disabled={turnIndex <= 0}
+            className="text-[10px] text-gray-400 hover:text-white disabled:text-gray-700 disabled:cursor-not-allowed transition-colors px-1.5 py-0.5 rounded hover:bg-gray-700/50"
+          >
+            &larr; Prev
+          </button>
+          <span className="text-[10px] text-gray-500 font-mono">
+            Turn {turnIndex + 1} / {userIndices.length}
+          </span>
+          <button
+            onClick={() => setTurnIndex((i) => Math.min(userIndices.length - 1, i + 1))}
+            disabled={turnIndex >= userIndices.length - 1}
+            className="text-[10px] text-gray-400 hover:text-white disabled:text-gray-700 disabled:cursor-not-allowed transition-colors px-1.5 py-0.5 rounded hover:bg-gray-700/50"
+          >
+            Next &rarr;
+          </button>
+        </div>
+      )}
+
+      {/* Messages for this turn */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
+        {visibleMessages.map((msg, i) => (
+          messageType === 'chat'
+            ? <HistoryMessageFromChat key={currentUserMsgIndex + i} msg={msg as any} />
+            : <HistoryMessage key={currentUserMsgIndex + i} msg={msg} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function HistoryMessage({ msg }: { msg: unknown }) {
+  const data = msg as Record<string, unknown>
+  const type = data.type as string
+
+  if (type === 'assistant') {
+    const message = data.message as { content?: Array<{ type: string; text?: string; name?: string; input?: Record<string, unknown> }> } | undefined
+    if (!message?.content) return null
+
+    return (
+      <div className="space-y-1">
+        {message.content.map((block, i) => {
+          if (block.type === 'text' && block.text) {
+            return (
+              <div key={i} className="text-xs text-gray-300 whitespace-pre-wrap">
+                {block.text}
+              </div>
+            )
+          }
+          if (block.type === 'tool_use') {
+            return (
+              <div key={i} className="text-[10px] font-mono text-amber-400/70 bg-gray-800/50 rounded px-2 py-0.5">
+                {block.name}{block.input && 'file_path' in block.input ? ` ${String(block.input.file_path).split('/').slice(-2).join('/')}` : ''}
+              </div>
+            )
+          }
+          return null
+        })}
+      </div>
+    )
+  }
+
+  if (type === 'user') {
+    const message = data.message as { content?: Array<{ type: string; text?: string; content?: unknown }> } | undefined
+    if (!message?.content) return null
+
+    const textBlock = message.content.find((b) => b.type === 'text')
+    const toolResult = message.content.find((b) => b.type === 'tool_result')
+
+    if (textBlock?.text) {
+      return (
+        <div className="flex justify-end">
+          <div className="max-w-[85%] rounded-lg bg-indigo-600/20 border border-indigo-500/20 px-2 py-1">
+            <p className="text-[11px] text-gray-300 whitespace-pre-wrap">{textBlock.text}</p>
+          </div>
+        </div>
+      )
+    }
+
+    if (toolResult) {
+      let content = ''
+      if (typeof toolResult.content === 'string') {
+        content = toolResult.content
+      } else if (toolResult.content) {
+        content = JSON.stringify(toolResult.content)
+      }
+      return (
+        <div className="text-[10px] font-mono text-gray-600 bg-gray-800/30 rounded px-2 py-0.5 truncate">
+          {content.slice(0, 120)}{content.length > 120 ? '...' : ''}
+        </div>
+      )
+    }
+
+    return null
+  }
+
+  return null
+}
+
+function HistoryMessageFromChat({ msg }: { msg: { role: string; text?: string; content?: Array<{ type: string; text?: string; name?: string; input?: Record<string, unknown> }>; toolUseId?: string; isError?: boolean } }) {
+  if (msg.role === 'user' && msg.text) {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] rounded-lg bg-indigo-600/20 border border-indigo-500/20 px-2 py-1">
+          <p className="text-[11px] text-gray-300 whitespace-pre-wrap">{msg.text}</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (msg.role === 'assistant' && msg.content) {
+    return (
+      <div className="space-y-1">
+        {msg.content.map((block, i) => {
+          if (block.type === 'text' && block.text) {
+            return <div key={i} className="text-xs text-gray-300 whitespace-pre-wrap">{block.text}</div>
+          }
+          if (block.type === 'tool_use') {
+            return (
+              <div key={i} className="text-[10px] font-mono text-amber-400/70 bg-gray-800/50 rounded px-2 py-0.5">
+                {block.name}{block.input && 'file_path' in block.input ? ` ${String(block.input.file_path).split('/').slice(-2).join('/')}` : ''}
+              </div>
+            )
+          }
+          return null
+        })}
+      </div>
+    )
+  }
+
+  if (msg.role === 'tool_result') {
+    const content = (msg as unknown as { content: string }).content || ''
+    return (
+      <div className="text-[10px] font-mono text-gray-600 bg-gray-800/30 rounded px-2 py-0.5 truncate">
+        {content.slice(0, 120)}{content.length > 120 ? '...' : ''}
+      </div>
+    )
+  }
+
+  return null
+}
+
+function CompactHealthChecks({ project, results }: { project: ProjectSummary['project']; results?: HealthCheckResult[] }) {
+  const queryClient = useQueryClient()
+  const monitorEnv = project.healthCheck?.monitorEnv
+
+  const { data: history } = useQuery({
+    queryKey: ['healthHistory', project.id],
+    queryFn: () => getHealthHistory(project.id),
+    enabled: !!monitorEnv,
+    refetchInterval: 10 * 60 * 1000,
+  })
+
+  if (!monitorEnv) {
+    return (
+      <div className="flex items-center justify-center h-full p-4 text-center text-gray-500 text-xs">
+        <div>
+          <p className="mb-1">Health checks not configured.</p>
+          <p>Set up URLs in the <span className="text-indigo-400 font-medium">Settings</span> tab.</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!results || results.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full p-4 text-center text-gray-500 text-xs">
+        No endpoints configured for <span className="font-medium ml-1">{monitorEnv}</span>.
+      </div>
+    )
+  }
+
+  // Collect KPIs deduplicated by name+value (same KPI reported by multiple endpoints shown once)
+  const kpiMap = new Map<string, { name: string; value: number; unit: string }>()
+  for (const r of results) {
+    for (const k of (r.kpis || [])) {
+      const existing = kpiMap.get(k.name)
+      if (!existing || existing.value !== k.value) {
+        // Only add if new or values differ (if values differ, include both under unique keys)
+        kpiMap.set(existing && existing.value !== k.value ? `${k.name}__${r.name}` : k.name, k)
+      }
+    }
+  }
+  const allKPIs = Array.from(kpiMap.values())
+  // Collect dependencies deduplicated by name (same dep from multiple endpoints shown once)
+  const depMap = new Map<string, { name: string; status: string; message?: string }>()
+  for (const r of results) {
+    for (const d of (r.dependencies || [])) {
+      if (!depMap.has(d.name)) depMap.set(d.name, d)
+    }
+  }
+  const allDeps = Array.from(depMap.values())
+
+  return (
+    <div className="p-3 space-y-3 overflow-y-auto h-full">
+      {/* KPI cards — prominent at top */}
+      {allKPIs.length > 0 && (
+        <div className={`flex flex-wrap justify-center gap-2`}>
+          {allKPIs.map((k, i) => (
+            <div key={`${k.name}-${i}`} className="rounded-lg border border-gray-700/60 bg-gray-800/60 p-3 text-center" style={{ width: `calc(${100 / Math.min(allKPIs.length, 3)}% - ${(Math.min(allKPIs.length, 3) - 1) * 8 / Math.min(allKPIs.length, 3)}px)`, minWidth: '80px' }}>
+              <div className={`text-2xl font-bold leading-none ${kpiValueColor(k.value, k.unit)}`}>
+                {formatKPIValue(k.value, k.unit)}
+              </div>
+              <div className="text-[10px] text-gray-500 mt-1.5 uppercase tracking-wider font-medium">
+                {k.name.replace(/_/g, ' ')}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Endpoint status — compact inline row */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] text-gray-500 uppercase font-medium mr-1">
+          Endpoints ({monitorEnv})
+        </span>
+        {results.map((r: HealthCheckResult) => (
+          <div
+            key={r.name}
+            className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 ${
+              r.status === 'up'
+                ? 'border-green-800/50 bg-green-900/10'
+                : r.status === 'degraded'
+                  ? 'border-yellow-800/50 bg-yellow-900/10'
+                  : 'border-red-800/50 bg-red-900/10'
+            }`}
+            title={`${r.url}${r.error ? `\n${r.error}` : ''}${r.uptime != null && r.uptime > 0 ? `\nUptime: ${formatUptime(r.uptime)}` : ''}`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+              r.status === 'up' ? 'bg-green-400' : r.status === 'degraded' ? 'bg-yellow-400' : 'bg-red-400'
+            }`} />
+            <span className="text-[11px] font-medium text-gray-300">{r.name === 'Frontend' ? 'Front' : r.name === 'Backend' ? 'Back' : r.name}</span>
+            {r.version && <span className="text-[9px] text-gray-600 font-mono">v{r.version}</span>}
+            <span className={`text-[9px] font-mono font-medium ${
+              r.status === 'up' ? 'text-green-500' : r.status === 'degraded' ? 'text-yellow-400' : 'text-red-400'
+            }`}>
+              {r.status === 'up' ? r.code : r.status === 'degraded' ? 'DEGRADED' : 'DOWN'}
+            </span>
+          </div>
+        ))}
+        <button
+          onClick={() => queryClient.invalidateQueries({ queryKey: ['healthcheck', project.id] })}
+          className="text-[10px] text-indigo-400 hover:text-indigo-300 ml-auto"
+        >
+          Refresh
+        </button>
+      </div>
+
+      {/* Dependencies — compact inline */}
+      {allDeps.length > 0 && (
+        <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap">
+          <span className="text-[10px] text-gray-500 uppercase font-medium mr-0.5">Deps</span>
+          {allDeps.map((d, i) => (
+            <span key={`${d.name}-${i}`} className="inline-flex items-center gap-1 text-[11px]" title={d.message || undefined}>
+              <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                d.status === 'healthy' ? 'bg-green-400' : d.status === 'degraded' ? 'bg-yellow-400' : 'bg-red-400'
+              }`} />
+              <span className="text-gray-300">{d.name}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {history && history.length > 0 && <CompactUptimeTimeline history={history} />}
+    </div>
+  )
+}
+
+function formatUptime(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+  const days = Math.floor(seconds / 86400)
+  const hrs = Math.floor((seconds % 86400) / 3600)
+  return `${days}d ${hrs}h`
+}
+
+function formatKPIValue(value: number, unit: string): string {
+  const u = unit.toLowerCase()
+  if (u === 'usd') {
+    const abs = Math.abs(value).toFixed(2)
+    return value < 0 ? `-$${abs}` : `$${abs}`
+  }
+  if (u === 'percent') return `${value.toFixed(1)}%`
+  if (u === 'ms') return `${value.toFixed(0)}ms`
+  if (u === 's' || u === 'seconds') return `${value.toFixed(1)}s`
+  if (u === 'bytes') {
+    if (value > 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(1)}GB`
+    if (value > 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)}MB`
+    if (value > 1024) return `${(value / 1024).toFixed(1)}KB`
+    return `${value}B`
+  }
+  if (u === 'rpm' || u === 'rps') return `${value.toLocaleString()} ${unit}`
+  if (Number.isInteger(value)) return value.toLocaleString()
+  return value.toFixed(1)
+}
+
+function kpiValueColor(value: number, unit: string): string {
+  const u = unit.toLowerCase()
+  if (u === 'usd') return value < 0 ? 'text-red-400' : 'text-green-400'
+  return 'text-white'
+}
+
+function CompactUptimeTimeline({ history }: { history: HealthRecord[] }) {
+  const endpointNames = Array.from(
+    new Set(history.flatMap((r) => r.results.map((res) => res.name)))
+  )
+
+  const uptimeByEndpoint: Record<string, { up: number; total: number }> = {}
+  for (const name of endpointNames) {
+    uptimeByEndpoint[name] = { up: 0, total: 0 }
+  }
+  for (const record of history) {
+    for (const res of record.results) {
+      if (uptimeByEndpoint[res.name]) {
+        uptimeByEndpoint[res.name].total++
+        if (res.status === 'up') uptimeByEndpoint[res.name].up++
+      }
+    }
+  }
+
+  const getStatusColor = (record: HealthRecord, endpointName: string): string => {
+    const res = record.results.find((r) => r.name === endpointName)
+    if (!res) return 'bg-gray-700'
+    if (res.status === 'up') return 'bg-green-500'
+    if (res.status === 'down') return 'bg-red-500'
+    return 'bg-yellow-500'
+  }
+
+  const formatTime = (dateStr: string) =>
+    new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+  return (
+    <div className="border-t border-gray-700/50 pt-2 mt-1">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[10px] text-gray-500 font-medium">Last 24 hours</span>
+        <span className="text-[10px] text-gray-600">{history.length} checks</span>
+      </div>
+      <div className={`grid gap-3 ${endpointNames.length >= 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+      {endpointNames.map((name) => {
+        const stats = uptimeByEndpoint[name]
+        const pct = stats.total > 0 ? ((stats.up / stats.total) * 100).toFixed(1) : '—'
+        return (
+          <div key={name} className="space-y-0.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-gray-400">{name === 'Frontend' ? 'Front' : name === 'Backend' ? 'Back' : name}</span>
+              <span className={`text-[10px] font-mono font-medium ${
+                pct === '100.0' ? 'text-green-400'
+                  : pct === '—' ? 'text-gray-500'
+                    : Number(pct) >= 99 ? 'text-yellow-400'
+                      : 'text-red-400'
+              }`}>
+                {pct}%
+              </span>
+            </div>
+            <div className="flex gap-px">
+              {history.map((record) => (
+                <div
+                  key={record.id}
+                  className={`h-3 flex-1 rounded-sm ${getStatusColor(record, name)} opacity-80 hover:opacity-100 transition-opacity cursor-default`}
+                  title={`${formatTime(record.checkedAt)}: ${
+                    record.results.find((r) => r.name === name)?.status ?? 'no data'
+                  }`}
+                />
+              ))}
+            </div>
+            <div className="flex justify-between text-[9px] text-gray-600">
+              <span>{formatTime(history[0].checkedAt)}</span>
+              <span>{formatTime(history[history.length - 1].checkedAt)}</span>
+            </div>
+          </div>
+        )
+      })}
+      </div>
+    </div>
+  )
+}
+
+// --- Compact Activity Log ---
+
+const LOG_TYPE_META: Record<string, { label: string; color: string }> = {
+  backend_start: { label: 'Start', color: 'text-blue-400' },
+  prompt_sent: { label: 'Prompt', color: 'text-indigo-400' },
+  file_edit: { label: 'File', color: 'text-amber-400' },
+  settings_change: { label: 'Settings', color: 'text-gray-400' },
+  issue_created: { label: 'Issue+', color: 'text-green-400' },
+  issue_status: { label: 'Status', color: 'text-cyan-400' },
+  prompt_created: { label: 'Prompt+', color: 'text-purple-400' },
+  prompt_edited: { label: 'PromptEdit', color: 'text-purple-300' },
+  prompt_deleted: { label: 'Prompt-', color: 'text-red-400' },
+}
+
+function formatLogTime(iso: string): string {
+  const d = new Date(iso)
+  const now = new Date()
+  const diffMs = now.getTime() - d.getTime()
+  const diffMin = Math.floor(diffMs / 60000)
+  if (diffMin < 1) return 'now'
+  if (diffMin < 60) return `${diffMin}m`
+  const diffHrs = Math.floor(diffMin / 60)
+  if (diffHrs < 24) return `${diffHrs}h`
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function CompactActivityLog({ projectId }: { projectId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['activity-log', projectId],
+    queryFn: () => listActivityLog({ projectId, limit: 50 }),
+    refetchInterval: 15000,
+  })
+
+  const entries = data?.entries || []
+
+  if (isLoading) {
+    return (
+      <div className="p-3 space-y-1">
+        {[...Array(5)].map((_, i) => (
+          <div key={i} className="h-5 animate-pulse rounded bg-gray-700/50" />
+        ))}
+      </div>
+    )
+  }
+
+  if (entries.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full text-gray-500 text-xs p-4">
+        No activity logged for this project yet.
+      </div>
+    )
+  }
+
+  return (
+    <div className="overflow-y-auto h-full">
+      {entries.map((entry: ActivityLogEntry) => (
+        <CompactLogRow key={entry.id} entry={entry} />
+      ))}
+    </div>
+  )
+}
+
+function CompactLogRow({ entry }: { entry: ActivityLogEntry }) {
+  const [expanded, setExpanded] = useState(false)
+  const meta = LOG_TYPE_META[entry.type] || { label: entry.type, color: 'text-gray-500' }
+  const fullText = (entry.metadata?.fullText as string) || ''
+  const hasMore = !!fullText && fullText !== entry.snippet
+
+  return (
+    <div className="flex items-start gap-2 px-3 py-1.5 hover:bg-gray-800/30 transition-colors border-b border-gray-800/30">
+      <span className={`text-[10px] font-medium shrink-0 w-14 ${meta.color}`}>{meta.label}</span>
+      <div className="flex-1 min-w-0">
+        <p className="text-xs text-gray-100 truncate">{entry.message}</p>
+        {entry.snippet && (
+          <p className={`text-[10px] text-gray-400 font-mono mt-0.5 whitespace-pre-wrap ${expanded ? '' : 'truncate'}`}>
+            {expanded ? fullText : entry.snippet}
+            {hasMore && (
+              <button
+                onClick={() => setExpanded(!expanded)}
+                className="text-[10px] text-indigo-400 hover:text-indigo-300 ml-1 inline"
+              >
+                [{expanded ? 'less' : 'more'}]
+              </button>
+            )}
+          </p>
+        )}
+      </div>
+      <span className="text-[10px] text-gray-500 shrink-0">{formatLogTime(entry.timestamp)}</span>
+    </div>
+  )
+}

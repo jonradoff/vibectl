@@ -1,0 +1,71 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+body {
+  margin: 0;
+  background-color: #030712;
+  color: #f3f4f6;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Ensure text is selectable and inputs work inside react-grid-layout items */
+.react-grid-item input,
+.react-grid-item textarea,
+.react-grid-item select,
+.react-grid-item [contenteditable] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.react-grid-item .react-grid-item-content {
+  user-select: text;
+}
+
+/* highlight.js token colors (GitHub Dark inspired) */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-name,
+.hljs-tag { color: #ff7b72; }
+.hljs-string,
+.hljs-title,
+.hljs-section,
+.hljs-attribute,
+.hljs-literal,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-addition { color: #a5d6ff; }
+.hljs-comment,
+.hljs-quote,
+.hljs-deletion,
+.hljs-meta { color: #8b949e; }
+.hljs-number,
+.hljs-regexp,
+.hljs-symbol,
+.hljs-variable,
+.hljs-bullet,
+.hljs-link { color: #79c0ff; }
+.hljs-function { color: #d2a8ff; }
+.hljs-params { color: #c9d1d9; }
+.hljs-attr { color: #7ee787; }
+
+/* prose overrides for dark chat */
+.prose.prose-invert {
+  --tw-prose-body: #d1d5db;
+  --tw-prose-headings: #f3f4f6;
+  --tw-prose-code: #a5b4fc;
+  --tw-prose-links: #818cf8;
+  --tw-prose-bold: #f3f4f6;
+}
+
+.prose.prose-invert p { margin-top: 0.5em; margin-bottom: 0.5em; }
+.prose.prose-invert h1,
+.prose.prose-invert h2,
+.prose.prose-invert h3 { margin-top: 1em; margin-bottom: 0.5em; }
+.prose.prose-invert ul,
+.prose.prose-invert ol { margin-top: 0.25em; margin-bottom: 0.25em; }
+.prose.prose-invert li { margin-top: 0.1em; margin-bottom: 0.1em; }
+.prose.prose-sm p { font-size: 0.8125rem; line-height: 1.5; }
