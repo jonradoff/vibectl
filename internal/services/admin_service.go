@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -18,20 +19,26 @@ const adminDocID = "admin"
 type adminDoc struct {
 	ID             string    `bson:"_id"`
 	PasswordHash   string    `bson:"passwordHash,omitempty"`
-	Token          string    `bson:"token,omitempty"`
+	TokenHash      string    `bson:"tokenHash,omitempty"` // SHA-256 of the raw token (never stored in plaintext)
 	TokenCreatedAt time.Time `bson:"tokenCreatedAt,omitempty"`
 	UpdatedAt      time.Time `bson:"updatedAt"`
 }
 
 // AdminService manages the single admin account stored in MongoDB.
-// The password is bcrypt-hashed. A session token is stored in MongoDB and
-// validated on each authenticated request — the password itself never touches disk.
+// The password is bcrypt-hashed. Session tokens are stored as SHA-256 hashes —
+// the raw token is only ever held in memory and returned to the client once.
 type AdminService struct {
 	collection *mongo.Collection
 }
 
 func NewAdminService(db *mongo.Database) *AdminService {
 	return &AdminService{collection: db.Collection("admin")}
+}
+
+// hashToken returns the hex-encoded SHA-256 of a raw token string.
+func hashToken(rawToken string) string {
+	h := sha256.Sum256([]byte(rawToken))
+	return hex.EncodeToString(h[:])
 }
 
 // HasPassword returns true if an admin password has been configured.
@@ -49,7 +56,7 @@ func (s *AdminService) HasPassword(ctx context.Context) (bool, error) {
 
 // SetPassword hashes a new password and stores it, generating a fresh session token.
 // If no admin account exists, one is created (bootstrap mode).
-// Returns the new session token.
+// Returns the new session token (raw; not stored).
 func (s *AdminService) SetPassword(ctx context.Context, currentPassword, newPassword string) (string, error) {
 	var doc adminDoc
 	err := s.collection.FindOne(ctx, bson.D{{Key: "_id", Value: adminDocID}}).Decode(&doc)
@@ -69,7 +76,7 @@ func (s *AdminService) SetPassword(ctx context.Context, currentPassword, newPass
 	if err != nil {
 		return "", fmt.Errorf("hash password: %w", err)
 	}
-	token, err := generateAdminToken()
+	rawToken, err := generateAdminToken()
 	if err != nil {
 		return "", fmt.Errorf("generate token: %w", err)
 	}
@@ -77,7 +84,7 @@ func (s *AdminService) SetPassword(ctx context.Context, currentPassword, newPass
 	newDoc := adminDoc{
 		ID:             adminDocID,
 		PasswordHash:   string(hash),
-		Token:          token,
+		TokenHash:      hashToken(rawToken),
 		TokenCreatedAt: time.Now().UTC(),
 		UpdatedAt:      time.Now().UTC(),
 	}
@@ -90,7 +97,7 @@ func (s *AdminService) SetPassword(ctx context.Context, currentPassword, newPass
 	if err != nil {
 		return "", fmt.Errorf("save admin: %w", err)
 	}
-	return token, nil
+	return rawToken, nil
 }
 
 // Login verifies the password and returns a session token (rotating it each login).
@@ -108,7 +115,7 @@ func (s *AdminService) Login(ctx context.Context, password string) (string, erro
 	}
 
 	// Rotate token on each successful login.
-	token, err := generateAdminToken()
+	rawToken, err := generateAdminToken()
 	if err != nil {
 		return "", fmt.Errorf("generate token: %w", err)
 	}
@@ -116,7 +123,7 @@ func (s *AdminService) Login(ctx context.Context, password string) (string, erro
 		ctx,
 		bson.D{{Key: "_id", Value: adminDocID}},
 		bson.D{{Key: "$set", Value: bson.D{
-			{Key: "token", Value: token},
+			{Key: "tokenHash", Value: hashToken(rawToken)},
 			{Key: "tokenCreatedAt", Value: time.Now().UTC()},
 			{Key: "updatedAt", Value: time.Now().UTC()},
 		}}},
@@ -124,10 +131,11 @@ func (s *AdminService) Login(ctx context.Context, password string) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("save token: %w", err)
 	}
-	return token, nil
+	return rawToken, nil
 }
 
-// VerifyToken checks whether the given Bearer token matches the stored session token.
+// VerifyToken checks whether the given Bearer token is valid and unexpired.
+// The incoming token is hashed before comparison — the DB never holds plaintext tokens.
 func (s *AdminService) VerifyToken(ctx context.Context, token string) (bool, error) {
 	if token == "" {
 		return false, nil
@@ -140,7 +148,7 @@ func (s *AdminService) VerifyToken(ctx context.Context, token string) (bool, err
 	if err != nil {
 		return false, fmt.Errorf("lookup admin: %w", err)
 	}
-	if doc.Token == "" || doc.Token != token {
+	if doc.TokenHash == "" || doc.TokenHash != hashToken(token) {
 		return false, nil
 	}
 	if !doc.TokenCreatedAt.IsZero() && time.Since(doc.TokenCreatedAt) > 30*24*time.Hour {

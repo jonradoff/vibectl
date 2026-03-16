@@ -56,6 +56,15 @@ func (h *ProjectHandler) CodeRoutes() chi.Router {
 	return r
 }
 
+// maskProjects returns the slice with webhook secrets redacted.
+func maskProjects(projects []models.Project) []models.Project {
+	out := make([]models.Project, len(projects))
+	for i, p := range projects {
+		out[i] = *p.MaskSecrets()
+	}
+	return out
+}
+
 // List returns all projects as a JSON array.
 func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
 	projects, err := h.projectService.List(r.Context())
@@ -63,7 +72,7 @@ func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_PROJECTS_FAILED")
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, projects)
+	middleware.WriteJSON(w, http.StatusOK, maskProjects(projects))
 }
 
 // ListArchived returns all archived projects.
@@ -73,7 +82,7 @@ func (h *ProjectHandler) ListArchived(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_ARCHIVED_FAILED")
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, projects)
+	middleware.WriteJSON(w, http.StatusOK, maskProjects(projects))
 }
 
 // Archive marks a project as archived.
@@ -109,7 +118,7 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusBadRequest, err.Error(), "CREATE_PROJECT_FAILED")
 		return
 	}
-	middleware.WriteJSON(w, http.StatusCreated, project)
+	middleware.WriteJSON(w, http.StatusCreated, project.MaskSecrets())
 }
 
 // GetByID retrieves a project by its ObjectID.
@@ -120,7 +129,7 @@ func (h *ProjectHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, project)
+	middleware.WriteJSON(w, http.StatusOK, project.MaskSecrets())
 }
 
 // GetByCode retrieves a project by its unique code.
@@ -131,7 +140,7 @@ func (h *ProjectHandler) GetByCode(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, project)
+	middleware.WriteJSON(w, http.StatusOK, project.MaskSecrets())
 }
 
 // Update applies partial updates to a project.
@@ -142,6 +151,18 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		middleware.WriteError(w, http.StatusBadRequest, "invalid request body", "INVALID_BODY")
 		return
+	}
+
+	// Validate webhook URLs for SSRF (block private/loopback ranges)
+	if req.Webhooks != nil {
+		for _, wh := range *req.Webhooks {
+			if wh.URL != "" {
+				if err := services.ValidateWebhookURL(wh.URL); err != nil {
+					middleware.WriteError(w, http.StatusBadRequest, err.Error(), "INVALID_WEBHOOK_URL")
+					return
+				}
+			}
+		}
 	}
 
 	project, err := h.projectService.Update(r.Context(), id, &req)
@@ -155,7 +176,7 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 		h.activityLogService.LogAsync("settings_change", "Updated settings for project: "+project.Name, &pid, "", nil)
 	}
 
-	middleware.WriteJSON(w, http.StatusOK, project)
+	middleware.WriteJSON(w, http.StatusOK, project.MaskSecrets())
 }
 
 // Delete removes a project by ID.

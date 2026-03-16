@@ -4,16 +4,48 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jonradoff/vibectl/internal/middleware"
 	"github.com/jonradoff/vibectl/internal/services"
 	"github.com/jonradoff/vibectl/internal/terminal"
 )
+
+// loginAttempt tracks brute-force rate limiting per IP.
+type loginAttempt struct {
+	count     int
+	windowEnd time.Time
+}
+
+var (
+	loginMu       sync.Mutex
+	loginAttempts = map[string]*loginAttempt{}
+)
+
+// checkLoginRateLimit returns true if the request should be blocked (too many attempts).
+// Allows 10 attempts per IP per 5-minute window.
+func checkLoginRateLimit(r *http.Request) bool {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		ip = r.RemoteAddr
+	}
+	loginMu.Lock()
+	defer loginMu.Unlock()
+	now := time.Now()
+	a, ok := loginAttempts[ip]
+	if !ok || now.After(a.windowEnd) {
+		loginAttempts[ip] = &loginAttempt{count: 1, windowEnd: now.Add(5 * time.Minute)}
+		return false
+	}
+	a.count++
+	return a.count > 10
+}
 
 // AdminHandler handles administrative operations like rebuild/restart and auth.
 type AdminHandler struct {
@@ -112,6 +144,10 @@ func (h *AdminHandler) SelfInfo(w http.ResponseWriter, r *http.Request) {
 // Body: { "password": "..." }
 // Returns: { "token": "..." }
 func (h *AdminHandler) Login(w http.ResponseWriter, r *http.Request) {
+	if checkLoginRateLimit(r) {
+		middleware.WriteError(w, http.StatusTooManyRequests, "too many login attempts, try again later", "RATE_LIMITED")
+		return
+	}
 	var body struct {
 		Password string `json:"password"`
 	}

@@ -221,6 +221,16 @@ func main() {
 	r.Get("/ws/chat", chatWSHandler.HandleConnection)
 
 	r.Route("/api/v1", func(r chi.Router) {
+		// Public auth endpoints — always accessible regardless of password state
+		r.Get("/admin/auth-status", adminHandler.AuthStatus)
+		r.Post("/admin/login", adminHandler.Login)
+		r.Post("/admin/set-password", adminHandler.SetPassword)
+
+		// All remaining routes require a valid session token when a password is configured.
+		// When no password is set (first run), the middleware passes through transparently.
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.AdminAuth(adminService))
+
 		// Static project routes first (before {id} wildcard)
 		r.Get("/projects/archived", projectHandler.ListArchived)
 		r.Mount("/projects/code", projectHandler.CodeRoutes())
@@ -257,11 +267,8 @@ func main() {
 		r.Post("/ensure-dir", filesystemHandler.EnsureDir)
 		r.Get("/check-dir", filesystemHandler.CheckDir)
 
-		// Admin endpoints
-		r.Get("/admin/auth-status", adminHandler.AuthStatus)    // public — check if password set + token validity
-		r.Post("/admin/login", adminHandler.Login)              // public — no auth required
-		r.Post("/admin/set-password", adminHandler.SetPassword) // public — protects with current password
-		r.With(middleware.AdminAuth(adminService)).Post("/admin/rebuild", adminHandler.Rebuild)
+		// Admin endpoints (protected by group auth above)
+		r.Post("/admin/rebuild", adminHandler.Rebuild)
 		r.Get("/admin/self-info", adminHandler.SelfInfo)
 
 		r.Get("/chat-history/{historyId}", chatHistoryHandler.GetByID)
@@ -274,10 +281,11 @@ func main() {
 		r.Mount("/prompts", promptHandler.PromptRoutes())
 		r.Mount("/activity-log", activityLogHandler.Routes())
 		r.Mount("/settings", settingsHandler.Routes())
+		}) // end auth group
 	})
 
-	// Serve uploaded files
-	r.Handle("/uploads/*", http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))))
+	// Serve uploaded files — force Content-Disposition: attachment to prevent in-browser execution
+	r.Handle("/uploads/*", http.StripPrefix("/uploads/", handlers.ServeWithDisposition("./uploads")))
 
 	// Serve machine-readable docs (api.md, cli.md, mcp.md)
 	r.Handle("/docs/*", http.StripPrefix("/docs/", http.FileServer(http.Dir("./docs"))))

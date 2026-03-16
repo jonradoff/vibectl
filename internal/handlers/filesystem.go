@@ -65,8 +65,9 @@ func (h *FilesystemHandler) resolveAndValidate(r *http.Request) (string, string,
 		return "", "", fmt.Errorf("invalid path")
 	}
 
-	// Security: ensure we're still within root
-	if !strings.HasPrefix(absTarget, root) {
+	// Security: ensure we're still within root.
+	// Use separator suffix to prevent prefix-collision attacks (e.g. /proj2 matching /proj).
+	if absTarget != root && !strings.HasPrefix(absTarget, root+string(filepath.Separator)) {
 		return "", "", fmt.Errorf("path outside project directory")
 	}
 
@@ -283,17 +284,3 @@ func (h *FilesystemHandler) CheckDir(w http.ResponseWriter, r *http.Request) {
 	middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{"exists": info.IsDir()})
 }
 
-// isBinary checks if content appears to be binary.
-func isBinary(content []byte) bool {
-	// Check first 512 bytes for null bytes
-	check := content
-	if len(check) > 512 {
-		check = check[:512]
-	}
-	for _, b := range check {
-		if b == 0 {
-			return true
-		}
-	}
-	return false
-}

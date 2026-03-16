@@ -7,8 +7,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/jonradoff/vibectl/internal/models"
@@ -36,6 +40,65 @@ func NewWebhookService(db *mongo.Database) *WebhookService {
 		db:     db,
 		client: &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+// ValidateWebhookURL returns an error if the URL targets a private/loopback address (SSRF prevention).
+func ValidateWebhookURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("webhook URL must use http or https")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("webhook URL missing host")
+	}
+	// Resolve hostname to IPs and block private ranges
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		// If we can't resolve, block it — don't allow unresolvable hostnames
+		return fmt.Errorf("could not resolve webhook host %q: %w", host, err)
+	}
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		if isPrivateIP(ip) {
+			return fmt.Errorf("webhook URL must not target a private or loopback address")
+		}
+	}
+	return nil
+}
+
+// isPrivateIP reports whether ip is in a private, loopback, or link-local range.
+func isPrivateIP(ip net.IP) bool {
+	private := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+		"::1/128",
+		"fc00::/7",
+		"169.254.0.0/16", // AWS metadata / link-local
+		"fd00::/8",
+	}
+	for _, cidr := range private {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	// Also block bare "localhost" and similar
+	if strings.EqualFold(ip.String(), "::1") || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return true
+	}
+	return false
 }
 
 // Fire sends a webhook event to all configured endpoints for the given project that subscribe to this event.

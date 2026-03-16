@@ -84,7 +84,9 @@ const (
 type WebhookConfig struct {
 	URL    string         `json:"url" bson:"url"`
 	Events []WebhookEvent `json:"events" bson:"events"`
-	Secret string         `json:"secret,omitempty" bson:"secret,omitempty"` // for HMAC-SHA256
+	Secret string         `json:"secret,omitempty" bson:"secret,omitempty"` // HMAC-SHA256 signing secret; redacted in API responses
+	// HasSecret is set to true in API responses when a secret is configured, without exposing the value.
+	HasSecret bool `json:"hasSecret,omitempty" bson:"-"`
 }
 
 type Project struct {
@@ -105,6 +107,26 @@ type Project struct {
 	VibectlMdGeneratedAt  *time.Time         `json:"vibectlMdGeneratedAt,omitempty" bson:"vibectlMdGeneratedAt,omitempty"`
 	CreatedAt             time.Time          `json:"createdAt" bson:"createdAt"`
 	UpdatedAt             time.Time          `json:"updatedAt" bson:"updatedAt"`
+}
+
+// MaskSecrets returns a copy of the project with webhook secrets replaced by empty strings.
+// HasSecret is set to true when a secret was present, so the UI can show "configured" without
+// exposing the value. Call this before serialising any project to an API response.
+func (p *Project) MaskSecrets() *Project {
+	if len(p.Webhooks) == 0 {
+		return p
+	}
+	masked := *p
+	maskedWebhooks := make([]WebhookConfig, len(p.Webhooks))
+	for i, wh := range p.Webhooks {
+		maskedWebhooks[i] = wh
+		if wh.Secret != "" {
+			maskedWebhooks[i].HasSecret = true
+			maskedWebhooks[i].Secret = ""
+		}
+	}
+	masked.Webhooks = maskedWebhooks
+	return &masked
 }
 
 type CreateProjectRequest struct {

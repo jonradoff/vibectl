@@ -1379,12 +1379,15 @@ const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }
             )
           }
 
-          // Block code with syntax highlighting
-          let highlighted = codeStr
+          // Block code with syntax highlighting.
+          // Default to HTML-escaped plain text to prevent XSS when hljs falls through.
+          const escapeHtml = (s: string) =>
+            s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+          let highlighted = escapeHtml(codeStr)
           if (lang && hljs.getLanguage(lang)) {
             try {
               highlighted = hljs.highlight(codeStr, { language: lang }).value
-            } catch { /* fallback to plain */ }
+            } catch { /* fallback to escaped plain text */ }
           }
 
           return (
