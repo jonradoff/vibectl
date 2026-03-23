@@ -8,6 +8,8 @@ VibeCtl is a self-hosted project management system built for the way software is
 
 ---
 
+![VibeCtl Dashboard](docs/screenshot.png)
+
 ## Why VibeCtl
 
 Modern agentic development creates a new coordination problem: you're running multiple AI-assisted projects simultaneously, context windows are finite, and the pace is fast. Jira is too heavyweight. Linear doesn't know about your deployments. GitHub Issues doesn't understand your architecture.
