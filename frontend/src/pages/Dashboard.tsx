@@ -7,6 +7,7 @@ import 'react-resizable/css/styles.css'
 import { getGlobalDashboard, getBulkStartProdStreamUrl, getBulkRestartProdStreamUrl } from '../api/client'
 import ProjectCard from '../components/projects/ProjectCard'
 import ProjectForm from '../components/projects/ProjectForm'
+import UniversePanel from '../components/dashboard/UniversePanel'
 import { useActiveProject } from '../contexts/ActiveProjectContext'
 import { useAuth } from '../contexts/AuthContext'
 import type { Layout, LayoutItem } from 'react-grid-layout'
@@ -301,6 +302,9 @@ function Dashboard() {
           onCreated={() => queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })}
         />
       )}
+
+      {/* Universe visualization panel */}
+      <UniversePanel />
 
       {/* Global stats bar */}
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">

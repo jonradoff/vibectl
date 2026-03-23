@@ -70,6 +70,55 @@ func (s *HealthRecordService) GetLatest(ctx context.Context, projectID bson.Obje
 	return &record, nil
 }
 
+// DailyHealthStatus returns health status per day for the last `days` days, oldest first.
+// Values are "up", "down", "degraded", or "unknown". Takes the worst status seen each day.
+func (s *HealthRecordService) DailyHealthStatus(ctx context.Context, projectID bson.ObjectID, days int) ([]string, error) {
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	filter := bson.D{
+		{Key: "projectId", Value: projectID},
+		{Key: "checkedAt", Value: bson.D{{Key: "$gte", Value: since}}},
+	}
+	cursor, err := s.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "checkedAt", Value: 1}}))
+	if err != nil {
+		return nil, fmt.Errorf("find health records: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	priority := map[string]int{"up": 3, "degraded": 2, "down": 1, "unknown": 0}
+	dayStatus := map[string]string{}
+
+	for cursor.Next(ctx) {
+		var rec models.HealthRecord
+		if err := cursor.Decode(&rec); err != nil {
+			continue
+		}
+		dayStr := rec.CheckedAt.UTC().Format("2006-01-02")
+		// Compute overall status: best across endpoints
+		overallStatus := "unknown"
+		for _, res := range rec.Results {
+			if priority[res.Status] > priority[overallStatus] {
+				overallStatus = res.Status
+			}
+		}
+		// Keep worst status seen on this day
+		if existing, ok := dayStatus[dayStr]; !ok || priority[overallStatus] < priority[existing] {
+			dayStatus[dayStr] = overallStatus
+		}
+	}
+
+	result := make([]string, days)
+	now := time.Now().UTC()
+	for i := 0; i < days; i++ {
+		dayStr := now.AddDate(0, 0, -(days-1-i)).Format("2006-01-02")
+		if s, ok := dayStatus[dayStr]; ok {
+			result[i] = s
+		} else {
+			result[i] = "unknown"
+		}
+	}
+	return result, nil
+}
+
 // GetHistory returns health records for a project within the given duration (e.g. last 24h).
 func (s *HealthRecordService) GetHistory(ctx context.Context, projectID string, since time.Duration) ([]models.HealthRecord, error) {
 	oid, err := bson.ObjectIDFromHex(projectID)

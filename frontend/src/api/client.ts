@@ -25,6 +25,7 @@ import type {
   ModeInfo,
   ClientInstance,
   ProjectPathEntry,
+  ProjectUniverseData,
 } from '../types';
 
 const BASE = '/api/v1';
@@ -536,6 +537,9 @@ export const submitClaudeTokenDirect = (token: string) =>
 // ---- Dashboard ----
 export const getGlobalDashboard = () =>
   request<GlobalDashboard>('/dashboard');
+
+export const getUniverseData = () =>
+  request<ProjectUniverseData[]>('/dashboard/universe');
 
 // ---- AI Agents ----
 export const triageFeedback = (id: string) =>

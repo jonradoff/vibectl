@@ -245,7 +245,7 @@ func main() {
 	feedbackHandler := handlers.NewFeedbackHandler(feedbackService, issueService, triageAgent, themesAgent, decisionService, vibectlMdService, projectService, activityLogService, webhookService, eventBus)
 	settingsHandler := handlers.NewSettingsHandler(settingsService, cfg.DatabaseName, parseMongoUser(cfg.MongoDBURI))
 	sessionHandler := handlers.NewSessionHandler(sessionService, eventBus)
-	dashboardHandler := handlers.NewDashboardHandler(projectService, issueService, sessionService, feedbackService, memberService)
+	dashboardHandler := handlers.NewDashboardHandler(projectService, issueService, sessionService, feedbackService, memberService, activityLogService, healthRecordService)
 
 	var ghSweeper *ingestion.GitHubSweeper
 	if cfg.GitHubToken != "" {

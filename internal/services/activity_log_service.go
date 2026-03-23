@@ -12,6 +12,7 @@ import (
 	"github.com/jonradoff/vibectl/internal/models"
 )
 
+
 type ActivityLogService struct {
 	collection *mongo.Collection
 }
@@ -65,6 +66,80 @@ func (s *ActivityLogService) LogAsyncWithUser(logType, message string, projectID
 	go func() {
 		s.LogWithUser(context.Background(), logType, message, projectID, userID, userName, snippet, metadata)
 	}()
+}
+
+// DailyActivityCounts returns activity counts per day for the last `days` days,
+// oldest first. Zero-fills days with no activity.
+func (s *ActivityLogService) DailyActivityCounts(ctx context.Context, projectID bson.ObjectID, days int) ([]int, error) {
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	pipeline := bson.A{
+		bson.D{{Key: "$match", Value: bson.D{
+			{Key: "projectId", Value: projectID},
+			{Key: "timestamp", Value: bson.D{{Key: "$gte", Value: since}}},
+		}}},
+		bson.D{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: bson.D{{Key: "$dateToString", Value: bson.D{
+				{Key: "format", Value: "%Y-%m-%d"},
+				{Key: "date", Value: "$timestamp"},
+			}}}},
+			{Key: "count", Value: bson.D{{Key: "$sum", Value: 1}}},
+		}}},
+	}
+
+	cursor, err := s.collection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate activity counts: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	type dayCount struct {
+		ID    string `bson:"_id"`
+		Count int    `bson:"count"`
+	}
+	countMap := map[string]int{}
+	for cursor.Next(ctx) {
+		var dc dayCount
+		if err := cursor.Decode(&dc); err == nil {
+			countMap[dc.ID] = dc.Count
+		}
+	}
+
+	result := make([]int, days)
+	now := time.Now().UTC()
+	for i := 0; i < days; i++ {
+		dayStr := now.AddDate(0, 0, -(days-1-i)).Format("2006-01-02")
+		result[i] = countMap[dayStr]
+	}
+	return result, nil
+}
+
+// DeployCountSince returns the number of deploy-type activity log entries
+// for a project in the last `days` days.
+func (s *ActivityLogService) DeployCountSince(ctx context.Context, projectID bson.ObjectID, days int) (int, error) {
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	filter := bson.D{
+		{Key: "projectId", Value: projectID},
+		{Key: "timestamp", Value: bson.D{{Key: "$gte", Value: since}}},
+		{Key: "type", Value: bson.D{{Key: "$in", Value: bson.A{"deploy", "deploy_prod", "deploy_started", "deploy_complete", "deployment"}}}},
+	}
+	n, err := s.collection.CountDocuments(ctx, filter)
+	return int(n), err
+}
+
+// LastActivityAt returns the timestamp of the most recent log entry for a project.
+func (s *ActivityLogService) LastActivityAt(ctx context.Context, projectID bson.ObjectID) (*time.Time, error) {
+	filter := bson.D{{Key: "projectId", Value: projectID}}
+	opts := options.FindOne().SetSort(bson.D{{Key: "timestamp", Value: -1}}).SetProjection(bson.D{{Key: "timestamp", Value: 1}})
+	var entry models.ActivityLog
+	err := s.collection.FindOne(ctx, filter, opts).Decode(&entry)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	t := entry.Timestamp
+	return &t, nil
 }
 
 // List returns recent activity log entries with optional filtering.

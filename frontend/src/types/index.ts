@@ -193,6 +193,20 @@ export interface GlobalDashboard {
   projectSummaries: ProjectSummary[];
 }
 
+export interface ProjectUniverseData {
+  projectId: string;
+  projectName: string;
+  projectCode: string;
+  activityByDay: number[];   // last 90 days, oldest first
+  healthByDay: string[];     // last 7 days, oldest first: "up"|"down"|"degraded"|"unknown"
+  openIssueCount: number;
+  issuesByStatus: Record<string, number>;
+  currentHealth: string;     // "up"|"down"|"degraded"|"unknown"|"none"
+  pendingFeedbackCount: number;
+  lastActivityAt?: string;
+  deployCount: number;
+}
+
 export interface GoalAssessment {
   goal: string;
   coverage: string;
