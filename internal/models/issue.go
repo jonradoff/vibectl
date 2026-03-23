@@ -94,8 +94,9 @@ type Issue struct {
 	Type        IssueType     `json:"type" bson:"type"`
 	Priority    Priority      `json:"priority" bson:"priority"`
 	Status      string        `json:"status" bson:"status"`
-	Source      string        `json:"source,omitempty" bson:"source,omitempty"`
-	CreatedBy   string        `json:"createdBy" bson:"createdBy"`
+	Source           string        `json:"source,omitempty" bson:"source,omitempty"`
+	SourceFeedbackID string        `json:"sourceFeedbackId,omitempty" bson:"sourceFeedbackId,omitempty"`
+	CreatedBy        string        `json:"createdBy" bson:"createdBy"`
 	DueDate     *time.Time    `json:"dueDate,omitempty" bson:"dueDate,omitempty"`
 	ReproSteps  string        `json:"reproSteps,omitempty" bson:"reproSteps,omitempty"`
 	Attachments []Attachment  `json:"attachments,omitempty" bson:"attachments,omitempty"`
@@ -106,15 +107,16 @@ type Issue struct {
 }
 
 type CreateIssueRequest struct {
-	Title       string       `json:"title"`
-	Description string       `json:"description"`
-	Type        IssueType    `json:"type"`
-	Priority    Priority     `json:"priority"`
-	Source      string       `json:"source,omitempty"`
-	CreatedBy   string       `json:"createdBy"`
-	DueDate     string       `json:"dueDate,omitempty"`
-	ReproSteps  string       `json:"reproSteps,omitempty"`
-	Attachments []Attachment `json:"attachments,omitempty"`
+	Title            string       `json:"title"`
+	Description      string       `json:"description"`
+	Type             IssueType    `json:"type"`
+	Priority         Priority     `json:"priority"`
+	Source           string       `json:"source,omitempty"`
+	SourceFeedbackID string       `json:"sourceFeedbackId,omitempty"`
+	CreatedBy        string       `json:"createdBy"`
+	DueDate          string       `json:"dueDate,omitempty"`
+	ReproSteps       string       `json:"reproSteps,omitempty"`
+	Attachments      []Attachment `json:"attachments,omitempty"`
 }
 
 type UpdateIssueRequest struct {

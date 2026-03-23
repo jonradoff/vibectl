@@ -31,8 +31,15 @@ func (s *ActivityLogService) EnsureIndexes(ctx context.Context) error {
 
 // Log creates a new activity log entry.
 func (s *ActivityLogService) Log(ctx context.Context, logType, message string, projectID *bson.ObjectID, snippet string, metadata bson.M) error {
+	return s.LogWithUser(ctx, logType, message, projectID, nil, "", snippet, metadata)
+}
+
+// LogWithUser creates a new activity log entry with user attribution.
+func (s *ActivityLogService) LogWithUser(ctx context.Context, logType, message string, projectID *bson.ObjectID, userID *bson.ObjectID, userName string, snippet string, metadata bson.M) error {
 	entry := models.ActivityLog{
 		ProjectID: projectID,
+		UserID:    userID,
+		UserName:  userName,
 		Type:      logType,
 		Message:   message,
 		Snippet:   snippet,
@@ -50,6 +57,13 @@ func (s *ActivityLogService) Log(ctx context.Context, logType, message string, p
 func (s *ActivityLogService) LogAsync(logType, message string, projectID *bson.ObjectID, snippet string, metadata bson.M) {
 	go func() {
 		s.Log(context.Background(), logType, message, projectID, snippet, metadata)
+	}()
+}
+
+// LogAsyncWithUser logs with user attribution in a goroutine.
+func (s *ActivityLogService) LogAsyncWithUser(logType, message string, projectID *bson.ObjectID, userID *bson.ObjectID, userName string, snippet string, metadata bson.M) {
+	go func() {
+		s.LogWithUser(context.Background(), logType, message, projectID, userID, userName, snippet, metadata)
 	}()
 }
 

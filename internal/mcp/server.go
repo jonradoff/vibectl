@@ -3,43 +3,19 @@ package mcp
 import (
 	"fmt"
 
-	"github.com/jonradoff/vibectl/internal/services"
 	"github.com/mark3labs/mcp-go/server"
 )
 
 // MCPServer wraps the MCP protocol server with vibectl service access.
 type MCPServer struct {
-	projects     *services.ProjectService
-	issues       *services.IssueService
-	feedback     *services.FeedbackService
-	decisions    *services.DecisionService
-	sessions     *services.SessionService
-	healthRecords *services.HealthRecordService
-	prompts      *services.PromptService
-	vibectlMd    *services.VibectlMdService
-	server       *server.MCPServer
+	backend Backend
+	server  *server.MCPServer
 }
 
 // NewMCPServer creates an MCP server with all vibectl tools and resources registered.
-func NewMCPServer(
-	ps *services.ProjectService,
-	is *services.IssueService,
-	fs *services.FeedbackService,
-	ds *services.DecisionService,
-	ss *services.SessionService,
-	hrs *services.HealthRecordService,
-	proms *services.PromptService,
-	vm *services.VibectlMdService,
-) *MCPServer {
+func NewMCPServer(backend Backend) *MCPServer {
 	s := &MCPServer{
-		projects:     ps,
-		issues:       is,
-		feedback:     fs,
-		decisions:    ds,
-		sessions:     ss,
-		healthRecords: hrs,
-		prompts:      proms,
-		vibectlMd:    vm,
+		backend: backend,
 		server: server.NewMCPServer(
 			"vibectl",
 			"1.0.0",

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { updateProject, deleteProject } from '../../api/client';
+import { updateProject, deleteProject, detectFlyToml } from '../../api/client';
 import type { Project, CustomLink, HealthCheckConfig, DeploymentConfig, WebhookConfig } from '../../types';
 
 const WEBHOOK_EVENTS = [
@@ -45,6 +45,11 @@ function ProjectSettings({ project }: ProjectSettingsProps) {
 
   // Toast state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  // Fly.toml detection state
+  const [flyDetecting, setFlyDetecting] = useState(false);
+  const [flyDetected, setFlyDetected] = useState<{ appName: string; deployProd: string; startProd: string; restartProd: string; viewLogs: string } | null>(null);
+  const [flyNotFound, setFlyNotFound] = useState(false);
 
   // Danger zone state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -400,14 +405,89 @@ function ProjectSettings({ project }: ProjectSettingsProps) {
               </select>
             </div>
 
+            {/* Fly.toml detection banner */}
+            {localPath && (
+              <div className="mb-3">
+                {!flyDetected && !flyNotFound && (
+                  <button
+                    type="button"
+                    disabled={flyDetecting}
+                    onClick={async () => {
+                      setFlyDetecting(true);
+                      setFlyNotFound(false);
+                      try {
+                        const res = await detectFlyToml(localPath);
+                        if (res.found && res.appName) {
+                          setFlyDetected({
+                            appName: res.appName,
+                            deployProd: res.deployProd!,
+                            startProd: res.startProd!,
+                            restartProd: res.restartProd!,
+                            viewLogs: res.viewLogs!,
+                          });
+                        } else {
+                          setFlyNotFound(true);
+                        }
+                      } catch {
+                        setFlyNotFound(true);
+                      } finally {
+                        setFlyDetecting(false);
+                      }
+                    }}
+                    className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                  >
+                    {flyDetecting ? 'Examining…' : '🔍 Examine fly.toml'}
+                  </button>
+                )}
+                {flyNotFound && (
+                  <p className="text-xs text-gray-500">No fly.toml found in <span className="font-mono">{localPath}</span>.</p>
+                )}
+                {flyDetected && (
+                  <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold text-indigo-300">
+                        fly.toml detected — app: <span className="font-mono">{flyDetected.appName}</span>
+                      </p>
+                      <button type="button" onClick={() => setFlyDetected(null)} className="text-gray-500 hover:text-gray-400 text-xs">✕</button>
+                    </div>
+                    <div className="space-y-1 text-[10px] font-mono text-indigo-200/70">
+                      <div>deployProd: <span className="text-indigo-100">{flyDetected.deployProd}</span></div>
+                      <div>startProd: <span className="text-indigo-100">{flyDetected.startProd}</span></div>
+                      <div>restartProd: <span className="text-indigo-100">{flyDetected.restartProd}</span></div>
+                      <div>viewLogs: <span className="text-indigo-100">{flyDetected.viewLogs}</span></div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeployment({
+                          ...deployment,
+                          provider: 'flyio',
+                          flyApp: flyDetected.appName,
+                          deployProd: flyDetected.deployProd,
+                          startProd: flyDetected.startProd,
+                          restartProd: flyDetected.restartProd,
+                          viewLogs: flyDetected.viewLogs,
+                        });
+                        setFlyDetected(null);
+                      }}
+                      className="w-full rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium py-1.5 transition-colors"
+                    >
+                      Apply these commands
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="space-y-3 rounded bg-gray-700/50 p-3 mb-3">
               <p className="text-xs font-medium text-gray-400 mb-1">Commands</p>
               {[
                 { key: 'startDev' as const, label: 'Start Dev', placeholder: 'npm run dev' },
                 { key: 'stopDev' as const, label: 'Stop Dev', placeholder: 'kill process or docker-compose down' },
-                { key: 'deployProd' as const, label: 'Deploy Production', placeholder: 'fly deploy or git push' },
+                { key: 'deployProd' as const, label: 'Deploy Production', placeholder: 'fly deploy' },
+                { key: 'startProd' as const, label: 'Start Production', placeholder: 'fly apps start myapp' },
                 { key: 'restartProd' as const, label: 'Restart Production', placeholder: 'fly apps restart myapp' },
-                { key: 'viewLogs' as const, label: 'View Logs', placeholder: 'fly logs or docker logs' },
+                { key: 'viewLogs' as const, label: 'View Logs', placeholder: 'fly logs -a myapp' },
               ].map((cmd) => (
                 <div key={cmd.key}>
                   <label className="block text-xs text-gray-500 mb-1">{cmd.label}</label>

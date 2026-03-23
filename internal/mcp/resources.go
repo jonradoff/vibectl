@@ -19,7 +19,7 @@ func (s *MCPServer) registerResources() {
 			mcp.WithMIMEType("application/json"),
 		),
 		func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-			projects, err := s.projects.List(ctx)
+			projects, err := s.backend.ListProjects(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("failed to list projects: %w", err)
 			}
@@ -50,7 +50,7 @@ func (s *MCPServer) registerResources() {
 				return nil, fmt.Errorf("missing project code in URI")
 			}
 
-			project, err := s.projects.GetByCode(ctx, code)
+			project, err := s.backend.GetProjectByCode(ctx, code)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get project: %w", err)
 			}
@@ -82,12 +82,12 @@ func (s *MCPServer) registerResources() {
 				return nil, fmt.Errorf("missing project code in URI")
 			}
 
-			project, err := s.projects.GetByCode(ctx, code)
+			project, err := s.backend.GetProjectByCode(ctx, code)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get project: %w", err)
 			}
 
-			issues, err := s.issues.ListByProject(ctx, project.ID.Hex(), nil)
+			issues, err := s.backend.ListIssues(ctx, project.ID.Hex(), nil)
 			if err != nil {
 				return nil, fmt.Errorf("failed to list issues: %w", err)
 			}
@@ -118,7 +118,7 @@ func (s *MCPServer) registerResources() {
 				return nil, fmt.Errorf("missing issue key in URI")
 			}
 
-			issue, err := s.issues.GetByKey(ctx, issueKey)
+			issue, err := s.backend.GetIssueByKey(ctx, issueKey)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get issue: %w", err)
 			}

@@ -1,19 +1,23 @@
-import { useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { getProjectByCode, listProjectFeedback, runHealthCheck } from '../api/client';
+import { useState, useEffect, useRef } from 'react';
+import { useParams, useSearchParams } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { getProjectByCode, listProjectFeedback, runHealthCheck, removeClone, getCloneSSEUrl, getPullSSEUrl } from '../api/client';
 import type { FeedbackItem } from '../types';
 import IssueTable from '../components/issues/IssueTable';
 import ProjectSettings from '../components/projects/ProjectSettings';
 import ChatView from '../components/chat/ChatView';
 import HealthChecksTab from '../components/projects/HealthChecksTab';
 import VibectlMdTab from '../components/projects/VibectlMdTab';
+import CITab from '../components/projects/CITab';
+import MembersPanel from '../components/projects/MembersPanel';
 
-type Tab = 'issues' | 'terminal' | 'feedback' | 'health' | 'docs' | 'settings';
+type Tab = 'issues' | 'terminal' | 'feedback' | 'health' | 'docs' | 'ci' | 'members' | 'settings';
 
 function ProjectPage() {
   const { code } = useParams<{ code: string }>();
-  const [activeTab, setActiveTab] = useState<Tab>('issues');
+  const [searchParams] = useSearchParams();
+  const autoClone = searchParams.get('clone') === '1';
+  const [activeTab, setActiveTab] = useState<Tab>(autoClone ? 'terminal' : 'issues');
 
   const {
     data: project,
@@ -66,6 +70,8 @@ function ProjectPage() {
     { key: 'feedback', label: 'Feedback' },
     { key: 'health', label: 'Health', statusDot: healthStatusColor },
     { key: 'docs', label: 'Docs' },
+    { key: 'ci', label: 'CI' },
+    { key: 'members', label: 'Members' },
     { key: 'settings', label: 'Settings' },
   ];
 
@@ -204,13 +210,7 @@ function ProjectPage() {
       )}
 
       {activeTab === 'terminal' && (
-        <div className="rounded-lg border border-gray-700 overflow-hidden" style={{ height: '600px' }}>
-          <ChatView
-            projectId={project.id}
-            projectCode={project.code}
-            localPath={project.links.localPath}
-          />
-        </div>
+        <TerminalTab project={project} autoClone={autoClone} />
       )}
 
       {activeTab === 'feedback' && <FeedbackTab projectId={project.id} />}
@@ -218,6 +218,22 @@ function ProjectPage() {
       {activeTab === 'health' && <HealthChecksTab project={project} />}
 
       {activeTab === 'docs' && <VibectlMdTab project={project} />}
+
+      {activeTab === 'ci' && (
+        <CITab
+          projectId={project.id}
+          hasLocalPath={!!project.links.localPath}
+          hasGitHubUrl={!!project.links.githubUrl}
+          hasDeployCmd={!!project.deployment?.deployProd}
+          hasStartDevCmd={!!project.deployment?.startDev}
+          hasStartProdCmd={!!project.deployment?.startProd}
+          hasRestartProdCmd={!!project.deployment?.restartProd}
+          paused={project.paused}
+          isCloned={project.cloneStatus === 'cloned' || !!project.links.localPath}
+        />
+      )}
+
+      {activeTab === 'members' && <MembersPanel projectId={project.id} />}
 
       {activeTab === 'settings' && <ProjectSettings project={project} />}
     </div>
@@ -285,6 +301,134 @@ function FeedbackTab({ projectId }: { projectId: string }) {
           </p>
         </div>
       ))}
+    </div>
+  );
+}
+
+function TerminalTab({ project, autoClone = false }: { project: import('../types').Project; autoClone?: boolean }) {
+  const queryClient = useQueryClient();
+  const [cloneLog, setCloneLog] = useState<string[]>([]);
+  const [streaming, setStreaming] = useState(false);
+  const logRef = useRef<HTMLDivElement>(null);
+  const autoCloneStarted = useRef(false);
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [cloneLog]);
+
+  const startSSE = (url: string) => {
+    setCloneLog([]);
+    setStreaming(true);
+    const es = new EventSource(url);
+    es.onmessage = (e) => {
+      const line = e.data as string;
+      if (line === 'DONE') {
+        es.close();
+        setStreaming(false);
+        queryClient.invalidateQueries({ queryKey: ['project', project.code] });
+      } else if (line.startsWith('ERROR: ')) {
+        setCloneLog(prev => [...prev, line]);
+        es.close();
+        setStreaming(false);
+        queryClient.invalidateQueries({ queryKey: ['project', project.code] });
+      } else {
+        setCloneLog(prev => [...prev, line]);
+      }
+    };
+    es.onerror = () => { es.close(); setStreaming(false); };
+  };
+
+  const handleClone = () => startSSE(getCloneSSEUrl(project.id));
+  const handlePull = () => startSSE(getPullSSEUrl(project.id));
+
+  // Auto-start clone when arriving from the "Create & Clone" wizard step
+  useEffect(() => {
+    if (autoClone && !autoCloneStarted.current && !streaming && project.cloneStatus !== 'cloned' && !!project.links.githubUrl) {
+      autoCloneStarted.current = true;
+      startSSE(getCloneSSEUrl(project.id));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+  const handleRemove = async () => {
+    await removeClone(project.id);
+    queryClient.invalidateQueries({ queryKey: ['project', project.code] });
+  };
+
+  const isCloned = project.cloneStatus === 'cloned' || !!project.links.localPath;
+  const isCloning = project.cloneStatus === 'cloning' || streaming;
+  const hasGitHub = !!project.links.githubUrl;
+
+  // If cloned, show the chat view with the local path
+  if (isCloned && !streaming) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2 text-xs text-gray-500">
+          <span className="font-mono">{project.links.localPath}</span>
+          <div className="flex gap-2">
+            <button onClick={handlePull}
+              className="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">
+              Pull
+            </button>
+            <button onClick={handleRemove}
+              className="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">
+              Remove clone
+            </button>
+          </div>
+        </div>
+        <div className="rounded-lg border border-gray-700 overflow-hidden" style={{ height: '560px' }}>
+          <ChatView
+            projectId={project.id}
+            projectCode={project.code}
+            localPath={project.links.localPath}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // If actively streaming clone output, show log
+  if (isCloning || cloneLog.length > 0) {
+    return (
+      <div className="rounded-lg border border-gray-700 bg-gray-900 p-4 space-y-3">
+        <div className="flex items-center gap-2 text-sm text-gray-400">
+          {streaming && <div className="w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />}
+          <span>{streaming ? 'Cloning…' : 'Clone output'}</span>
+        </div>
+        <div ref={logRef} className="font-mono text-xs text-green-300 bg-black rounded p-3 h-64 overflow-y-auto whitespace-pre-wrap">
+          {cloneLog.map((line, i) => <div key={i}>{line}</div>)}
+        </div>
+      </div>
+    );
+  }
+
+  // No local path: show clone prompt if github URL configured
+  if (hasGitHub) {
+    return (
+      <div className="rounded-lg border border-gray-700 bg-gray-900 p-8 flex flex-col items-center gap-4 text-center">
+        <div className="text-gray-400 text-sm">
+          <p className="text-white font-medium mb-1">No local copy yet</p>
+          <p>Clone the repository to this server to start a Claude Code session.</p>
+          <p className="mt-1 font-mono text-xs text-gray-500">{project.links.githubUrl}</p>
+        </div>
+        {project.cloneStatus === 'error' && (
+          <p className="text-red-400 text-xs">{project.cloneError}</p>
+        )}
+        <button onClick={handleClone}
+          className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-2 px-6 rounded-lg text-sm transition-colors">
+          Clone repository
+        </button>
+      </div>
+    );
+  }
+
+  // No local path and no github URL: show the existing local-path chat view (shows its own prompt)
+  return (
+    <div className="rounded-lg border border-gray-700 overflow-hidden" style={{ height: '600px' }}>
+      <ChatView
+        projectId={project.id}
+        projectCode={project.code}
+        localPath={project.links.localPath}
+      />
     </div>
   );
 }

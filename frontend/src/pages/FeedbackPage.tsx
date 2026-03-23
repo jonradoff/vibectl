@@ -6,6 +6,7 @@ import FeedbackForm from '../components/feedback/FeedbackForm';
 
 const triageStatusColors: Record<TriageStatus, string> = {
   pending: 'bg-yellow-500 text-black',
+  triaged: 'bg-indigo-500 text-white',
   reviewed: 'bg-blue-500 text-white',
   accepted: 'bg-green-500 text-white',
   dismissed: 'bg-gray-500 text-white',

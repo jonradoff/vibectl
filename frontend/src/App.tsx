@@ -2,9 +2,11 @@ import { Routes, Route } from 'react-router-dom'
 import RebuildOverlay from './components/shared/RebuildOverlay'
 import Layout from './components/layout/Layout'
 import { AuthProvider } from './contexts/AuthContext'
+import { ModeProvider } from './contexts/ModeContext'
+import { FaviconUpdater } from './components/shared/FaviconUpdater'
 import AuthGate from './components/auth/AuthGate'
+import AuthCallbackPage from './pages/AuthCallbackPage'
 import Dashboard from './pages/Dashboard'
-import ProjectPage from './pages/ProjectPage'
 import IssuePage from './pages/IssuePage'
 import IssueFormPage from './pages/IssueFormPage'
 import FeedbackPage from './pages/FeedbackPage'
@@ -17,34 +19,49 @@ import MCPDocsPage from './pages/docs/MCPDocsPage'
 import APIDocsPage from './pages/docs/APIDocsPage'
 import CLIDocsPage from './pages/docs/CLIDocsPage'
 import SettingsPage from './pages/SettingsPage'
+import UsersPage from './pages/UsersPage'
+import APIKeysPage from './pages/APIKeysPage'
+import ProfilePage from './pages/ProfilePage'
 
 function App() {
   return (
+    <ModeProvider>
+    <FaviconUpdater />
     <AuthProvider>
-    <AuthGate>
-    <>
-    <RebuildOverlay />
-    <Routes>
-      <Route element={<Layout />}>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/archived" element={<ArchivedPage />} />
-        <Route path="/projects/:code" element={<ProjectPage />} />
-        <Route path="/projects/:code/issues/new" element={<IssueFormPage />} />
-        <Route path="/projects/:code/issues/:issueKey" element={<IssuePage />} />
-        <Route path="/projects/:code/pm-review" element={<PMReviewPage />} />
-        <Route path="/feedback" element={<FeedbackPage />} />
-        <Route path="/review" element={<ReviewPage />} />
-        <Route path="/prompts" element={<PromptsPage />} />
-        <Route path="/activity-log" element={<ActivityLogPage />} />
-        <Route path="/docs/mcp" element={<MCPDocsPage />} />
-        <Route path="/docs/api" element={<APIDocsPage />} />
-        <Route path="/docs/cli" element={<CLIDocsPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-      </Route>
-    </Routes>
-    </>
-    </AuthGate>
+      <RebuildOverlay />
+      {/* OAuth callback — outside AuthGate so it works before auth is established */}
+      <Routes>
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
+        <Route
+          path="/*"
+          element={
+            <AuthGate>
+              <Routes>
+                <Route element={<Layout />}>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/archived" element={<ArchivedPage />} />
+                  <Route path="/projects/:code/issues/new" element={<IssueFormPage />} />
+                  <Route path="/projects/:code/issues/:issueKey" element={<IssuePage />} />
+                  <Route path="/projects/:code/pm-review" element={<PMReviewPage />} />
+                  <Route path="/feedback" element={<FeedbackPage />} />
+                  <Route path="/review" element={<ReviewPage />} />
+                  <Route path="/prompts" element={<PromptsPage />} />
+                  <Route path="/activity-log" element={<ActivityLogPage />} />
+                  <Route path="/users" element={<UsersPage />} />
+                  <Route path="/api-keys" element={<APIKeysPage />} />
+                  <Route path="/profile" element={<ProfilePage />} />
+                  <Route path="/docs/mcp" element={<MCPDocsPage />} />
+                  <Route path="/docs/api" element={<APIDocsPage />} />
+                  <Route path="/docs/cli" element={<CLIDocsPage />} />
+                  <Route path="/settings" element={<SettingsPage />} />
+                </Route>
+              </Routes>
+            </AuthGate>
+          }
+        />
+      </Routes>
     </AuthProvider>
+    </ModeProvider>
   )
 }
 

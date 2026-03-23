@@ -40,6 +40,29 @@ Keep the following documentation in sync when making changes:
 - **`CHANGELOG.md`** — Add an entry for every release / significant feature.
 - **`README.md`** — Keep the feature overview, CLI reference, and MCP examples up to date.
 
+# Project Script Conventions
+
+VibeCtl expects projects to follow these conventions for deployment automation. When these files exist at the root of a project directory, they are automatically detected and used to pre-configure the project's Deployment Settings.
+
+## `deploy.sh`
+Automates the full deployment pipeline to production. Typically wraps steps like building, pushing to a registry, and deploying (e.g., `fly deploy`). Mapped to the **deployProd** command.
+
+## `start.sh`
+Starts (or restarts) the local development server. Should be idempotent — safe to run repeatedly. Typically kills any running process on the dev port and starts it fresh. Mapped to the **startDev** command.
+
+Both scripts should be executable (`chmod +x`) and live at the repo root. VibeCtl runs them from the project's local path directory.
+
+When a `fly.toml` is also present, the Fly app name is extracted and used to derive `fly apps start`, `fly apps restart`, and `fly logs` commands for **startProd**, **restartProd**, and **viewLogs** respectively.
+
+Auto-detection is run:
+- During project creation (for "Use local path" mode, where the directory already exists)
+- As a background step immediately after creation in Clone/New modes
+- On demand via the "⚡ Examine fly.toml" and "⚡ Detect start.sh" buttons in project Settings
+
+# UI Conventions
+
+- **No browser dialogs** — Never use `confirm()`, `alert()`, or `prompt()`. Always use a styled React modal instead.
+
 # Tech Stack
 
 - Backend: Go with chi router, MongoDB

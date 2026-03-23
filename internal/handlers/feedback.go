@@ -5,26 +5,53 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jonradoff/vibectl/internal/agents"
+	"github.com/jonradoff/vibectl/internal/events"
 	"github.com/jonradoff/vibectl/internal/middleware"
 	"github.com/jonradoff/vibectl/internal/models"
 	"github.com/jonradoff/vibectl/internal/services"
 )
 
 type FeedbackHandler struct {
-	feedbackService  *services.FeedbackService
-	triageAgent      *agents.TriageAgent
-	themesAgent      *agents.ThemesAgent
-	decisionService  *services.DecisionService
-	vibectlMdService *services.VibectlMdService
-	projectService   *services.ProjectService
-	webhookService   *services.WebhookService
+	feedbackService    *services.FeedbackService
+	issueService       *services.IssueService
+	triageAgent        *agents.TriageAgent
+	themesAgent        *agents.ThemesAgent
+	decisionService    *services.DecisionService
+	vibectlMdService   *services.VibectlMdService
+	projectService     *services.ProjectService
+	activityLogService *services.ActivityLogService
+	webhookService     *services.WebhookService
+	bus                *events.Bus
 }
 
-func NewFeedbackHandler(fs *services.FeedbackService, ta *agents.TriageAgent, tha *agents.ThemesAgent, ds *services.DecisionService, vm *services.VibectlMdService, ps *services.ProjectService, ws *services.WebhookService) *FeedbackHandler {
-	return &FeedbackHandler{feedbackService: fs, triageAgent: ta, themesAgent: tha, decisionService: ds, vibectlMdService: vm, projectService: ps, webhookService: ws}
+func NewFeedbackHandler(
+	fs *services.FeedbackService,
+	is *services.IssueService,
+	ta *agents.TriageAgent,
+	tha *agents.ThemesAgent,
+	ds *services.DecisionService,
+	vm *services.VibectlMdService,
+	ps *services.ProjectService,
+	als *services.ActivityLogService,
+	ws *services.WebhookService,
+	bus *events.Bus,
+) *FeedbackHandler {
+	return &FeedbackHandler{
+		feedbackService:    fs,
+		issueService:       is,
+		triageAgent:        ta,
+		themesAgent:        tha,
+		decisionService:    ds,
+		vibectlMdService:   vm,
+		projectService:     ps,
+		activityLogService: als,
+		webhookService:     ws,
+		bus:                bus,
+	}
 }
 
 // FeedbackRoutes returns a router mounted at /api/v1/feedback.
@@ -33,6 +60,7 @@ func (h *FeedbackHandler) FeedbackRoutes() chi.Router {
 	r.Get("/", h.List)
 	r.Post("/", h.Create)
 	r.Post("/batch", h.CreateBatch)
+	r.Post("/bulk-review", h.BulkReview)
 	r.Post("/{id}/triage", h.TriggerTriage)
 	r.Post("/triage-batch", h.TriggerTriageBatch)
 	r.Patch("/{id}/review", h.Review)
@@ -75,8 +103,14 @@ func (h *FeedbackHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.SourceType == "" {
-		middleware.WriteError(w, http.StatusBadRequest, "sourceType is required", "VALIDATION_ERROR")
-		return
+		req.SourceType = "manual"
+	}
+
+	// Auto-fill submittedBy from current user if not provided
+	if req.SubmittedBy == "" {
+		if u := middleware.GetCurrentUser(r); u != nil {
+			req.SubmittedBy = u.DisplayName
+		}
 	}
 
 	item, err := h.feedbackService.Create(r.Context(), &req)
@@ -84,6 +118,28 @@ func (h *FeedbackHandler) Create(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "CREATE_FEEDBACK_ERROR")
 		return
 	}
+
+	pid := ""
+	if item.ProjectID != nil {
+		pid = item.ProjectID.Hex()
+	}
+
+	// Activity log
+	if h.activityLogService != nil && item.ProjectID != nil {
+		oid := *item.ProjectID
+		u := middleware.GetCurrentUser(r)
+		snippet := item.RawContent
+		if len(snippet) > 120 {
+			snippet = snippet[:120] + "…"
+		}
+		if u != nil {
+			h.activityLogService.LogAsyncWithUser("feedback_submitted", "Feedback submitted: "+snippet, &oid, &u.ID, u.DisplayName, "", nil)
+		} else {
+			h.activityLogService.LogAsync("feedback_submitted", "Feedback submitted: "+snippet, &oid, "", nil)
+		}
+	}
+
+	h.bus.Publish(events.Event{Type: "feedback.created", ProjectID: pid})
 	middleware.WriteJSON(w, http.StatusCreated, item)
 }
 
@@ -105,6 +161,7 @@ func (h *FeedbackHandler) CreateBatch(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "CREATE_BATCH_ERROR")
 		return
 	}
+	h.bus.Publish(events.Event{Type: "feedback.created"})
 	middleware.WriteJSON(w, http.StatusCreated, items)
 }
 
@@ -121,6 +178,9 @@ func (h *FeedbackHandler) TriggerTriage(w http.ResponseWriter, r *http.Request) 
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "TRIAGE_ERROR")
 		return
 	}
+
+	// Mark as triaged
+	_ = h.feedbackService.SetTriaged(r.Context(), id)
 
 	// Fire webhook after triage completes
 	if h.webhookService != nil {
@@ -170,7 +230,7 @@ func (h *FeedbackHandler) TriggerTriageBatch(w http.ResponseWriter, r *http.Requ
 	middleware.WriteJSON(w, http.StatusOK, map[string]int{"triaged": count})
 }
 
-// Review accepts or dismisses a feedback item.
+// Review accepts or dismisses a feedback item, optionally creating an issue.
 func (h *FeedbackHandler) Review(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
@@ -181,7 +241,7 @@ func (h *FeedbackHandler) Review(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Action != "accept" && req.Action != "dismiss" {
-		middleware.WriteError(w, http.StatusBadRequest, "action must be \"accept\" or \"dismiss\"", "VALIDATION_ERROR")
+		middleware.WriteError(w, http.StatusBadRequest, `action must be "accept" or "dismiss"`, "VALIDATION_ERROR")
 		return
 	}
 
@@ -191,24 +251,110 @@ func (h *FeedbackHandler) Review(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If accepted and createIssue=true, create an issue from the proposed issue or manual fields
+	var createdIssue *models.Issue
+	if req.Action == "accept" && req.CreateIssue && item.ProjectID != nil && h.issueService != nil {
+		createdIssue = h.createIssueFromFeedback(r.Context(), item, &req)
+	}
+
 	if item.ProjectID != nil {
 		pid := *item.ProjectID
 		go func() {
 			ctx := context.Background()
 			action := "feedback_accepted"
-			summary := fmt.Sprintf("Accepted feedback #%s", id)
-			sections := []string{"status", "focus", "decisions"}
+			summary := fmt.Sprintf("Accepted feedback: %.80s", item.RawContent)
+			sections := []string{"status", "focus", "decisions", "feedback"}
+
+			if createdIssue != nil {
+				action = "feedback_converted"
+				summary = fmt.Sprintf("Feedback converted to %s: %s", createdIssue.IssueKey, createdIssue.Title)
+			}
+
 			if req.Action == "dismiss" {
 				action = "feedback_dismissed"
-				summary = fmt.Sprintf("Dismissed feedback #%s", id)
-				sections = []string{"decisions"}
+				summary = fmt.Sprintf("Dismissed feedback: %.80s", item.RawContent)
+				sections = []string{"decisions", "feedback"}
 			}
-			h.decisionService.Record(ctx, pid, action, summary, "")
+
+			u := middleware.GetCurrentUser(r)
+			if h.activityLogService != nil {
+				if u != nil {
+					h.activityLogService.LogAsyncWithUser(action, summary, &pid, &u.ID, u.DisplayName, "", nil)
+				} else {
+					h.activityLogService.LogAsync(action, summary, &pid, "", nil)
+				}
+			}
+
+			issueKey := ""
+			if createdIssue != nil {
+				issueKey = createdIssue.IssueKey
+			}
+			h.decisionService.Record(ctx, pid, action, summary, issueKey)
 			h.vibectlMdService.UpdateSection(ctx, pid.Hex(), sections...)
 		}()
 	}
 
+	// Return item with linked issue key if one was created
+	if createdIssue != nil {
+		item.LinkedIssueKey = createdIssue.IssueKey
+	}
+
+	if item.ProjectID != nil {
+		h.bus.Publish(events.Event{Type: "feedback.updated", ProjectID: item.ProjectID.Hex()})
+	}
 	middleware.WriteJSON(w, http.StatusOK, item)
+}
+
+// BulkReview accepts or dismisses multiple feedback items at once.
+func (h *FeedbackHandler) BulkReview(w http.ResponseWriter, r *http.Request) {
+	var req models.BulkReviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid JSON body", "INVALID_JSON")
+		return
+	}
+	if len(req.Items) == 0 {
+		middleware.WriteError(w, http.StatusBadRequest, "items must not be empty", "VALIDATION_ERROR")
+		return
+	}
+
+	var results []models.FeedbackItem
+	var errs []string
+	for _, item := range req.Items {
+		if item.Action != "accept" && item.Action != "dismiss" {
+			errs = append(errs, fmt.Sprintf("%s: invalid action %q", item.ID, item.Action))
+			continue
+		}
+		reviewReq := &models.ReviewFeedbackRequest{Action: item.Action}
+		updated, err := h.feedbackService.Review(r.Context(), item.ID, reviewReq)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", item.ID, err))
+			continue
+		}
+		results = append(results, *updated)
+
+		// Log activity per item
+		if h.activityLogService != nil && updated.ProjectID != nil {
+			oid := *updated.ProjectID
+			action := "feedback_accepted"
+			if item.Action == "dismiss" {
+				action = "feedback_dismissed"
+			}
+			snippet := updated.RawContent
+			if len(snippet) > 80 {
+				snippet = snippet[:80] + "…"
+			}
+			h.activityLogService.LogAsync(action, fmt.Sprintf("Bulk %s: %s", item.Action, snippet), &oid, "", nil)
+		}
+	}
+
+	resp := map[string]interface{}{
+		"processed": len(results),
+		"results":   results,
+	}
+	if len(errs) > 0 {
+		resp["errors"] = errs
+	}
+	middleware.WriteJSON(w, http.StatusOK, resp)
 }
 
 // ListByProject returns all feedback items for the project identified by the URL param "id".
@@ -221,4 +367,77 @@ func (h *FeedbackHandler) ListByProject(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	middleware.WriteJSON(w, http.StatusOK, items)
+}
+
+// createIssueFromFeedback converts accepted feedback into an issue using AI proposal or manual fields.
+// Returns nil (non-fatal) if issue creation fails — the review itself still succeeds.
+func (h *FeedbackHandler) createIssueFromFeedback(ctx context.Context, item *models.FeedbackItem, req *models.ReviewFeedbackRequest) *models.Issue {
+	if item.ProjectID == nil {
+		return nil
+	}
+	projectID := item.ProjectID.Hex()
+
+	// Build issue request: prefer AI proposal, fall back to manual fields, then raw content
+	title := req.IssueTitle
+	description := req.IssueDescription
+	issueType := models.IssueType(req.IssueType)
+	priority := models.Priority(req.IssuePriority)
+	reproSteps := ""
+
+	if item.AIAnalysis != nil && item.AIAnalysis.ProposedIssue != nil {
+		p := item.AIAnalysis.ProposedIssue
+		if title == "" {
+			title = p.Title
+		}
+		if description == "" {
+			description = p.Description
+		}
+		if issueType == "" {
+			issueType = models.IssueType(p.Type)
+		}
+		if priority == "" {
+			priority = models.Priority(p.Priority)
+		}
+		if p.ReproSteps != "" {
+			reproSteps = p.ReproSteps
+		}
+	}
+
+	// Final fallbacks
+	if title == "" {
+		title = strings.TrimSpace(item.RawContent)
+		if len(title) > 100 {
+			title = title[:100]
+		}
+	}
+	if description == "" {
+		description = item.RawContent
+	}
+	if !models.ValidIssueType(string(issueType)) {
+		issueType = models.IssueTypeIdea
+	}
+	if !models.ValidPriority(string(priority)) {
+		priority = models.PriorityP3
+	}
+
+	createReq := &models.CreateIssueRequest{
+		Title:            title,
+		Description:      description,
+		Type:             issueType,
+		Priority:         priority,
+		Source:           "feedback",
+		SourceFeedbackID: item.ID.Hex(),
+		ReproSteps:       reproSteps,
+		CreatedBy:        item.SubmittedBy,
+	}
+
+	issue, err := h.issueService.Create(ctx, projectID, createReq)
+	if err != nil {
+		return nil
+	}
+
+	// Link feedback back to the created issue
+	_ = h.feedbackService.LinkToIssue(ctx, item.ID.Hex(), issue.IssueKey)
+
+	return issue
 }

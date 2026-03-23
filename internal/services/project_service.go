@@ -257,6 +257,20 @@ func (s *ProjectService) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// UpdateCloneStatus updates the cloneStatus and cloneError fields for a project.
+func (s *ProjectService) UpdateCloneStatus(ctx context.Context, id, status, cloneErr string) error {
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid project ID: %w", err)
+	}
+	_, err = s.collection.UpdateByID(ctx, oid, bson.D{{Key: "$set", Value: bson.D{
+		{Key: "cloneStatus", Value: status},
+		{Key: "cloneError", Value: cloneErr},
+		{Key: "updatedAt", Value: time.Now().UTC()},
+	}}})
+	return err
+}
+
 // UpdateRecurringThemes sets the recurring themes for a project.
 func (s *ProjectService) UpdateRecurringThemes(ctx context.Context, id string, themes []models.RecurringTheme) error {
 	oid, err := bson.ObjectIDFromHex(id)
@@ -281,6 +295,15 @@ func (s *ProjectService) UpdateArchitectureSummary(ctx context.Context, id strin
 		{Key: "architectureSummary", Value: summary},
 		{Key: "architectureUpdatedAt", Value: now},
 		{Key: "updatedAt", Value: now},
+	}}})
+	return err
+}
+
+// SetPaused sets the paused state on a project.
+func (s *ProjectService) SetPaused(ctx context.Context, id bson.ObjectID, paused bool) error {
+	_, err := s.collection.UpdateByID(ctx, id, bson.D{{Key: "$set", Value: bson.D{
+		{Key: "paused", Value: paused},
+		{Key: "updatedAt", Value: time.Now().UTC()},
 	}}})
 	return err
 }

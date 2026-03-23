@@ -182,7 +182,7 @@ func (s *MCPServer) registerTools() {
 // --- Handlers ---
 
 func (s *MCPServer) handleListProjects(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	projects, err := s.projects.List(ctx)
+	projects, err := s.backend.ListProjects(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to list projects: %v", err)), nil
 	}
@@ -195,7 +195,7 @@ func (s *MCPServer) handleGetProject(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError("code is required"), nil
 	}
 
-	project, err := s.projects.GetByCode(ctx, code)
+	project, err := s.backend.GetProjectByCode(ctx, code)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get project: %v", err)), nil
 	}
@@ -208,7 +208,7 @@ func (s *MCPServer) handleListIssues(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError("projectCode is required"), nil
 	}
 
-	project, err := s.projects.GetByCode(ctx, projectCode)
+	project, err := s.backend.GetProjectByCode(ctx, projectCode)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 	}
@@ -224,7 +224,7 @@ func (s *MCPServer) handleListIssues(ctx context.Context, req mcp.CallToolReques
 		filters["type"] = v
 	}
 
-	issues, err := s.issues.ListByProject(ctx, project.ID.Hex(), filters)
+	issues, err := s.backend.ListIssues(ctx, project.ID.Hex(), filters)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to list issues: %v", err)), nil
 	}
@@ -237,7 +237,7 @@ func (s *MCPServer) handleGetIssue(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError("issueKey is required"), nil
 	}
 
-	issue, err := s.issues.GetByKey(ctx, issueKey)
+	issue, err := s.backend.GetIssueByKey(ctx, issueKey)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get issue: %v", err)), nil
 	}
@@ -252,14 +252,14 @@ func (s *MCPServer) handleSearchIssues(ctx context.Context, req mcp.CallToolRequ
 
 	var projectID string
 	if code := req.GetString("projectCode", ""); code != "" {
-		project, err := s.projects.GetByCode(ctx, code)
+		project, err := s.backend.GetProjectByCode(ctx, code)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 		}
 		projectID = project.ID.Hex()
 	}
 
-	issues, err := s.issues.Search(ctx, query, projectID)
+	issues, err := s.backend.SearchIssues(ctx, query, projectID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
 	}
@@ -272,7 +272,7 @@ func (s *MCPServer) handleCreateIssue(ctx context.Context, req mcp.CallToolReque
 		return mcp.NewToolResultError("projectCode is required"), nil
 	}
 
-	project, err := s.projects.GetByCode(ctx, projectCode)
+	project, err := s.backend.GetProjectByCode(ctx, projectCode)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 	}
@@ -305,7 +305,7 @@ func (s *MCPServer) handleCreateIssue(ctx context.Context, req mcp.CallToolReque
 		DueDate:     req.GetString("dueDate", ""),
 	}
 
-	issue, err := s.issues.Create(ctx, project.ID.Hex(), createReq)
+	issue, err := s.backend.CreateIssue(ctx, project.ID.Hex(), createReq)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to create issue: %v", err)), nil
 	}
@@ -322,7 +322,7 @@ func (s *MCPServer) handleUpdateIssueStatus(ctx context.Context, req mcp.CallToo
 		return mcp.NewToolResultError("newStatus is required"), nil
 	}
 
-	issue, err := s.issues.TransitionStatus(ctx, issueKey, newStatus)
+	issue, err := s.backend.UpdateIssueStatus(ctx, issueKey, newStatus)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to transition status: %v", err)), nil
 	}
@@ -371,7 +371,7 @@ func (s *MCPServer) handleUpdateIssue(ctx context.Context, req mcp.CallToolReque
 		return mcp.NewToolResultError("no fields to update"), nil
 	}
 
-	issue, err := s.issues.Update(ctx, issueKey, updateReq)
+	issue, err := s.backend.UpdateIssue(ctx, issueKey, updateReq)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to update issue: %v", err)), nil
 	}
@@ -384,23 +384,23 @@ func (s *MCPServer) handleGetProjectDashboard(ctx context.Context, req mcp.CallT
 		return mcp.NewToolResultError("projectCode is required"), nil
 	}
 
-	project, err := s.projects.GetByCode(ctx, projectCode)
+	project, err := s.backend.GetProjectByCode(ctx, projectCode)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 	}
 
-	issuesByStatus, err := s.issues.CountByProject(ctx, project.ID)
+	issuesByStatus, err := s.backend.CountIssuesByProject(ctx, project.ID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to count issues by status: %v", err)), nil
 	}
 
-	issuesByPriority, err := s.issues.CountByPriority(ctx, project.ID)
+	issuesByPriority, err := s.backend.CountIssuesByPriority(ctx, project.ID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to count issues by priority: %v", err)), nil
 	}
 
 	// Compute issues by type from the full issue list.
-	issues, err := s.issues.ListByProject(ctx, project.ID.Hex(), nil)
+	issues, err := s.backend.ListIssues(ctx, project.ID.Hex(), nil)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to list issues: %v", err)), nil
 	}
@@ -428,7 +428,7 @@ func (s *MCPServer) handleGetOpenP0Issues(ctx context.Context, req mcp.CallToolR
 	projectCode := req.GetString("projectCode", "")
 
 	if projectCode != "" {
-		project, err := s.projects.GetByCode(ctx, projectCode)
+		project, err := s.backend.GetProjectByCode(ctx, projectCode)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 		}
@@ -437,7 +437,7 @@ func (s *MCPServer) handleGetOpenP0Issues(ctx context.Context, req mcp.CallToolR
 			"priority": "P0",
 			"status":   "open",
 		}
-		issues, err := s.issues.ListByProject(ctx, project.ID.Hex(), filters)
+		issues, err := s.backend.ListIssues(ctx, project.ID.Hex(), filters)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to list issues: %v", err)), nil
 		}
@@ -445,7 +445,7 @@ func (s *MCPServer) handleGetOpenP0Issues(ctx context.Context, req mcp.CallToolR
 	}
 
 	// No project specified — collect P0 open issues across all projects.
-	projects, err := s.projects.List(ctx)
+	projects, err := s.backend.ListProjects(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to list projects: %v", err)), nil
 	}
@@ -456,7 +456,7 @@ func (s *MCPServer) handleGetOpenP0Issues(ctx context.Context, req mcp.CallToolR
 			"priority": "P0",
 			"status":   "open",
 		}
-		issues, err := s.issues.ListByProject(ctx, project.ID.Hex(), filters)
+		issues, err := s.backend.ListIssues(ctx, project.ID.Hex(), filters)
 		if err != nil {
 			continue
 		}
@@ -474,11 +474,11 @@ func (s *MCPServer) handleGetVibectlMd(ctx context.Context, req mcp.CallToolRequ
 	if err != nil {
 		return mcp.NewToolResultError("projectCode is required"), nil
 	}
-	project, err := s.projects.GetByCode(ctx, code)
+	project, err := s.backend.GetProjectByCode(ctx, code)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 	}
-	content, err := s.vibectlMd.Generate(ctx, project.ID.Hex())
+	content, err := s.backend.GenerateVibectlMd(ctx, project.ID.Hex())
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to generate: %v", err)), nil
 	}
@@ -490,11 +490,11 @@ func (s *MCPServer) handleRegenerateVibectlMd(ctx context.Context, req mcp.CallT
 	if err != nil {
 		return mcp.NewToolResultError("projectCode is required"), nil
 	}
-	project, err := s.projects.GetByCode(ctx, code)
+	project, err := s.backend.GetProjectByCode(ctx, code)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 	}
-	if err := s.vibectlMd.WriteToProject(ctx, project.ID.Hex()); err != nil {
+	if err := s.backend.WriteVibectlMdToProject(ctx, project.ID.Hex()); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to write: %v", err)), nil
 	}
 	return mcp.NewToolResultText("VIBECTL.md regenerated successfully"), nil
@@ -505,7 +505,7 @@ func (s *MCPServer) handleGetDecisions(ctx context.Context, req mcp.CallToolRequ
 	if err != nil {
 		return mcp.NewToolResultError("projectCode is required"), nil
 	}
-	project, err := s.projects.GetByCode(ctx, code)
+	project, err := s.backend.GetProjectByCode(ctx, code)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 	}
@@ -515,7 +515,7 @@ func (s *MCPServer) handleGetDecisions(ctx context.Context, req mcp.CallToolRequ
 			limit = 20
 		}
 	}
-	decisions, err := s.decisions.ListRecent(ctx, project.ID.Hex(), limit)
+	decisions, err := s.backend.ListRecentDecisions(ctx, project.ID.Hex(), limit)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to list decisions: %v", err)), nil
 	}
@@ -531,12 +531,12 @@ func (s *MCPServer) handleRecordDecision(ctx context.Context, req mcp.CallToolRe
 	if err != nil {
 		return mcp.NewToolResultError("summary is required"), nil
 	}
-	project, err := s.projects.GetByCode(ctx, code)
+	project, err := s.backend.GetProjectByCode(ctx, code)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 	}
 	issueKey := req.GetString("issueKey", "")
-	if err := s.decisions.Record(ctx, project.ID, "manual", summary, issueKey); err != nil {
+	if err := s.backend.RecordDecision(ctx, project.ID, "manual", summary, issueKey); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to record: %v", err)), nil
 	}
 	return mcp.NewToolResultText("Decision recorded"), nil
@@ -547,7 +547,7 @@ func (s *MCPServer) handleGetDeploymentInfo(ctx context.Context, req mcp.CallToo
 	if err != nil {
 		return mcp.NewToolResultError("projectCode is required"), nil
 	}
-	project, err := s.projects.GetByCode(ctx, code)
+	project, err := s.backend.GetProjectByCode(ctx, code)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 	}
@@ -620,6 +620,50 @@ func (s *MCPServer) registerAdditionalTools() {
 		),
 		s.handleGetPrompt,
 	)
+
+	// 21. list_feedback
+	s.server.AddTool(
+		mcp.NewTool("list_feedback",
+			mcp.WithDescription("List feedback items for a project. Returns all feedback sorted by submission date, including triage status and any linked issues."),
+			mcp.WithReadOnlyHintAnnotation(true),
+			mcp.WithString("projectCode", mcp.Required(), mcp.Description("Project code")),
+		),
+		s.handleListFeedback,
+	)
+
+	// 22. add_feedback
+	s.server.AddTool(
+		mcp.NewTool("add_feedback",
+			mcp.WithDescription("Submit a new feedback item for a project. Use this to capture user reports, bugs, feature requests, or observations."),
+			mcp.WithString("projectCode", mcp.Required(), mcp.Description("Project code")),
+			mcp.WithString("content", mcp.Required(), mcp.Description("The raw feedback text")),
+			mcp.WithString("sourceType", mcp.Description("Source of feedback: manual, github, slack, email, etc. (default: manual)")),
+			mcp.WithString("submittedBy", mcp.Description("Name of the person submitting feedback")),
+		),
+		s.handleAddFeedback,
+	)
+
+	// 23. triage_feedback
+	s.server.AddTool(
+		mcp.NewTool("triage_feedback",
+			mcp.WithDescription("Run AI triage on a pending feedback item. Analyzes the feedback and proposes an issue title, description, type, priority, and repro steps."),
+			mcp.WithString("feedbackId", mcp.Required(), mcp.Description("Feedback item ID")),
+		),
+		s.handleTriageFeedback,
+	)
+
+	// 24. accept_feedback
+	s.server.AddTool(
+		mcp.NewTool("accept_feedback",
+			mcp.WithDescription("Accept or dismiss a feedback item. When accepting with createIssue=true, automatically creates an issue using the AI proposal or provided fields."),
+			mcp.WithString("feedbackId", mcp.Required(), mcp.Description("Feedback item ID")),
+			mcp.WithString("action", mcp.Required(), mcp.Description("\"accept\" or \"dismiss\"")),
+			mcp.WithBoolean("createIssue", mcp.Description("Create an issue from this feedback (only valid when action=accept)")),
+			mcp.WithString("issueTitle", mcp.Description("Override the issue title (uses AI proposal if omitted)")),
+			mcp.WithString("issuePriority", mcp.Description("Override issue priority: p1, p2, p3, p4")),
+		),
+		s.handleAcceptFeedback,
+	)
 }
 
 func (s *MCPServer) handleListSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -627,11 +671,11 @@ func (s *MCPServer) handleListSessions(ctx context.Context, req mcp.CallToolRequ
 	if err != nil {
 		return mcp.NewToolResultError("projectCode is required"), nil
 	}
-	project, err := s.projects.GetByCode(ctx, code)
+	project, err := s.backend.GetProjectByCode(ctx, code)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 	}
-	sessions, err := s.sessions.ListByProject(ctx, project.ID.Hex())
+	sessions, err := s.backend.ListSessions(ctx, project.ID.Hex())
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to list sessions: %v", err)), nil
 	}
@@ -650,11 +694,11 @@ func (s *MCPServer) handleGetLatestSession(ctx context.Context, req mcp.CallTool
 	if err != nil {
 		return mcp.NewToolResultError("projectCode is required"), nil
 	}
-	project, err := s.projects.GetByCode(ctx, code)
+	project, err := s.backend.GetProjectByCode(ctx, code)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 	}
-	session, err := s.sessions.GetLatest(ctx, project.ID.Hex())
+	session, err := s.backend.GetLatestSession(ctx, project.ID.Hex())
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get latest session: %v", err)), nil
 	}
@@ -669,11 +713,11 @@ func (s *MCPServer) handleGetHealthStatus(ctx context.Context, req mcp.CallToolR
 	if err != nil {
 		return mcp.NewToolResultError("projectCode is required"), nil
 	}
-	project, err := s.projects.GetByCode(ctx, code)
+	project, err := s.backend.GetProjectByCode(ctx, code)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 	}
-	records, err := s.healthRecords.GetHistory(ctx, project.ID.Hex(), 24*time.Hour)
+	records, err := s.backend.GetHealthHistory(ctx, project.ID.Hex(), 24*time.Hour)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get health history: %v", err)), nil
 	}
@@ -683,17 +727,17 @@ func (s *MCPServer) handleGetHealthStatus(ctx context.Context, req mcp.CallToolR
 func (s *MCPServer) handleListPrompts(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	code := req.GetString("projectCode", "")
 	if code != "" {
-		project, err := s.projects.GetByCode(ctx, code)
+		project, err := s.backend.GetProjectByCode(ctx, code)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
 		}
-		prompts, err := s.prompts.ListByProject(ctx, project.ID.Hex())
+		prompts, err := s.backend.ListPromptsByProject(ctx, project.ID.Hex())
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to list prompts: %v", err)), nil
 		}
 		return jsonResult(prompts)
 	}
-	prompts, err := s.prompts.ListAll(ctx)
+	prompts, err := s.backend.ListAllPrompts(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to list prompts: %v", err)), nil
 	}
@@ -705,9 +749,96 @@ func (s *MCPServer) handleGetPrompt(ctx context.Context, req mcp.CallToolRequest
 	if err != nil {
 		return mcp.NewToolResultError("promptId is required"), nil
 	}
-	prompt, err := s.prompts.GetByID(ctx, id)
+	prompt, err := s.backend.GetPromptByID(ctx, id)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get prompt: %v", err)), nil
 	}
 	return jsonResult(prompt)
+}
+
+func (s *MCPServer) handleListFeedback(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	code, err := req.RequireString("projectCode")
+	if err != nil {
+		return mcp.NewToolResultError("projectCode is required"), nil
+	}
+	project, err := s.backend.GetProjectByCode(ctx, code)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
+	}
+	items, err := s.backend.ListFeedbackByProject(ctx, project.ID.Hex())
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to list feedback: %v", err)), nil
+	}
+	return jsonResult(items)
+}
+
+func (s *MCPServer) handleAddFeedback(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	code, err := req.RequireString("projectCode")
+	if err != nil {
+		return mcp.NewToolResultError("projectCode is required"), nil
+	}
+	content, err := req.RequireString("content")
+	if err != nil {
+		return mcp.NewToolResultError("content is required"), nil
+	}
+	project, err := s.backend.GetProjectByCode(ctx, code)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
+	}
+	sourceType := req.GetString("sourceType", "manual")
+	submittedBy := req.GetString("submittedBy", "")
+	item, err := s.backend.CreateFeedback(ctx, &models.CreateFeedbackRequest{
+		ProjectID:   project.ID.Hex(),
+		RawContent:  content,
+		SourceType:  sourceType,
+		SubmittedBy: submittedBy,
+	})
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to create feedback: %v", err)), nil
+	}
+	return jsonResult(item)
+}
+
+func (s *MCPServer) handleTriageFeedback(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	feedbackID, err := req.RequireString("feedbackId")
+	if err != nil {
+		return mcp.NewToolResultError("feedbackId is required"), nil
+	}
+	analysis, err := s.backend.TriageFeedbackItem(ctx, feedbackID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("triage failed: %v", err)), nil
+	}
+	return jsonResult(analysis)
+}
+
+func (s *MCPServer) handleAcceptFeedback(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	feedbackID, err := req.RequireString("feedbackId")
+	if err != nil {
+		return mcp.NewToolResultError("feedbackId is required"), nil
+	}
+	action, err := req.RequireString("action")
+	if err != nil {
+		return mcp.NewToolResultError("action is required"), nil
+	}
+	if action != "accept" && action != "dismiss" {
+		return mcp.NewToolResultError("action must be \"accept\" or \"dismiss\""), nil
+	}
+	createIssue := req.GetBool("createIssue", false)
+	reviewReq := &models.ReviewFeedbackRequest{
+		Action:        action,
+		CreateIssue:   createIssue,
+		IssueTitle:    req.GetString("issueTitle", ""),
+		IssuePriority: req.GetString("issuePriority", ""),
+	}
+	item, err := s.backend.ReviewFeedback(ctx, feedbackID, reviewReq)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("review failed: %v", err)), nil
+	}
+	if action == "accept" && createIssue {
+		issue, issueErr := s.backend.CreateIssueFromFeedback(ctx, item, reviewReq)
+		if issueErr == nil && issue != nil {
+			return jsonResult(map[string]any{"feedback": item, "issue": issue})
+		}
+	}
+	return jsonResult(item)
 }

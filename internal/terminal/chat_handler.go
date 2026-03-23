@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -35,6 +36,10 @@ type ChatWebSocketHandler struct {
 	manager      *ChatManager
 	upgrader     websocket.Upgrader
 	promptLogger PromptLogger
+	// RoleChecker is an optional function called before starting a new chat session.
+	// If it returns role "none" or an error, the launch is rejected.
+	// Leave nil to skip the check (standalone mode).
+	RoleChecker func(ctx context.Context, projectID string) (string, error)
 }
 
 // NewChatWebSocketHandler creates a handler with the given chat manager.
@@ -208,6 +213,21 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			}
 
 			slog.Info("chat launch requested", "projectID", launch.ProjectID, "localPath", launch.LocalPath)
+
+			if h.RoleChecker != nil {
+				role, err := h.RoleChecker(r.Context(), launch.ProjectID)
+				if err != nil || role == "none" {
+					errMsg := "insufficient permissions for project"
+					if err != nil {
+						errMsg = err.Error()
+					}
+					conn.WriteJSON(map[string]interface{}{
+						"type": "error",
+						"data": map[string]string{"message": errMsg},
+					})
+					return
+				}
+			}
 
 			// Check for existing live session (reconnection).
 			if sess := h.manager.GetSession(launch.ProjectID); sess != nil && sess.IsAlive() {

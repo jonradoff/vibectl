@@ -5,6 +5,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.0] - 2026-03-23
+
+### Added
+- **Feedback review tab** — new Feedback tab on every project card with three-column review panel (Pending | Accepted | Dismissed). Each item shows source, submitter, AI triage proposal, and linked issue key.
+- **Pending feedback badge** — amber badge in the project card header shows count of unreviewed items; clicking it jumps to the Feedback tab.
+- **Quick feedback capture** — "+ Add Feedback" button directly in the card tab; modal for ad-hoc feedback entry with source type selector.
+- **AI triage per item** — "AI Triage" button on each pending item invokes Claude analysis and surfaces proposed issue title, type, and priority inline.
+- **Bulk triage** — "AI Triage All" button processes all pending items in a single batch call.
+- **Bulk accept/dismiss** — checkbox selection with "Accept All" / "Dismiss All" bulk actions.
+- **Accept → Create Issue** — "✓ + Issue" button accepts feedback and atomically creates an issue using the AI proposal (or raw content as fallback); linked issue key shown on the accepted item.
+- **`POST /api/v1/feedback/bulk-review`** — bulk accept/dismiss endpoint.
+- **`POST /api/v1/feedback/triage-batch`** — batch AI triage for all pending items.
+- **MCP feedback tools** — four new MCP tools: `list_feedback`, `add_feedback`, `triage_feedback`, `accept_feedback`. Agents can now capture, triage, and resolve feedback without leaving Claude Code.
+- **Pending Feedback section in VIBECTL.md** — top 3 pending items (with status and date) included in auto-generated VIBECTL.md; regenerated whenever feedback is reviewed.
+- **Project script conventions** — documented `deploy.sh` → deployProd and `start.sh` → startDev as standard VibeCtl project file conventions in CLAUDE.md.
+- **Project script auto-detection** — during project creation ("Use local path" mode), VibeCtl detects `deploy.sh`, `start.sh`, and `fly.toml` and pre-fills Deployment Settings. Combined endpoint: `GET /detect-project-scripts`.
+- **Feedback activity log entries** — `feedback_submitted`, `feedback_accepted`, `feedback_dismissed`, and `feedback_converted` events now appear in the compact activity log with colour coding.
+
+### Changed
+- **Triage status** — added `triaged` state (AI analyzed, awaiting human review) distinct from `accepted`/`dismissed`. `reviewed` kept as backward-compat alias.
+- **MCP tool count** — expanded from 20 to 24 tools.
+- **`FeedbackItem`** — new fields: `triagedAt`, `linkedIssueKey`.
+- **`ProjectSummary`** — new field: `pendingFeedbackCount` (populated in `/dashboard` endpoint).
+- **`Issue`** — new field: `sourceFeedbackID` (set when an issue is created from feedback).
+
+---
+
 ## [0.9.0] - 2026-03-16
 
 ### Security

@@ -2,19 +2,26 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listIssues, updateProject, createIssue, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild } from '../../api/client'
-import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ChatHistoryEntry, ActivityLogEntry } from '../../types'
+import { listIssues, updateProject, createIssue, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh } from '../../api/client'
+import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, DeploymentConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ActivityLogEntry } from '../../types'
 import { priorityColors, typeColors } from '../../types'
 import ChatView from '../chat/ChatView'
+import UserShellView from '../terminal/UserShellView'
 import type { ChatSessionSnapshot } from '../chat/ChatView'
 import { useActiveProject } from '../../contexts/ActiveProjectContext'
+import { useMode } from '../../contexts/ModeContext'
+import { useAuth } from '../../contexts/AuthContext'
 import FilesBrowser from './FilesBrowser'
+import MembersPanel from './MembersPanel'
+import CITab from './CITab'
+import FeedbackTab from './FeedbackTab'
+import ServerModeClaudeTab from './ServerModeClaudeTab'
 
 interface ProjectCardProps {
   summary: ProjectSummary
 }
 
-type CardTab = 'terminal' | 'issues' | 'files' | 'history' | 'health' | 'log' | 'settings'
+type CardTab = 'terminal' | 'shell' | 'issues' | 'files' | 'history' | 'health' | 'log' | 'settings' | 'members' | 'ci' | 'feedback'
 
 export default function ProjectCard({ summary }: ProjectCardProps) {
   const { project, openIssueCount } = summary
@@ -26,6 +33,8 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
   const [isWaiting, setIsWaiting] = useState(false)
   const { activeProjectId, setActiveProjectId, updateProjectStatus, closeProject } = useActiveProject()
   const isActiveProject = activeProjectId === project.id
+  const queryClient = useQueryClient()
+  const { currentUser } = useAuth()
 
   const handleSessionSnapshot = useCallback((snapshot: ChatSessionSnapshot) => {
     setCurrentSession(snapshot)
@@ -69,6 +78,48 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
   })
   const isSelfProject = !!(selfInfo?.sourceDir && project.links.localPath && selfInfo.sourceDir === project.links.localPath)
 
+  // Clone/pull state
+  const [cloneLog, setCloneLog] = useState<string[]>([])
+  const [cloneStreaming, setCloneStreaming] = useState(false)
+  const cloneLogRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (cloneLogRef.current) cloneLogRef.current.scrollTop = cloneLogRef.current.scrollHeight
+  }, [cloneLog])
+
+  const startSSE = useCallback((url: string) => {
+    setCloneLog([])
+    setCloneStreaming(true)
+    const es = new EventSource(url)
+    es.onmessage = (e) => {
+      const line = e.data as string
+      if (line === 'DONE') {
+        es.close()
+        setCloneStreaming(false)
+        queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
+      } else if (line.startsWith('ERROR: ')) {
+        setCloneLog(prev => [...prev, line])
+        es.close()
+        setCloneStreaming(false)
+        queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
+      } else {
+        setCloneLog(prev => [...prev, line])
+      }
+    }
+    es.onerror = () => {
+      es.close()
+      setCloneStreaming(false)
+      setCloneLog(prev => prev.length === 0 ? ['ERROR: Connection failed — check server logs or try re-logging in'] : prev)
+    }
+  }, [queryClient])
+
+  const handleClone = useCallback(() => startSSE(getCloneSSEUrl(project.id)), [project.id, startSSE])
+  const handlePull = useCallback(() => startSSE(getPullSSEUrl(project.id)), [project.id, startSSE])
+  const handleRemoveClone = useCallback(async () => {
+    await removeClone(project.id)
+    queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
+  }, [project.id, queryClient])
+
   const [rebuilding, setRebuilding] = useState(false)
   const handleRebuild = useCallback(async () => {
     setRebuilding(true)
@@ -81,6 +132,7 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
   }, [])
 
   const isConnected = ['started', 'running', 'connecting', 'connected', 'reconnected', 'restarted'].includes(terminalStatus)
+  const isError = terminalStatus === 'claude_error'
   const isWorking = isConnected && isActive && !isWaiting
   const isReady = isConnected && !isActive && !isWaiting
   const isWaitingForApproval = isConnected && isWaiting
@@ -95,21 +147,50 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
       terminalStatus,
       isActive,
       isWaiting,
+      isError,
       healthUp: !!healthAllUp,
       healthDown: !!healthAllDown,
       healthHasResults: !!healthHasResults,
     })
-  }, [project.id, terminalStatus, isActive, isWaiting, healthAllUp, healthAllDown, healthHasResults, updateProjectStatus])
+  }, [project.id, terminalStatus, isActive, isWaiting, isError, healthAllUp, healthAllDown, healthHasResults, updateProjectStatus])
+
+  const canManageMembers = summary.currentUserRole === 'owner' || summary.currentUserRole === 'super_admin'
+
+  const { data: appSettings } = useQuery({ queryKey: ['settings'], queryFn: getSettings, staleTime: 60_000 })
+  const isSuperAdmin = summary.currentUserRole === 'super_admin'
+  const shellEnabled = appSettings?.experimentalShell ?? false
+  const { displayMode } = useMode()
+  const isServerMode = displayMode === 'server'
 
   const tabs: { key: CardTab; label: string; icon: string; tooltip: string }[] = [
     { key: 'health', label: 'Health', icon: 'health', tooltip: 'Health & KPIs' },
     { key: 'terminal', label: 'Claude Code', icon: 'terminal', tooltip: 'Claude Code' },
+    ...(shellEnabled || isSuperAdmin ? [{ key: 'shell' as CardTab, label: 'Shell', icon: 'shell', tooltip: 'Interactive Shell' }] : []),
     { key: 'issues', label: 'Issues', icon: 'issues', tooltip: 'Issues' },
+    { key: 'feedback', label: 'Feedback', icon: 'feedback', tooltip: 'Feedback Review' },
     { key: 'files', label: 'Files', icon: 'files', tooltip: 'File Explorer' },
-    { key: 'history', label: 'History', icon: 'history', tooltip: 'Chat History' },
-    { key: 'log', label: 'Log', icon: 'log', tooltip: 'Activity Log' },
-    { key: 'settings', label: 'Settings', icon: 'settings', tooltip: 'Settings' },
+    { key: 'ci', label: 'CI', icon: 'ci', tooltip: 'CI / Deploy' },
   ]
+
+  const menuItems: { key: CardTab; label: string; icon: string }[] = [
+    { key: 'settings', label: 'Settings', icon: 'settings' },
+    { key: 'history', label: 'Session History', icon: 'history' },
+    { key: 'log', label: 'Activity Log', icon: 'log' },
+    ...(canManageMembers ? [{ key: 'members' as CardTab, label: 'Users', icon: 'members' }] : []),
+  ]
+
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  // Close hamburger menu on outside click
+  useEffect(() => {
+    if (!menuOpen) return
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [menuOpen])
 
   const handleCardClick = useCallback(() => {
     setActiveProjectId(project.id)
@@ -156,8 +237,21 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
             );
           })()}
           {openIssueCount > 0 && (
-            <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-indigo-600 text-xs font-mono text-white shrink-0">
+            <span
+              className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-indigo-600 text-xs font-mono text-white shrink-0 cursor-pointer"
+              title={`${openIssueCount} open issues`}
+              onClick={(e) => { e.stopPropagation(); setActiveTab('issues') }}
+            >
               {openIssueCount}
+            </span>
+          )}
+          {(summary.pendingFeedbackCount ?? 0) > 0 && (
+            <span
+              className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-amber-600 text-xs font-mono text-white shrink-0 cursor-pointer"
+              title={`${summary.pendingFeedbackCount} pending feedback`}
+              onClick={(e) => { e.stopPropagation(); setActiveTab('feedback') }}
+            >
+              {summary.pendingFeedbackCount}
             </span>
           )}
         </div>
@@ -170,6 +264,12 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {activeTab === 'terminal' && isError && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-red-500/20 px-2 py-0.5 text-xs font-medium text-red-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+              Error
+            </span>
+          )}
           {activeTab === 'terminal' && isWorking && (
             <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-400">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
@@ -256,27 +356,135 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
             <TabIcon name={tab.icon} />
           </button>
         ))}
+        {/* Hamburger menu for secondary items */}
+        <div className="relative ml-auto" ref={menuRef}>
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
+            title="More options"
+            className={`px-2.5 py-1.5 transition-colors ${
+              menuItems.some((m) => m.key === activeTab)
+                ? 'text-white border-b-2 border-indigo-500 bg-gray-800'
+                : 'text-gray-500 hover:text-gray-300 bg-gray-850'
+            }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM12.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM18.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z" />
+            </svg>
+          </button>
+          {menuOpen && (
+            <div className="absolute right-0 top-full mt-1 w-44 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-30 py-1">
+              {menuItems.map((item) => (
+                <button
+                  key={item.key}
+                  onClick={() => { setActiveTab(item.key); setMenuOpen(false) }}
+                  className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-xs transition-colors ${
+                    activeTab === item.key
+                      ? 'text-white bg-gray-700'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
+                  }`}
+                >
+                  <TabIcon name={item.icon} />
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Tab content — stop drag propagation so inputs work */}
       <div className="flex-1 overflow-hidden" onMouseDown={(e) => e.stopPropagation()}>
-        {activeTab === 'terminal' && (
-          <ChatView
-            projectId={project.id}
-            projectCode={project.code}
-            localPath={project.links.localPath}
-            compact={!isFullscreen}
-            onStatusChange={handleStatusChange}
-            onActivityChange={handleActivityChange}
-            onSessionSnapshot={handleSessionSnapshot}
-            onWaitingChange={handleWaitingChange}
-          />
+        {activeTab === 'terminal' && (() => {
+          if (isServerMode) return <ServerModeClaudeTab />
+
+          const isCloned = project.cloneStatus === 'cloned' || !!project.links.localPath
+          const isCloning = project.cloneStatus === 'cloning' || cloneStreaming
+          const hasGitHub = !!project.links.githubUrl
+
+          if (isCloned && !cloneStreaming) {
+            return (
+              <div className="flex flex-col h-full">
+                <div className="flex items-center justify-between gap-2 px-2 py-1 text-xs text-gray-500 shrink-0">
+                  <span className="font-mono truncate">{project.links.localPath}</span>
+                  <div className="flex gap-1 shrink-0">
+                    <button onClick={handlePull} className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Pull</button>
+                    <button onClick={handleRemoveClone} className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Remove</button>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <ChatView
+                    projectId={project.id}
+                    projectCode={project.code}
+                    localPath={project.links.localPath}
+                    compact={!isFullscreen}
+                    onStatusChange={handleStatusChange}
+                    onActivityChange={handleActivityChange}
+                    onSessionSnapshot={handleSessionSnapshot}
+                    onWaitingChange={handleWaitingChange}
+                  />
+                </div>
+              </div>
+            )
+          }
+
+          if (isCloning || cloneLog.length > 0) {
+            return (
+              <div className="p-4 space-y-3">
+                <div className="flex items-center gap-2 text-sm text-gray-400">
+                  {cloneStreaming && <div className="w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />}
+                  <span>{cloneStreaming ? 'Cloning…' : 'Clone output'}</span>
+                </div>
+                <div ref={cloneLogRef} className="font-mono text-xs text-green-300 bg-black rounded p-3 h-64 overflow-y-auto whitespace-pre-wrap">
+                  {cloneLog.map((line, i) => <div key={i}>{line}</div>)}
+                </div>
+              </div>
+            )
+          }
+
+          if (hasGitHub) {
+            return (
+              <div className="flex flex-col items-center justify-center h-full gap-4 text-center p-8">
+                <div className="text-gray-400 text-sm">
+                  <p className="text-white font-medium mb-1">No local copy yet</p>
+                  <p>Clone the repository to start a Claude Code session.</p>
+                  <p className="mt-1 font-mono text-xs text-gray-500">{project.links.githubUrl}</p>
+                </div>
+                {project.cloneStatus === 'error' && (
+                  <p className="text-red-400 text-xs">{project.cloneError}</p>
+                )}
+                <button onClick={handleClone} className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-2 px-6 rounded-lg text-sm transition-colors">
+                  Clone repository
+                </button>
+              </div>
+            )
+          }
+
+          return (
+            <ChatView
+              projectId={project.id}
+              projectCode={project.code}
+              localPath={project.links.localPath}
+              compact={!isFullscreen}
+              onStatusChange={handleStatusChange}
+              onActivityChange={handleActivityChange}
+              onSessionSnapshot={handleSessionSnapshot}
+              onWaitingChange={handleWaitingChange}
+            />
+          )
+        })()}
+        {activeTab === 'shell' && (
+          <UserShellView projectId={project.id} compact={true} />
         )}
         {activeTab === 'issues' && (
           <CompactIssueList projectId={project.id} projectCode={project.code} />
         )}
         {activeTab === 'files' && (
-          <FilesBrowser projectId={project.id} localPath={project.links.localPath} />
+          <FilesBrowser
+            projectId={project.id}
+            localPath={project.links.localPath}
+            githubUrl={project.links.githubUrl}
+            onClone={handleClone}
+          />
         )}
         {activeTab === 'history' && (
           <ChatHistoryTab projectId={project.id} currentSession={currentSession} />
@@ -288,7 +496,44 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
           <CompactActivityLog projectId={project.id} />
         )}
         {activeTab === 'settings' && (
-          <CompactSettings project={project} />
+          <CompactSettings project={project} currentUserRole={summary.currentUserRole} onClone={handleClone} />
+        )}
+        {activeTab === 'feedback' && (
+          <FeedbackTab projectId={project.id} projectCode={project.code} />
+        )}
+        {activeTab === 'ci' && (
+          <div className="p-3 overflow-y-auto h-full">
+            <CITab
+              projectId={project.id}
+              hasLocalPath={!!project.links.localPath}
+              hasGitHubUrl={!!project.links.githubUrl}
+              hasDeployCmd={!!project.deployment?.deployProd}
+              hasStartDevCmd={!!project.deployment?.startDev}
+              hasStartProdCmd={!!project.deployment?.startProd}
+              hasRestartProdCmd={!!project.deployment?.restartProd}
+              paused={project.paused}
+              githubUrl={project.links.githubUrl}
+              isCloned={project.cloneStatus === 'cloned' || !!project.links.localPath}
+              cloneStreaming={cloneStreaming}
+              cloneLog={cloneLog}
+              hasGitHubPAT={!!currentUser?.hasGitHubPAT}
+              onClone={handleClone}
+              onPull={handlePull}
+              onPausedChange={(p) => queryClient.setQueryData(['globalDashboard'], (old: unknown) => {
+                if (!Array.isArray(old)) return old;
+                return old.map((proj: { id: string; paused?: boolean }) => proj.id === project.id ? { ...proj, paused: p } : proj);
+              })}
+              onSaveGithubUrl={async (url) => {
+                await updateProject(project.id, { links: { ...project.links, githubUrl: url } })
+                queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
+              }}
+            />
+          </div>
+        )}
+        {activeTab === 'members' && (
+          <div className="p-3 overflow-y-auto h-full">
+            <MembersPanel projectId={project.id} />
+          </div>
         )}
       </div>
     </div>
@@ -344,6 +589,24 @@ function TabIcon({ name }: { name: string }) {
         <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
           <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+        </svg>
+      )
+    case 'members':
+      return (
+        <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
+        </svg>
+      )
+    case 'ci':
+      return (
+        <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 0 0-3.7-3.7 48.678 48.678 0 0 0-7.324 0 4.006 4.006 0 0 0-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 0 0 3.7 3.7 48.656 48.656 0 0 0 7.324 0 4.006 4.006 0 0 0 3.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3-3 3" />
+        </svg>
+      )
+    case 'feedback':
+      return (
+        <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z" />
         </svg>
       )
     default:
@@ -576,7 +839,7 @@ function NewIssueModal({ projectId, onClose }: { projectId: string; onClose: () 
   )
 }
 
-function CompactSettings({ project }: { project: ProjectSummary['project'] }) {
+function CompactSettings({ project, currentUserRole, onClone }: { project: ProjectSummary['project']; currentUserRole?: string; onClone?: () => void }) {
   const queryClient = useQueryClient()
   const [name, setName] = useState(project.name)
   const [description, setDescription] = useState(project.description || '')
@@ -586,7 +849,18 @@ function CompactSettings({ project }: { project: ProjectSummary['project'] }) {
   const [healthCheck, setHealthCheck] = useState<HealthCheckConfig>(
     project.healthCheck || { frontend: {}, backend: {}, monitorEnv: '' }
   )
+  const [deployment, setDeployment] = useState<DeploymentConfig>(project.deployment || {})
   const [saved, setSaved] = useState(false)
+  const [showArchiveModal, setShowArchiveModal] = useState(false)
+  const [offerClone, setOfferClone] = useState(false)
+  const [flyDetecting, setFlyDetecting] = useState(false)
+  const [flyDetected, setFlyDetected] = useState<{ appName: string; deployProd: string; startProd: string; restartProd: string; viewLogs: string } | null>(null)
+  const [flyNotFound, setFlyNotFound] = useState(false)
+  const [flyApplied, setFlyApplied] = useState<{ appName: string; deployProd: string; startProd: string; restartProd: string; viewLogs: string } | null>(null)
+  const [startShDetecting, setStartShDetecting] = useState(false)
+  const [startShFound, setStartShFound] = useState<{ preview: string; command: string } | null>(null)
+  const [startShNotFound, setStartShNotFound] = useState(false)
+  const [startShApplied, setStartShApplied] = useState(false)
 
   const mutation = useMutation({
     mutationFn: (data: Partial<Project>) => updateProject(project.id, data),
@@ -595,6 +869,10 @@ function CompactSettings({ project }: { project: ProjectSummary['project'] }) {
       queryClient.invalidateQueries({ queryKey: ['healthcheck', project.id] })
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
+      // Offer clone if GitHub URL was set and there's no local path
+      if (githubUrl && !localPath && onClone) {
+        setOfferClone(true)
+      }
     },
   })
 
@@ -616,6 +894,7 @@ function CompactSettings({ project }: { project: ProjectSummary['project'] }) {
       },
       goals: goals.split('\n').map((g) => g.trim()).filter(Boolean),
       healthCheck,
+      deployment,
     })
   }
 
@@ -699,6 +978,145 @@ function CompactSettings({ project }: { project: ProjectSummary['project'] }) {
         </div>
       </div>
 
+      {/* Deployment */}
+      <div className="border-t border-gray-700/50 pt-2 mt-2">
+        <div className="flex items-center justify-between mb-1.5">
+          <label className={labelClass}>Deployment Commands</label>
+          {localPath && !flyDetected && (
+            <button
+              type="button"
+              disabled={flyDetecting}
+              onClick={async () => {
+                setFlyDetecting(true)
+                setFlyNotFound(false)
+                try {
+                  const res = await detectFlyToml(localPath)
+                  if (res.found && res.appName) {
+                    setFlyDetected({ appName: res.appName, deployProd: res.deployProd!, startProd: res.startProd!, restartProd: res.restartProd!, viewLogs: res.viewLogs! })
+                  } else {
+                    setFlyNotFound(true)
+                  }
+                } catch {
+                  setFlyNotFound(true)
+                } finally {
+                  setFlyDetecting(false)
+                }
+              }}
+              className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              {flyDetecting ? 'Examining…' : '⚡ Examine fly.toml'}
+            </button>
+          )}
+        </div>
+
+        {flyNotFound && <p className="text-[10px] text-gray-500 mb-1">No fly.toml found in local path.</p>}
+
+        {flyDetected && (
+          <div className="rounded border border-indigo-500/30 bg-indigo-500/10 p-2 mb-2 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-indigo-300 font-medium">fly.toml: <span className="font-mono">{flyDetected.appName}</span></span>
+              <button type="button" onClick={() => setFlyDetected(null)} className="text-gray-500 hover:text-gray-400 text-[10px]">✕</button>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setDeployment({ ...deployment, provider: 'flyio', flyApp: flyDetected.appName, deployProd: flyDetected.deployProd, startProd: flyDetected.startProd, restartProd: flyDetected.restartProd, viewLogs: flyDetected.viewLogs })
+                setFlyApplied(flyDetected)
+                setFlyDetected(null)
+              }}
+              className="w-full rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-medium py-1 transition-colors"
+            >
+              Apply commands
+            </button>
+          </div>
+        )}
+
+        <div className="space-y-1">
+          {([
+            { key: 'deployProd', label: 'Deploy Prod', placeholder: 'fly deploy' },
+            { key: 'startProd', label: 'Start Prod', placeholder: 'fly apps start myapp' },
+            { key: 'restartProd', label: 'Restart Prod', placeholder: 'fly apps restart myapp' },
+            { key: 'viewLogs', label: 'View Logs', placeholder: 'fly logs -a myapp' },
+          ] as { key: keyof DeploymentConfig; label: string; placeholder: string }[]).map((cmd) => (
+            <div key={cmd.key}>
+              <label className={labelClass}>{cmd.label}</label>
+              <input
+                value={(deployment[cmd.key] as string) || ''}
+                onChange={(e) => setDeployment({ ...deployment, [cmd.key]: e.target.value })}
+                placeholder={cmd.placeholder}
+                className={inputClass + ' font-mono'}
+              />
+            </div>
+          ))}
+
+          {/* Start Dev — with start.sh detection */}
+          <div>
+            <div className="flex items-center justify-between mb-0.5">
+              <label className={labelClass}>Start Dev</label>
+              {localPath && !startShFound && (
+                <button
+                  type="button"
+                  disabled={startShDetecting}
+                  onClick={async () => {
+                    setStartShDetecting(true)
+                    setStartShNotFound(false)
+                    try {
+                      const res = await detectStartSh(localPath)
+                      if (res.found && res.command) {
+                        setStartShFound({ preview: res.preview ?? '', command: res.command })
+                      } else {
+                        setStartShNotFound(true)
+                      }
+                    } catch {
+                      setStartShNotFound(true)
+                    } finally {
+                      setStartShDetecting(false)
+                    }
+                  }}
+                  className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors"
+                >
+                  {startShDetecting ? 'Checking…' : '⚡ Detect start.sh'}
+                </button>
+              )}
+            </div>
+
+            {startShNotFound && <p className="text-[10px] text-gray-500 mb-1">No start.sh found in local path.</p>}
+
+            {startShFound && (
+              <div className="rounded border border-indigo-500/30 bg-indigo-500/10 p-2 mb-1 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-indigo-300 font-medium">start.sh found</span>
+                  <button type="button" onClick={() => setStartShFound(null)} className="text-gray-500 hover:text-gray-400 text-[10px]">✕</button>
+                </div>
+                {startShFound.preview && (
+                  <pre className="text-[9px] text-gray-400 bg-gray-950 rounded p-1.5 max-h-20 overflow-y-auto whitespace-pre-wrap">{startShFound.preview}</pre>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeployment({ ...deployment, startDev: startShFound.command })
+                    setStartShFound(null)
+                    setStartShApplied(true)
+                    setTimeout(() => setStartShApplied(false), 3000)
+                  }}
+                  className="w-full rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-medium py-1 transition-colors"
+                >
+                  Use ./start.sh as Start Dev command
+                </button>
+              </div>
+            )}
+
+            <input
+              value={(deployment.startDev as string) || ''}
+              onChange={(e) => setDeployment({ ...deployment, startDev: e.target.value })}
+              placeholder="npm run dev  or  ./start.sh"
+              className={inputClass + ' font-mono'}
+            />
+            {startShApplied && <span className="text-[10px] text-green-400">Applied — hit Save to persist</span>}
+          </div>
+        </div>
+      </div>
+
       <div className="flex items-center gap-2 pt-1">
         <button
           onClick={handleSave}
@@ -711,21 +1129,109 @@ function CompactSettings({ project }: { project: ProjectSummary['project'] }) {
         {mutation.isError && <span className="text-red-400 text-[10px]">{mutation.error instanceof Error ? mutation.error.message : 'Failed to save'}</span>}
       </div>
 
-      {/* Archive */}
-      <div className="border-t border-gray-700/50 pt-2 mt-2">
-        <button
-          onClick={() => { if (confirm(`Archive "${project.name}"? It can be restored later.`)) archiveMutation.mutate() }}
-          disabled={archiveMutation.isPending}
-          className="rounded bg-red-900/40 border border-red-800/50 px-3 py-1 text-xs font-medium text-red-400 hover:bg-red-900/60 disabled:opacity-50 transition-colors"
-        >
-          {archiveMutation.isPending ? 'Archiving...' : 'Archive Project'}
-        </button>
-        {archiveMutation.isError && (
-          <span className="ml-2 text-red-400 text-[10px]">
-            {archiveMutation.error instanceof Error ? archiveMutation.error.message : 'Failed to archive'}
-          </span>
-        )}
-      </div>
+      {offerClone && (
+        <div className="rounded border border-indigo-500/30 bg-indigo-500/10 p-2 space-y-1.5">
+          <p className="text-[11px] text-indigo-300 font-medium">Clone repository now?</p>
+          <p className="text-[10px] text-gray-400 font-mono truncate">{githubUrl}</p>
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => { setOfferClone(false); onClone?.() }}
+              className="rounded bg-indigo-600 hover:bg-indigo-500 px-2 py-1 text-[10px] font-medium text-white transition-colors"
+            >
+              Clone
+            </button>
+            <button
+              onClick={() => setOfferClone(false)}
+              className="rounded bg-gray-700 hover:bg-gray-600 px-2 py-1 text-[10px] font-medium text-gray-300 transition-colors"
+            >
+              Not now
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Archive — owner/super_admin only */}
+      {(currentUserRole === 'owner' || currentUserRole === 'super_admin') && (
+        <div className="border-t border-gray-700/50 pt-2 mt-2">
+          <button
+            onClick={() => setShowArchiveModal(true)}
+            disabled={archiveMutation.isPending}
+            className="rounded bg-red-900/40 border border-red-800/50 px-3 py-1 text-xs font-medium text-red-400 hover:bg-red-900/60 disabled:opacity-50 transition-colors"
+          >
+            {archiveMutation.isPending ? 'Archiving...' : 'Archive Project'}
+          </button>
+          {archiveMutation.isError && (
+            <span className="ml-2 text-red-400 text-[10px]">
+              {archiveMutation.error instanceof Error ? archiveMutation.error.message : 'Failed to archive'}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Archive confirmation modal */}
+      {flyApplied && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="w-full max-w-sm rounded-xl bg-gray-800 shadow-2xl border border-gray-700">
+            <div className="px-6 py-5">
+              <h3 className="text-sm font-semibold text-white mb-1">fly.toml applied</h3>
+              <p className="text-xs text-gray-400 mb-4">
+                The following commands were set from <span className="font-mono text-indigo-300">{flyApplied.appName}</span>'s fly.toml. Hit <strong className="text-white">Save</strong> to persist.
+              </p>
+              <div className="space-y-2 text-xs">
+                {[
+                  { label: 'Deploy Prod', value: flyApplied.deployProd },
+                  { label: 'Start Prod', value: flyApplied.startProd },
+                  { label: 'Restart Prod', value: flyApplied.restartProd },
+                  { label: 'View Logs', value: flyApplied.viewLogs },
+                ].map((row) => (
+                  <div key={row.label} className="flex items-center gap-2">
+                    <span className="w-24 shrink-0 text-gray-500">{row.label}</span>
+                    <span className="font-mono text-gray-200 truncate">{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex justify-end px-6 pb-5">
+              <button
+                onClick={() => setFlyApplied(null)}
+                className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-xs font-medium text-white transition-colors"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {showArchiveModal && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="w-full max-w-sm rounded-xl bg-gray-800 shadow-2xl border border-gray-700">
+            <div className="px-6 py-5">
+              <h3 className="text-sm font-semibold text-white mb-2">Archive project?</h3>
+              <p className="text-xs text-gray-400">
+                <span className="text-gray-200 font-medium">{project.name}</span> will be archived and hidden from the dashboard.
+                It can be restored later from the archived projects list.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 px-6 pb-5">
+              <button
+                onClick={() => setShowArchiveModal(false)}
+                className="rounded-lg px-4 py-2 text-xs text-gray-400 hover:text-gray-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { setShowArchiveModal(false); archiveMutation.mutate() }}
+                className="rounded-lg bg-red-700 hover:bg-red-600 px-4 py-2 text-xs font-medium text-white transition-colors"
+              >
+                Archive
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   )
 }
@@ -1321,6 +1827,10 @@ const LOG_TYPE_META: Record<string, { label: string; color: string }> = {
   prompt_created: { label: 'Prompt+', color: 'text-purple-400' },
   prompt_edited: { label: 'PromptEdit', color: 'text-purple-300' },
   prompt_deleted: { label: 'Prompt-', color: 'text-red-400' },
+  feedback_submitted: { label: 'Feedback', color: 'text-amber-400' },
+  feedback_accepted: { label: 'Accepted', color: 'text-green-400' },
+  feedback_dismissed: { label: 'Dismissed', color: 'text-gray-500' },
+  feedback_converted: { label: 'Converted', color: 'text-teal-400' },
 }
 
 function formatLogTime(iso: string): string {
@@ -1381,7 +1891,10 @@ function CompactLogRow({ entry }: { entry: ActivityLogEntry }) {
     <div className="flex items-start gap-2 px-3 py-1.5 hover:bg-gray-800/30 transition-colors border-b border-gray-800/30">
       <span className={`text-[10px] font-medium shrink-0 w-14 ${meta.color}`}>{meta.label}</span>
       <div className="flex-1 min-w-0">
-        <p className="text-xs text-gray-100 truncate">{entry.message}</p>
+        <p className="text-xs text-gray-100 truncate">
+          {entry.userName && <span className="text-gray-500">{entry.userName}: </span>}
+          {entry.message}
+        </p>
         {entry.snippet && (
           <p className={`text-[10px] text-gray-400 font-mono mt-0.5 whitespace-pre-wrap ${expanded ? '' : 'truncate'}`}>
             {expanded ? fullText : entry.snippet}

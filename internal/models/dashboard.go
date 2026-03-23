@@ -6,7 +6,9 @@ type ProjectSummary struct {
 	IssuesByPriority map[string]int    `json:"issuesByPriority"`
 	IssuesByStatus   map[string]int    `json:"issuesByStatus"`
 	IssuesByType     map[string]int    `json:"issuesByType"`
-	LastSession      *SessionLog       `json:"lastSession,omitempty"`
+	LastSession          *SessionLog    `json:"lastSession,omitempty"`
+	CurrentUserRole      string         `json:"currentUserRole"` // "owner" for super_admin; project role or "" for others
+	PendingFeedbackCount int            `json:"pendingFeedbackCount"`
 }
 
 type GlobalDashboard struct {

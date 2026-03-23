@@ -1,0 +1,31 @@
+app = "vibectl"
+primary_region = "iad"
+
+[build]
+
+[env]
+  PORT = "4380"
+  DATABASE_NAME = "vibectl-skillz"
+
+[http_service]
+  internal_port = 4380
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/v1/auth/status"
+    timeout = "5s"
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[[mounts]]
+  source = "vibectl_data"
+  destination = "/data"

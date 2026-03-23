@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jonradoff/vibectl/internal/middleware"
 	"github.com/jonradoff/vibectl/internal/services"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type ActivityLogHandler struct {
@@ -21,6 +23,37 @@ func (h *ActivityLogHandler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/", h.List)
 	return r
+}
+
+// PostActivity handles POST /api/v1/projects/{id}/activity.
+// Allows client instances to log activity events to the remote server.
+func (h *ActivityLogHandler) PostActivity(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "id")
+	user := middleware.GetCurrentUser(r)
+
+	var body struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+		Snippet string `json:"snippet,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Type == "" || body.Message == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "type and message are required", "BAD_REQUEST")
+		return
+	}
+
+	pid, err := bson.ObjectIDFromHex(projectID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid project id", "BAD_REQUEST")
+		return
+	}
+
+	if user != nil {
+		h.activityLogService.LogAsyncWithUser(body.Type, body.Message, &pid, &user.ID, user.DisplayName, body.Snippet, nil)
+	} else {
+		h.activityLogService.LogAsync(body.Type, body.Message, &pid, body.Snippet, nil)
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *ActivityLogHandler) List(w http.ResponseWriter, r *http.Request) {

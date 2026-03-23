@@ -103,6 +103,8 @@ func main() {
 		cmdPrompts(args[1:])
 	case "admin":
 		cmdAdmin(args[1:])
+	case "setup-client":
+		cmdSetupClient(args[1:])
 	case "help", "--help", "-h":
 		usage()
 	default:
@@ -144,6 +146,10 @@ Commands:
   admin login                       Authenticate with server password, save token
   admin set-password                Set or change the admin password
   admin logout                      Remove saved auth token
+
+  setup-client   <server-url>       Write .env.client to point at a remote server
+                 [--api-key KEY]    Optional: API key for machine auth
+                 [--port PORT]      Local port (default: 4385); then run: make client
 
 Global flags:
   --format json      Output raw JSON instead of human-readable format
@@ -1064,6 +1070,50 @@ func str(m map[string]interface{}, key string) string {
 func num(m map[string]interface{}, key string) float64 {
 	v, _ := m[key].(float64)
 	return v
+}
+
+// cmdSetupClient writes .env.client in the current directory so that
+// `make client` / run-client.sh can start the client mode server.
+func cmdSetupClient(args []string) {
+	fs := flag.NewFlagSet("setup-client", flag.ExitOnError)
+	apiKey := fs.String("api-key", "", "VibeCtl API key (vk_...)")
+	port := fs.Int("port", 4385, "Local port for the client instance (default: 4385)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: vibectl setup-client <server-url> [--api-key KEY] [--port PORT]")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Writes .env.client in the current directory so `make client` can start.")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Example:")
+		fmt.Fprintln(os.Stderr, "  vibectl setup-client https://vibectl.fly.dev --api-key vk_abc123")
+		fmt.Fprintln(os.Stderr, "  vibectl setup-client https://vibectl.fly.dev --api-key vk_abc123 --port 8080")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	serverURL := strings.TrimRight(fs.Arg(0), "/")
+
+	lines := []string{
+		"REMOTE_SERVER_URL=" + serverURL,
+		fmt.Sprintf("PORT=%d", *port),
+	}
+	if *apiKey != "" {
+		lines = append(lines, "REMOTE_API_KEY="+*apiKey)
+	}
+
+	content := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(".env.client", []byte(content), 0600); err != nil {
+		fatalf("failed to write .env.client: %v\n", err)
+	}
+	fmt.Printf("✓ .env.client written (server: %s, local port: %d)\n", serverURL, *port)
+	if *apiKey == "" {
+		fmt.Println("  Tip: add --api-key vk_... to authenticate machine-to-machine requests.")
+	}
+	fmt.Printf("  Run `make client` then open http://localhost:%d in your browser.\n", *port)
 }
 
 func truncate(s string, max int) string {

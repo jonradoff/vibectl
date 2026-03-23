@@ -80,6 +80,9 @@ export interface Project {
   webhooks?: WebhookConfig[];
   issueCounter: number;
   archived: boolean;
+  paused?: boolean;
+  cloneStatus?: '' | 'cloning' | 'cloned' | 'error';
+  cloneError?: string;
   recurringThemes?: RecurringTheme[];
   architectureSummary?: string;
   architectureUpdatedAt?: string;
@@ -92,11 +95,15 @@ export interface AppSettings {
   vibectlMdAutoRegen: boolean;
   vibectlMdSchedule: string;
   updatedAt: string;
+  dbName?: string;
+  dbUser?: string;
+  // Experimental features — all false by default
+  experimentalShell: boolean;
 }
 
 export type IssueType = 'bug' | 'feature' | 'idea';
 export type Priority = 'P0' | 'P1' | 'P2' | 'P3' | 'P4' | 'P5';
-export type TriageStatus = 'pending' | 'reviewed' | 'accepted' | 'dismissed';
+export type TriageStatus = 'pending' | 'triaged' | 'reviewed' | 'accepted' | 'dismissed';
 export type SessionStatus = 'active' | 'idle' | 'completed';
 
 export interface Attachment {
@@ -154,6 +161,8 @@ export interface FeedbackItem {
   triageStatus: TriageStatus;
   aiAnalysis?: AIAnalysis;
   reviewedAt?: string;
+  triagedAt?: string;
+  linkedIssueKey?: string;
 }
 
 export interface SessionLog {
@@ -169,10 +178,12 @@ export interface SessionLog {
 export interface ProjectSummary {
   project: Project;
   openIssueCount: number;
+  pendingFeedbackCount?: number;
   issuesByPriority: Record<string, number>;
   issuesByStatus: Record<string, number>;
   issuesByType: Record<string, number>;
   lastSession?: SessionLog;
+  currentUserRole?: string;
 }
 
 export interface GlobalDashboard {
@@ -221,6 +232,7 @@ export interface DeploymentConfig {
   startDev?: string;
   stopDev?: string;
   deployProd?: string;
+  startProd?: string;
   restartProd?: string;
   viewLogs?: string;
   flyApp?: string;
@@ -269,6 +281,9 @@ export interface Prompt {
   global: boolean;
   name: string;
   body: string;
+  createdBy?: string;
+  creatorName?: string;
+  shared: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -276,6 +291,8 @@ export interface Prompt {
 export interface ActivityLogEntry {
   id: string;
   projectId?: string;
+  userId?: string;
+  userName?: string;
   type: string;
   message: string;
   snippet?: string;
@@ -290,7 +307,114 @@ export interface ActivityLogResponse {
   offset: number;
 }
 
-// Color maps
+// ---- Multi-user types ----
+
+export type GlobalRole = 'super_admin' | 'member';
+export type ProjectRole = 'owner' | 'devops' | 'developer' | 'contributor' | 'reporter' | 'viewer';
+
+export interface User {
+  id: string;
+  displayName: string;
+  email?: string;
+  isDefaultPassword: boolean;
+  githubId?: string;
+  githubUsername?: string;
+  globalRole: GlobalRole;
+  isAdminFallback: boolean;
+  hasAnthropicKey: boolean;
+  hasGitHubPAT: boolean;
+  gitName?: string;
+  gitEmail?: string;
+  disabled: boolean;
+  lastLoginAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectMember {
+  id: string;
+  projectId: string;
+  userId: string;
+  role: ProjectRole;
+  createdBy: string;
+  createdAt: string;
+  user?: User;
+}
+
+export interface CodeCheckout {
+  id: string;
+  projectId: string;
+  userId: string;
+  checkedOutAt: string;
+  lastActivityAt: string;
+  expiresAt: string;
+}
+
+export interface CheckoutStatus {
+  checkout?: CodeCheckout;
+  heldByUser?: User;
+  isAvailable: boolean;
+  isYours: boolean;
+}
+
+export interface GitCommit {
+  sha: string;
+  message: string;
+  author: string;
+  date: string;
+  url: string;
+}
+
+export interface CheckRun {
+  name: string;
+  status: string;
+  conclusion: string;
+  url: string;
+}
+
+export interface CIStatus {
+  lastCommit?: GitCommit;
+  checkRuns: CheckRun[];
+  fetchedAt: string;
+  githubError?: string;
+}
+
+export interface AuthStatus {
+  usersExist: boolean;
+  tokenValid: boolean;
+  githubEnabled: boolean;
+  githubTokenConfigured: boolean;
+  anthropicEnabled: boolean;
+}
+
+// ---- Client mode types ----
+
+export interface ModeInfo {
+  mode: 'standalone' | 'client';
+  version: string;
+  remoteServerURL?: string; // only present in client mode
+  baseURL?: string;          // the server's own BASE_URL (standalone mode)
+}
+
+export type DisplayMode = 'server' | 'client' | 'dev-standalone';
+
+export interface ProjectPathEntry {
+  projectId: string;
+  localPath: string;
+}
+
+export interface ClientInstance {
+  id: string;
+  userId: string;
+  name: string;
+  description?: string;
+  lastSeenAt?: string;
+  projectPaths?: ProjectPathEntry[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---- Color maps
 export const priorityColors: Record<Priority, string> = {
   P0: 'bg-red-600 text-white',
   P1: 'bg-orange-500 text-white',

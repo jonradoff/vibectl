@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/jonradoff/vibectl/internal/agents"
 	"github.com/jonradoff/vibectl/internal/config"
 	vibemcp "github.com/jonradoff/vibectl/internal/mcp"
 	"github.com/jonradoff/vibectl/internal/services"
@@ -20,49 +21,77 @@ func main() {
 	database := flag.String("database", "vibectl", "MongoDB database name")
 	mode := flag.String("mode", "stdio", "Transport mode: stdio or http")
 	port := flag.Int("port", 3100, "HTTP port (for http mode)")
+	serverURL := flag.String("server-url", "", "VibeCtl server URL for API mode (e.g. https://vibectl.example.com)")
+	apiToken := flag.String("api-token", "", "API token for VibeCtl server authentication")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	client, err := mongo.Connect(options.Client().ApplyURI(*mongoURI))
-	if err != nil {
-		slog.Error("failed to connect to MongoDB", "error", err)
-		os.Exit(1)
+	// Allow env vars as fallbacks for server-url and api-token.
+	if *serverURL == "" {
+		*serverURL = os.Getenv("VIBECTL_URL")
+	}
+	if *apiToken == "" {
+		*apiToken = os.Getenv("VIBECTL_TOKEN")
 	}
 
-	if err := client.Ping(ctx, nil); err != nil {
-		slog.Error("failed to ping MongoDB", "error", err)
-		os.Exit(1)
+	var backend vibemcp.Backend
+
+	if *serverURL != "" {
+		// API mode: connect to a remote VibeCtl server over HTTP.
+		slog.Info("starting vibectl MCP server in API mode", "serverURL", *serverURL)
+		backend = vibemcp.NewAPIBackend(*serverURL, *apiToken)
+	} else {
+		// MongoDB mode: connect directly to MongoDB.
+		slog.Info("starting vibectl MCP server in MongoDB mode")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		client, err := mongo.Connect(options.Client().ApplyURI(*mongoURI))
+		if err != nil {
+			slog.Error("failed to connect to MongoDB", "error", err)
+			os.Exit(1)
+		}
+
+		if err := client.Ping(ctx, nil); err != nil {
+			slog.Error("failed to ping MongoDB", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("connected to MongoDB", "uri", *mongoURI, "database", *database)
+
+		db := client.Database(*database)
+
+		// Create services.
+		projectService := services.NewProjectService(db)
+		issueService := services.NewIssueService(db, projectService)
+		feedbackService := services.NewFeedbackService(db)
+		sessionService := services.NewSessionService(db)
+		decisionService := services.NewDecisionService(db)
+		healthRecordService := services.NewHealthRecordService(db)
+		promptService := services.NewPromptService(db)
+		vibectlMdService := services.NewVibectlMdService(projectService, issueService, feedbackService, sessionService, decisionService, healthRecordService, config.Version)
+
+		mongoBackend := vibemcp.NewMongoBackend(
+			projectService,
+			issueService,
+			feedbackService,
+			decisionService,
+			sessionService,
+			healthRecordService,
+			promptService,
+			vibectlMdService,
+		)
+		if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+			ta := agents.NewTriageAgent(feedbackService, issueService, projectService, key)
+			mongoBackend.SetTriageAgent(ta)
+		}
+		backend = mongoBackend
 	}
-	slog.Info("connected to MongoDB", "uri", *mongoURI, "database", *database)
 
-	db := client.Database(*database)
-
-	// Create services.
-	projectService := services.NewProjectService(db)
-	issueService := services.NewIssueService(db, projectService)
-	feedbackService := services.NewFeedbackService(db)
-	sessionService := services.NewSessionService(db)
-	decisionService := services.NewDecisionService(db)
-	healthRecordService := services.NewHealthRecordService(db)
-	promptService := services.NewPromptService(db)
-	vibectlMdService := services.NewVibectlMdService(projectService, issueService, feedbackService, sessionService, decisionService, healthRecordService, config.Version)
-
-	// Create MCP server.
-	mcpServer := vibemcp.NewMCPServer(
-		projectService,
-		issueService,
-		feedbackService,
-		decisionService,
-		sessionService,
-		healthRecordService,
-		promptService,
-		vibectlMdService,
-	)
+	// Create MCP server with the selected backend.
+	mcpServer := vibemcp.NewMCPServer(backend)
 
 	switch *mode {
 	case "stdio":

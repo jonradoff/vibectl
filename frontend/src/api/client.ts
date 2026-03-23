@@ -17,6 +17,14 @@ import type {
   ActivityLogResponse,
   IssueComment,
   AppSettings,
+  User,
+  ProjectMember,
+  CheckoutStatus,
+  CIStatus,
+  AuthStatus,
+  ModeInfo,
+  ClientInstance,
+  ProjectPathEntry,
 } from '../types';
 
 const BASE = '/api/v1';
@@ -46,7 +54,225 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
-// Projects
+// ---- Auth ----
+export interface LoginResult {
+  token: string;
+  user: User;
+  requirePasswordChange: boolean;
+}
+
+export const getAuthStatus = (): Promise<AuthStatus> =>
+  request<AuthStatus>('/auth/status');
+
+export const authLogin = (credentials: { email?: string; password: string }): Promise<LoginResult> =>
+  request<LoginResult>('/auth/login', { method: 'POST', body: JSON.stringify(credentials) });
+
+export const authMe = (): Promise<User> =>
+  request<User>('/auth/me');
+
+export const authLogout = (): Promise<void> =>
+  request<void>('/auth/logout', { method: 'POST' });
+
+export const authChangePassword = (currentPassword: string, newPassword: string): Promise<{ token: string }> =>
+  request<{ token: string }>('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+
+// Legacy — preserved for backward compat with old CLI
+export const adminLogin = (password: string) =>
+  authLogin({ password }).then(r => ({ token: r.token }));
+
+// ---- API Keys ----
+export interface APIKeyView {
+  id: string;
+  name: string;
+  lastUsedAt?: string;
+  createdAt: string;
+}
+
+export const listAPIKeys = (): Promise<APIKeyView[]> =>
+  request<APIKeyView[]>('/api-keys');
+
+export const createAPIKey = (name: string): Promise<{ key: APIKeyView; token: string }> =>
+  request<{ key: APIKeyView; token: string }>('/api-keys', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+
+export const revokeAPIKey = (keyId: string): Promise<void> =>
+  request<void>(`/api-keys/${keyId}`, { method: 'DELETE' });
+
+// ---- Users (super_admin only) ----
+export const listUsers = (): Promise<User[]> =>
+  request<User[]>('/users');
+
+// ---- User directory (any authenticated user) ----
+export const listUsersDirectory = (): Promise<User[]> =>
+  request<User[]>('/users/directory');
+
+export const preAuthorizeUser = (data: { githubUsername: string; displayName?: string; globalRole?: string }): Promise<User> =>
+  request<User>('/users', { method: 'POST', body: JSON.stringify(data) });
+
+export const createEmailUser = (data: { email: string; displayName?: string; globalRole?: string }): Promise<{ user: User; temporaryPassword: string }> =>
+  request<{ user: User; temporaryPassword: string }>('/users/email', { method: 'POST', body: JSON.stringify(data) });
+
+export const setPasswordForUser = (userId: string, data: { email?: string }): Promise<{ temporaryPassword: string }> =>
+  request<{ temporaryPassword: string }>(`/users/${userId}/set-password`, { method: 'POST', body: JSON.stringify(data) });
+
+export const updateUser = (userId: string, data: Partial<Pick<User, 'displayName' | 'email' | 'globalRole' | 'disabled' | 'gitName' | 'gitEmail'>>): Promise<User> =>
+  request<User>(`/users/${userId}`, { method: 'PUT', body: JSON.stringify(data) });
+
+// ---- User self-profile ----
+export const updateSelfProfile = (data: Partial<Pick<User, 'displayName' | 'email' | 'gitName' | 'gitEmail'>>): Promise<User> =>
+  request<User>('/users/me', { method: 'PUT', body: JSON.stringify(data) });
+
+export const setSelfAnthropicKey = (key: string): Promise<void> =>
+  request<void>('/users/me/anthropic-key', { method: 'PUT', body: JSON.stringify({ key }) });
+
+export const setSelfGitHubPAT = (pat: string): Promise<void> =>
+  request<void>('/users/me/github-pat', { method: 'PUT', body: JSON.stringify({ pat }) });
+
+// ---- Clone / remote dev ----
+export interface CloneStatusResponse {
+  cloneStatus: string;
+  cloneError?: string;
+  localPath?: string;
+  updatedAt: string;
+}
+
+export const getCloneStatus = (projectId: string): Promise<CloneStatusResponse> =>
+  request<CloneStatusResponse>(`/projects/${projectId}/clone-status`);
+
+export const removeClone = (projectId: string): Promise<void> =>
+  request<void>(`/projects/${projectId}/clone`, { method: 'DELETE' });
+
+// cloneProject and pullProject return an EventSource URL (caller must open SSE).
+// Token is passed as a query param because EventSource cannot set headers.
+export const getCloneSSEUrl = (projectId: string): string => {
+  const token = getStoredToken();
+  return `/api/v1/projects/${projectId}/clone${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+};
+
+export const getPullSSEUrl = (projectId: string): string => {
+  const token = getStoredToken();
+  return `/api/v1/projects/${projectId}/pull${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+};
+
+export const getRestartDevStreamUrl = (projectId: string): string => {
+  const token = getStoredToken();
+  return `/api/v1/projects/${projectId}/ci/restart-dev-stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+};
+
+export const getDeployAllStreamUrl = (projectId: string, commitMessage?: string): string => {
+  const token = getStoredToken();
+  const params = new URLSearchParams();
+  if (token) params.set('token', token);
+  if (commitMessage) params.set('commitMessage', commitMessage);
+  const qs = params.toString();
+  return `/api/v1/projects/${projectId}/ci/deploy-all-stream${qs ? `?${qs}` : ''}`;
+};
+
+export const getBulkStartProdStreamUrl = (): string => {
+  const token = getStoredToken();
+  return `/api/v1/ci/bulk-start-prod-stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+};
+
+export const getBulkRestartProdStreamUrl = (): string => {
+  const token = getStoredToken();
+  return `/api/v1/ci/bulk-restart-prod-stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+};
+
+export const changeOwnPassword = (currentPassword: string, newPassword: string): Promise<{ token: string }> =>
+  request<{ token: string }>('/users/me/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+
+// ---- Project Members ----
+export const listProjectMembers = (projectId: string): Promise<ProjectMember[]> =>
+  request<ProjectMember[]>(`/projects/${projectId}/members`);
+
+export const upsertProjectMember = (projectId: string, userId: string, role: string): Promise<ProjectMember> =>
+  request<ProjectMember>(`/projects/${projectId}/members/${userId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ role }),
+  });
+
+export const removeProjectMember = (projectId: string, userId: string): Promise<void> =>
+  request<void>(`/projects/${projectId}/members/${userId}`, { method: 'DELETE' });
+
+// ---- Code Checkout ----
+export const getCheckoutStatus = (projectId: string): Promise<CheckoutStatus> =>
+  request<CheckoutStatus>(`/projects/${projectId}/checkout`);
+
+export const acquireCheckout = (projectId: string): Promise<CheckoutStatus> =>
+  request<CheckoutStatus>(`/projects/${projectId}/checkout`, { method: 'POST' });
+
+export const releaseCheckout = (projectId: string): Promise<void> =>
+  request<void>(`/projects/${projectId}/checkout`, { method: 'DELETE' });
+
+export const reclaimCheckout = (projectId: string): Promise<CheckoutStatus> =>
+  request<CheckoutStatus>(`/projects/${projectId}/checkout/reclaim`, { method: 'POST' });
+
+// ---- CI ----
+export const getCIStatus = (projectId: string): Promise<CIStatus> =>
+  request<CIStatus>(`/projects/${projectId}/ci/status`);
+
+export const ciCommit = (projectId: string, message: string): Promise<{ status: string; output: string }> =>
+  request<{ status: string; output: string }>(`/projects/${projectId}/ci/commit`, {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  });
+
+export const ciPush = (projectId: string): Promise<{ status: string; output: string; githubWarning?: string }> =>
+  request<{ status: string; output: string; githubWarning?: string }>(`/projects/${projectId}/ci/push`, {
+    method: 'POST',
+  });
+
+export const ciDeploy = (projectId: string): Promise<{ status: string; output: string }> =>
+  request<{ status: string; output: string }>(`/projects/${projectId}/ci/deploy`, {
+    method: 'POST',
+  });
+
+export const ciRestartDev = (projectId: string): Promise<{ status: string; output: string }> =>
+  request<{ status: string; output: string }>(`/projects/${projectId}/ci/restart-dev`, {
+    method: 'POST',
+  });
+
+export const ciRestartProd = (projectId: string): Promise<{ status: string; output: string }> =>
+  request<{ status: string; output: string }>(`/projects/${projectId}/ci/restart-prod`, {
+    method: 'POST',
+  });
+
+export const ciDeployAll = (projectId: string, commitMessage?: string): Promise<{ status: string; steps: { step: string; output: string }[]; error?: string }> =>
+  request<{ status: string; steps: { step: string; output: string }[]; error?: string }>(`/projects/${projectId}/ci/deploy-all`, {
+    method: 'POST',
+    body: JSON.stringify({ commitMessage: commitMessage ?? '' }),
+  });
+
+export const ciStartProd = (projectId: string): Promise<{ status: string; output: string }> =>
+  request<{ status: string; output: string }>(`/projects/${projectId}/ci/start-prod`, {
+    method: 'POST',
+  });
+
+export const ciTogglePause = (projectId: string, paused: boolean): Promise<{ paused: boolean }> =>
+  request<{ paused: boolean }>(`/projects/${projectId}/ci/pause`, {
+    method: 'POST',
+    body: JSON.stringify({ paused }),
+  });
+
+export const bulkStartProd = (): Promise<{ results: { projectId: string; projectName: string; status: string; output: string }[] }> =>
+  request<{ results: { projectId: string; projectName: string; status: string; output: string }[] }>('/ci/bulk-start-prod', {
+    method: 'POST',
+  });
+
+export const bulkRestartProd = (): Promise<{ results: { projectId: string; projectName: string; status: string; output: string }[] }> =>
+  request<{ results: { projectId: string; projectName: string; status: string; output: string }[] }>('/ci/bulk-restart-prod', {
+    method: 'POST',
+  });
+
+// ---- Projects ----
 export const listProjects = () => request<Project[]>('/projects');
 export const createProject = (data: Partial<Project>) =>
   request<Project>('/projects', { method: 'POST', body: JSON.stringify(data) });
@@ -66,7 +292,7 @@ export const listArchivedProjects = () =>
 export const getProjectDashboard = (id: string) =>
   request<ProjectSummary>(`/projects/${id}/dashboard`);
 
-// Issues
+// ---- Issues ----
 export const listIssues = (projectId: string, params?: Record<string, string>) => {
   const qs = params ? '?' + new URLSearchParams(params).toString() : '';
   return request<Issue[]>(`/projects/${projectId}/issues${qs}`);
@@ -102,22 +328,36 @@ export const searchIssues = (q: string, projectId?: string) => {
   return request<Issue[]>(`/issues/search?${params}`);
 };
 
-// Feedback
+// ---- Feedback ----
 export const listFeedback = (params?: Record<string, string>) => {
   const qs = params ? '?' + new URLSearchParams(params).toString() : '';
   return request<FeedbackItem[]>(`/feedback${qs}`);
 };
 export const createFeedback = (data: Partial<FeedbackItem>) =>
   request<FeedbackItem>('/feedback', { method: 'POST', body: JSON.stringify(data) });
-export const reviewFeedback = (id: string, action: string, createIssue = false) =>
+export const reviewFeedback = (
+  id: string,
+  action: string,
+  createIssue = false,
+  extras?: { issueTitle?: string; issueDescription?: string; issueType?: string; issuePriority?: string }
+) =>
   request<FeedbackItem>(`/feedback/${id}/review`, {
     method: 'PATCH',
-    body: JSON.stringify({ action, createIssue }),
+    body: JSON.stringify({ action, createIssue, ...extras }),
   });
+export const bulkReviewFeedback = (items: { id: string; action: string }[]) =>
+  request<{ processed: number; results: FeedbackItem[]; errors?: string[] }>('/feedback/bulk-review', {
+    method: 'POST',
+    body: JSON.stringify({ items }),
+  });
+export const triggerTriage = (id: string) =>
+  request<Record<string, unknown>>(`/feedback/${id}/triage`, { method: 'POST' });
+export const triggerTriageBatch = () =>
+  request<{ triaged: number }>('/feedback/triage-batch', { method: 'POST' });
 export const listProjectFeedback = (projectId: string) =>
   request<FeedbackItem[]>(`/projects/${projectId}/feedback`);
 
-// Sessions
+// ---- Sessions ----
 export const listSessions = (projectId: string) =>
   request<SessionLog[]>(`/projects/${projectId}/sessions`);
 export const getLatestSession = (projectId: string) =>
@@ -125,11 +365,14 @@ export const getLatestSession = (projectId: string) =>
 export const createSession = (projectId: string) =>
   request<SessionLog>(`/projects/${projectId}/sessions`, { method: 'POST' });
 
-// Uploads
+// ---- Uploads ----
 export const uploadFiles = async (files: File[]): Promise<Attachment[]> => {
   const form = new FormData();
   files.forEach((f) => form.append('files', f));
-  const res = await fetch(`${BASE}/uploads`, { method: 'POST', body: form });
+  const token = getStoredToken();
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(`${BASE}/uploads`, { method: 'POST', body: form, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || res.statusText);
@@ -137,36 +380,42 @@ export const uploadFiles = async (files: File[]): Promise<Attachment[]> => {
   return res.json();
 };
 
-// Health Checks
+// ---- Health Checks ----
 export const runHealthCheck = (projectId: string) =>
   request<HealthCheckResult[]>(`/projects/${projectId}/healthcheck`);
 
 export const getHealthHistory = (projectId: string) =>
   request<HealthRecord[]>(`/projects/${projectId}/healthcheck/history`);
 
-// Chat History
+// ---- Chat History ----
 export const listChatHistory = (projectId: string) =>
   request<ChatHistorySummary[]>(`/projects/${projectId}/chat-history`);
 export const getChatHistoryEntry = (historyId: string) =>
   request<ChatHistoryEntry>(`/chat-history/${historyId}`);
 
-// VIBECTL.md
+// ---- VIBECTL.md ----
 export const generateVibectlMd = (projectId: string) =>
   request<{ generated: boolean }>(`/projects/${projectId}/vibectl-md/generate`, { method: 'POST' });
 export const getVibectlMd = async (projectId: string): Promise<string> => {
-  const res = await fetch(`${BASE}/projects/${projectId}/vibectl-md`);
+  const token = getStoredToken();
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(`${BASE}/projects/${projectId}/vibectl-md`, { headers });
   if (!res.ok) throw new Error('VIBECTL.md not found');
   return res.text();
 };
 export const previewVibectlMd = async (projectId: string): Promise<string> => {
-  const res = await fetch(`${BASE}/projects/${projectId}/vibectl-md/preview`);
+  const token = getStoredToken();
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(`${BASE}/projects/${projectId}/vibectl-md/preview`, { headers });
   if (!res.ok) throw new Error('Preview failed');
   return res.text();
 };
 export const listDecisions = (projectId: string, limit = 20) =>
   request<Decision[]>(`/projects/${projectId}/decisions?limit=${limit}`);
 
-// Filesystem
+// ---- Filesystem ----
 export interface FileEntry {
   name: string;
   path: string;
@@ -192,23 +441,23 @@ export const writeFile = (projectId: string, path: string, content: string) =>
     body: JSON.stringify({ content }),
   });
 
-// Prompts
+// ---- Prompts ----
 export const listProjectPrompts = (projectId: string) =>
   request<Prompt[]>(`/projects/${projectId}/prompts`);
 export const listAllPrompts = () =>
   request<Prompt[]>('/prompts');
-export const createPrompt = (projectId: string, data: { name: string; body: string }) =>
+export const createPrompt = (projectId: string, data: { name: string; body: string; shared?: boolean }) =>
   request<Prompt>(`/projects/${projectId}/prompts`, { method: 'POST', body: JSON.stringify(data) });
-export const createGlobalPrompt = (data: { name: string; body: string }) =>
+export const createGlobalPrompt = (data: { name: string; body: string; shared?: boolean }) =>
   request<Prompt>('/prompts', { method: 'POST', body: JSON.stringify(data) });
 export const getPrompt = (promptId: string) =>
   request<Prompt>(`/prompts/${promptId}`);
-export const updatePrompt = (promptId: string, data: { name?: string; body?: string }) =>
+export const updatePrompt = (promptId: string, data: { name?: string; body?: string; shared?: boolean }) =>
   request<Prompt>(`/prompts/${promptId}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deletePrompt = (promptId: string) =>
   request<void>(`/prompts/${promptId}`, { method: 'DELETE' });
 
-// Activity Log
+// ---- Activity Log ----
 export const listActivityLog = (params?: { projectId?: string; type?: string; limit?: number; offset?: number }) => {
   const qs = params ? '?' + new URLSearchParams(
     Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])
@@ -216,7 +465,7 @@ export const listActivityLog = (params?: { projectId?: string; type?: string; li
   return request<ActivityLogResponse>(`/activity-log${qs}`);
 };
 
-// Directory management
+// ---- Directory management ----
 export const checkDir = (path: string) =>
   request<{ exists: boolean }>(`/check-dir?path=${encodeURIComponent(path)}`);
 export const ensureDir = (path: string) =>
@@ -224,8 +473,35 @@ export const ensureDir = (path: string) =>
     method: 'POST',
     body: JSON.stringify({ path }),
   });
+export const detectGitRemote = (path: string) =>
+  request<{ remoteUrl: string }>(`/detect-git-remote?path=${encodeURIComponent(path)}`);
 
-// Comments
+export const detectFlyToml = (path: string) =>
+  request<{ found: boolean; appName?: string; deployProd?: string; startProd?: string; restartProd?: string; viewLogs?: string }>(`/detect-fly-toml?path=${encodeURIComponent(path)}`);
+
+export const detectStartSh = (path: string) =>
+  request<{ found: boolean; preview?: string; command?: string }>(`/detect-start-sh?path=${encodeURIComponent(path)}`);
+
+export interface DetectedScripts {
+  deployShFound: boolean;
+  startShFound: boolean;
+  flyTomlFound: boolean;
+  deployProd?: string;
+  startDev?: string;
+  startProd?: string;
+  restartProd?: string;
+  viewLogs?: string;
+  flyAppName?: string;
+}
+export const detectProjectScripts = (path: string) =>
+  request<DetectedScripts>(`/detect-project-scripts?path=${encodeURIComponent(path)}`);
+
+export const suggestClonePath = (githubUrl: string) =>
+  request<{ path: string }>(`/clone/suggest-path?url=${encodeURIComponent(githubUrl)}`);
+export const suggestNewPath = (code: string) =>
+  request<{ path: string }>(`/clone/new-path?code=${encodeURIComponent(code)}`);
+
+// ---- Comments ----
 export const listComments = (issueKey: string) =>
   request<IssueComment[]>(`/issues/${issueKey}/comments`);
 export const createComment = (issueKey: string, data: { body: string; author: string }) =>
@@ -233,35 +509,80 @@ export const createComment = (issueKey: string, data: { body: string; author: st
 export const deleteComment = (issueKey: string, commentId: string) =>
   request<void>(`/issues/${issueKey}/comments/${commentId}`, { method: 'DELETE' });
 
-// Settings
+// ---- Settings ----
 export const getSettings = () => request<AppSettings>('/settings');
 export const updateSettings = (data: Partial<AppSettings>) =>
   request<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(data) });
 
-// Admin
-export const getAuthStatus = async (): Promise<{ passwordSet: boolean; tokenValid: boolean }> => {
-  const token = getStoredToken();
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`${BASE}/admin/auth-status`, { headers });
-  if (!res.ok) throw new Error('auth-status failed');
-  return res.json();
-};
-export const adminLogin = (password: string) =>
-  request<{ token: string }>('/admin/login', { method: 'POST', body: JSON.stringify({ password }) });
+// ---- Admin ----
 export const triggerRebuild = () =>
   request<{ status: string }>('/admin/rebuild', { method: 'POST' });
 export const getSelfInfo = () =>
   request<{ sourceDir: string }>('/admin/self-info');
+export const getClaudeAuthStatus = () =>
+  request<{ loggedIn: boolean; error?: string; authMethod?: string; email?: string }>('/admin/claude-auth-status');
+export const getClaudeLoginSSEUrl = () => `/api/v1/admin/claude-login`;
+export const submitClaudeLoginCode = (code: string, codeVerifier: string, clientId: string, redirectUri: string, state: string) =>
+  request<{ status: string }>('/admin/claude-login-code', {
+    method: 'POST',
+    body: JSON.stringify({ code, codeVerifier, clientId, redirectUri, state }),
+  });
+export const submitClaudeTokenDirect = (token: string) =>
+  request<{ status: string }>('/admin/claude-token-direct', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  });
 
-// Dashboard
+// ---- Dashboard ----
 export const getGlobalDashboard = () =>
   request<GlobalDashboard>('/dashboard');
 
-// AI Agents
+// ---- AI Agents ----
 export const triageFeedback = (id: string) =>
   request<AIAnalysis>(`/feedback/${id}/triage`, { method: 'POST' });
 export const triageAllPending = () =>
   request<{ triaged: number }>('/feedback/triage-batch', { method: 'POST' });
 export const runPMReview = (projectId: string) =>
   request<PMReviewResult>(`/agents/pm-review/${projectId}`, { method: 'POST' });
+
+// ---- Mode info (no auth required) ----
+export const getModeInfo = (): Promise<ModeInfo> =>
+  request<ModeInfo>('/mode');
+
+export const pingRemote = (): Promise<{ reachable: boolean; reason?: string }> =>
+  request<{ reachable: boolean; reason?: string }>('/client/ping');
+
+// ---- Local path overrides (client mode only, always local) ----
+export const getLocalPaths = (): Promise<Record<string, string>> =>
+  request<Record<string, string>>('/local-paths');
+
+export const setLocalPath = (projectId: string, localPath: string): Promise<void> =>
+  request<void>(`/local-paths/${projectId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ localPath }),
+  });
+
+export const deleteLocalPath = (projectId: string): Promise<void> =>
+  request<void>(`/local-paths/${projectId}`, { method: 'DELETE' });
+
+// ---- Client instances (remote server only) ----
+export const listClientInstances = (): Promise<ClientInstance[]> =>
+  request<ClientInstance[]>('/client-instances/');
+
+export const createClientInstance = (name: string, description?: string): Promise<ClientInstance> =>
+  request<ClientInstance>('/client-instances/', {
+    method: 'POST',
+    body: JSON.stringify({ name, description }),
+  });
+
+export const updateClientInstance = (
+  id: string,
+  updates: { name?: string; description?: string; projectPaths?: ProjectPathEntry[] }
+): Promise<ClientInstance> =>
+  request<ClientInstance>(`/client-instances/${id}/`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  });
+
+export const deleteClientInstance = (id: string): Promise<void> =>
+  request<void>(`/client-instances/${id}/`, { method: 'DELETE' });

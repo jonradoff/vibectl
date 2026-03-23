@@ -1,18 +1,20 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ResponsiveGridLayout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
-import { getGlobalDashboard } from '../api/client'
+import { getGlobalDashboard, getBulkStartProdStreamUrl, getBulkRestartProdStreamUrl } from '../api/client'
 import ProjectCard from '../components/projects/ProjectCard'
 import ProjectForm from '../components/projects/ProjectForm'
 import { useActiveProject } from '../contexts/ActiveProjectContext'
-import type { Layout } from 'react-grid-layout'
+import { useAuth } from '../contexts/AuthContext'
+import type { Layout, LayoutItem } from 'react-grid-layout'
 
 const LAYOUT_VERSION = 3 // bump to invalidate saved layouts when grid config changes
 const LAYOUT_KEY = `vibectl-dashboard-layouts-v${LAYOUT_VERSION}`
 
-function loadLayouts(): Record<string, Layout[]> | undefined {
+function loadLayouts(): Record<string, LayoutItem[]> | undefined {
   try {
     const raw = localStorage.getItem(LAYOUT_KEY)
     return raw ? JSON.parse(raw) : undefined
@@ -21,13 +23,13 @@ function loadLayouts(): Record<string, Layout[]> | undefined {
   }
 }
 
-function saveLayouts(layouts: Record<string, Layout[]>) {
+function saveLayouts(layouts: Record<string, LayoutItem[]>) {
   localStorage.setItem(LAYOUT_KEY, JSON.stringify(layouts))
 }
 
-function generateDefaultLayouts(projectIds: string[]): Record<string, Layout[]> {
+function generateDefaultLayouts(projectIds: string[]): Record<string, LayoutItem[]> {
   const cols: Record<string, number> = { lg: 6, md: 4, sm: 2 }
-  const layouts: Record<string, Layout[]> = {}
+  const layouts: Record<string, LayoutItem[]> = {}
 
   for (const [breakpoint, colCount] of Object.entries(cols)) {
     const defaultW = Math.max(2, Math.floor(colCount / 3)) // 2 at lg (3/row), 2 at md (2/row), 1 at sm
@@ -52,11 +54,11 @@ function generateDefaultLayouts(projectIds: string[]): Record<string, Layout[]> 
  * - New items are placed in the first available gap at the bottom.
  */
 function reconcileLayouts(
-  saved: Record<string, Layout[]>,
+  saved: Record<string, LayoutItem[]>,
   visibleIds: Set<string>,
-): Record<string, Layout[]> {
+): Record<string, LayoutItem[]> {
   const cols: Record<string, number> = { lg: 6, md: 4, sm: 2 }
-  const result: Record<string, Layout[]> = {}
+  const result: Record<string, LayoutItem[]> = {}
 
   for (const [breakpoint, savedItems] of Object.entries(saved)) {
     const colCount = cols[breakpoint] ?? 3
@@ -92,7 +94,7 @@ function reconcileLayouts(
     }
 
     // Place new items: scan rows for a 1-wide, 3-tall opening
-    const placed: Layout[] = []
+    const placed: LayoutItem[] = []
     for (const id of newIds) {
       const defaultW = Math.max(2, Math.floor(colCount / 3)), h = 3, w = defaultW
       let foundX = -1, foundY = -1
@@ -121,7 +123,7 @@ function reconcileLayouts(
         foundY = maxBottom
       }
 
-      const layout: Layout = { i: id, x: foundX, y: foundY, w, h, minW: 1, minH: 2 }
+      const layout: LayoutItem = { i: id, x: foundX, y: foundY, w, h, minW: 1, minH: 2 }
       placed.push(layout)
 
       // Mark cells as occupied
@@ -160,25 +162,28 @@ function useWidth(ref: React.RefObject<HTMLDivElement | null>) {
 function Dashboard() {
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [layoutKey, setLayoutKey] = useState(0)
+  const [bulkModal, setBulkModal] = useState<{ title: string; url: string } | null>(null)
   const queryClient = useQueryClient()
   const gridContainerRef = useRef<HTMLDivElement>(null)
   const gridWidth = useWidth(gridContainerRef)
   const { closedProjectIds } = useActiveProject()
+  const { currentUser } = useAuth()
+  const isSuperAdmin = currentUser?.globalRole === 'super_admin'
 
   const { data: dashboard, isLoading, error } = useQuery({
     queryKey: ['globalDashboard'],
     queryFn: getGlobalDashboard,
   })
 
-  const handleLayoutChange = useCallback((_: Layout[], allLayouts: Record<string, Layout[]>) => {
-    saveLayouts(allLayouts)
+  const handleLayoutChange = useCallback((_: Layout, allLayouts: Partial<Record<string, Layout>>) => {
+    saveLayouts(allLayouts as Record<string, LayoutItem[]>)
   }, [])
 
   // Snap width to allowed values after resize completes
-  const handleResizeStop = useCallback((layout: Layout[]) => {
+  const handleResizeStop = useCallback((layout: Layout) => {
     const allowed = [2, 3, 6]
     let changed = false
-    for (const item of layout) {
+    for (const item of layout as LayoutItem[]) {
       const closest = allowed.reduce((prev, curr) =>
         Math.abs(curr - item.w) < Math.abs(prev - item.w) ? curr : prev
       )
@@ -193,7 +198,7 @@ function Dashboard() {
       const saved = loadLayouts() || {}
       // Apply snap to all breakpoints
       for (const bp of Object.keys(saved)) {
-        for (const item of saved[bp]) {
+        for (const item of saved[bp] as LayoutItem[]) {
           const closest = allowed.reduce((prev, curr) =>
             Math.abs(curr - item.w) < Math.abs(prev - item.w) ? curr : prev
           )
@@ -259,21 +264,43 @@ function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-950 p-6">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-        <button
-          onClick={() => setShowCreateProject(true)}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-        >
-          + New Project
-        </button>
+        {isSuperAdmin && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setBulkModal({ title: 'Start All Production', url: getBulkStartProdStreamUrl() })}
+              className="rounded-lg bg-green-700 hover:bg-green-600 px-3 py-2 text-xs font-medium text-white transition-colors"
+            >
+              Start All Prod
+            </button>
+            <button
+              onClick={() => setBulkModal({ title: 'Restart All Production', url: getBulkRestartProdStreamUrl() })}
+              className="rounded-lg bg-amber-700 hover:bg-amber-600 px-3 py-2 text-xs font-medium text-white transition-colors"
+            >
+              Restart All Prod
+            </button>
+            <button
+              onClick={() => setShowCreateProject(true)}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+            >
+              + New Project
+            </button>
+          </div>
+        )}
       </div>
+      {bulkModal && createPortal(
+        <BulkStreamModal title={bulkModal.title} url={bulkModal.url} onClose={() => setBulkModal(null)} />,
+        document.body
+      )}
 
-      <ProjectForm
-        open={showCreateProject}
-        onClose={() => setShowCreateProject(false)}
-        onCreated={() => queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })}
-      />
+      {isSuperAdmin && (
+        <ProjectForm
+          open={showCreateProject}
+          onClose={() => setShowCreateProject(false)}
+          onCreated={() => queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })}
+        />
+      )}
 
       {/* Global stats bar */}
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -317,11 +344,9 @@ function Dashboard() {
             cols={{ lg: 6, md: 4, sm: 2 }}
             rowHeight={120}
             width={gridWidth}
-            draggableHandle=".drag-handle"
+            dragConfig={{ handle: '.drag-handle' }}
             onLayoutChange={handleLayoutChange}
             onResizeStop={handleResizeStop}
-            isResizable
-            isDraggable
           >
             {visibleSummaries.map((summary) => (
               <div key={summary.project.id} data-project-id={summary.project.id} className="h-full">
@@ -337,6 +362,103 @@ function Dashboard() {
         {hiddenSummaries.map((summary) => (
           <ProjectCard key={summary.project.id} summary={summary} />
         ))}
+      </div>
+    </div>
+  )
+}
+
+type BulkProjectEntry = { name: string; lines: string[]; status: 'running' | 'done' | 'error' | 'pending' };
+
+function BulkStreamModal({ title, url, onClose }: { title: string; url: string; onClose: () => void }) {
+  const [projects, setProjects] = useState<BulkProjectEntry[]>([])
+  const [done, setDone] = useState(false)
+  const [connectionError, setConnectionError] = useState('')
+  const logRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [projects])
+
+  useEffect(() => {
+    const es = new EventSource(url)
+    es.onmessage = (e) => {
+      const line = e.data as string
+      if (line === 'DONE') {
+        es.close()
+        setDone(true)
+      } else if (line.startsWith('PROJECT:')) {
+        const name = line.slice(8)
+        setProjects(prev => [...prev, { name, lines: [], status: 'running' }])
+      } else if (line.startsWith('PROJECT_DONE:')) {
+        const name = line.slice(13)
+        setProjects(prev => prev.map(p => p.name === name ? { ...p, status: 'done' } : p))
+      } else if (line.startsWith('PROJECT_ERROR:')) {
+        const name = line.slice(14)
+        setProjects(prev => prev.map(p => p.name === name ? { ...p, status: 'error' } : p))
+      } else if (line.startsWith('ERROR:')) {
+        setConnectionError(line.slice(6).trim())
+        es.close()
+        setDone(true)
+      } else {
+        setProjects(prev => {
+          if (prev.length === 0) return prev
+          const updated = [...prev]
+          updated[updated.length - 1] = { ...updated[updated.length - 1], lines: [...updated[updated.length - 1].lines, line] }
+          return updated
+        })
+      }
+    }
+    es.onerror = () => {
+      es.close()
+      setConnectionError('Connection lost')
+      setDone(true)
+    }
+    return () => es.close()
+  }, [url])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="w-full max-w-lg rounded-xl bg-gray-900 border border-gray-700 shadow-2xl flex flex-col max-h-[80vh]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+          <h3 className="text-sm font-semibold text-white">{title}</h3>
+          {done && (
+            <button onClick={onClose} className="rounded-lg bg-gray-700 hover:bg-gray-600 px-3 py-1 text-xs font-medium text-gray-300 transition-colors">
+              Close
+            </button>
+          )}
+        </div>
+
+        <div ref={logRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3 min-h-0">
+          {!done && projects.length === 0 && !connectionError && (
+            <div className="flex items-center gap-2 text-xs text-indigo-300">
+              <div className="w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+              Starting…
+            </div>
+          )}
+          {projects.map((proj) => (
+            <div key={proj.name}>
+              <div className="flex items-center gap-2 mb-1">
+                {proj.status === 'running' && <span className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse shrink-0" />}
+                {proj.status === 'done' && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" />}
+                {proj.status === 'error' && <span className="w-2 h-2 rounded-full bg-red-400 shrink-0" />}
+                <span className="text-xs font-semibold text-white">{proj.name}</span>
+                {proj.status === 'done' && <span className="text-[10px] text-green-400">✓</span>}
+                {proj.status === 'error' && <span className="text-[10px] text-red-400">✗ failed</span>}
+              </div>
+              {proj.lines.length > 0 && (
+                <pre className="text-[10px] text-gray-400 bg-gray-950 border border-gray-800 rounded p-2 overflow-x-auto max-h-32 whitespace-pre-wrap break-all">
+                  {proj.lines.join('\n')}
+                </pre>
+              )}
+            </div>
+          ))}
+          {connectionError && (
+            <p className="text-xs text-red-400">{connectionError}</p>
+          )}
+          {done && !connectionError && (
+            <p className="text-xs text-green-400 font-medium pt-1">✓ All done</p>
+          )}
+        </div>
       </div>
     </div>
   )

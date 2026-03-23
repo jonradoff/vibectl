@@ -119,15 +119,6 @@ function APIDocsPage() {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h2 className="text-lg font-semibold text-white mb-3 border-b border-gray-800 pb-2">{title}</h2>
-      <div className="text-gray-300 text-sm space-y-1">{children}</div>
-    </section>
-  );
-}
-
 function EndpointGroup({ name, children }: { name: string; children: React.ReactNode }) {
   return (
     <section>
@@ -165,15 +156,6 @@ function Endpoint({ method, path, desc, body, response, auth }: {
         <p className="text-xs text-gray-500 mt-0.5"><span className="text-gray-400">Returns:</span> <code>{response}</code></p>
       )}
     </div>
-  );
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function Code({ children }: { children: React.ReactNode }) {
-  return (
-    <pre className="bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 text-sm text-gray-300 font-mono overflow-x-auto whitespace-pre">
-      {children}
-    </pre>
   );
 }
 

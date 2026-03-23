@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listDirectory, readFile, writeFile, generateVibectlMd } from '../../api/client'
-import type { FileEntry, FileContent } from '../../api/client'
+import type { FileEntry } from '../../api/client'
 
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
@@ -71,6 +71,8 @@ function savePinnedFiles(projectId: string, pinned: Set<string>) {
 interface FilesBrowserProps {
   projectId: string
   localPath?: string
+  githubUrl?: string
+  onClone?: () => void
 }
 
 type SortField = 'name' | 'modTime' | 'size'
@@ -114,7 +116,7 @@ function formatModTime(iso?: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-export default function FilesBrowser({ projectId, localPath }: FilesBrowserProps) {
+export default function FilesBrowser({ projectId, localPath, githubUrl, onClone }: FilesBrowserProps) {
   const [currentPath, setCurrentPath] = useState('.')
   const [editingFile, setEditingFile] = useState<string | null>(null)
   const [pinnedFiles, setPinnedFiles] = useState(() => loadPinnedFiles(projectId))
@@ -332,7 +334,23 @@ export default function FilesBrowser({ projectId, localPath }: FilesBrowserProps
           />
         ))}
 
-        {entries && entries.length === 0 && (
+        {entries && entries.length === 0 && currentPath === '.' && (
+          <div className="flex flex-col items-center justify-center h-32 gap-3 text-center px-4">
+            <p className="text-xs text-gray-500">This directory is empty.</p>
+            {githubUrl && onClone && (
+              <>
+                <p className="text-[11px] text-gray-600 font-mono">{githubUrl}</p>
+                <button
+                  onClick={onClone}
+                  className="rounded bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white transition-colors"
+                >
+                  Clone from GitHub
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {entries && entries.length === 0 && currentPath !== '.' && (
           <div className="flex items-center justify-center h-32 text-gray-500 text-xs">
             Empty directory
           </div>
@@ -542,7 +560,6 @@ function FileEditorModal({ projectId, filePath, onClose }: { projectId: string; 
   const [saved, setSaved] = useState(false)
   const [showUnsavedPrompt, setShowUnsavedPrompt] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const preRef = useRef<HTMLPreElement>(null)
 
   const { data: fileData, isLoading, error } = useQuery({
     queryKey: ['fileContent', projectId, filePath],
@@ -600,16 +617,6 @@ function FileEditorModal({ projectId, filePath, onClose }: { projectId: string; 
   const ext = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : ''
   const lang = extToLang(ext)
 
-  // Syntax highlight for the preview
-  const highlighted = (() => {
-    if (!content) return ''
-    if (lang && hljs.getLanguage(lang)) {
-      try {
-        return hljs.highlight(content, { language: lang }).value
-      } catch { /* fallback */ }
-    }
-    return escapeHtml(content)
-  })()
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70" onClick={tryClose}>
@@ -728,6 +735,3 @@ function extToLang(ext: string): string | null {
   return map[ext] || null
 }
 
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}

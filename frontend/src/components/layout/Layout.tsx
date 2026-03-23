@@ -3,8 +3,11 @@ import { useQuery } from '@tanstack/react-query';
 import { listProjects } from '../../api/client';
 import type { Project } from '../../types';
 import Sidebar from './Sidebar';
+import { useEventStream } from '../../hooks/useEventStream';
 
 function Layout() {
+  useEventStream();
+
   const { data: projects } = useQuery<Project[]>({
     queryKey: ['projects'],
     queryFn: listProjects,

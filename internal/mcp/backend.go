@@ -1,0 +1,55 @@
+package mcp
+
+import (
+	"context"
+	"time"
+
+	"github.com/jonradoff/vibectl/internal/models"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// Backend is the data access interface for the MCP server.
+// It can be backed by MongoDB services (MongoBackend) or the VibeCtl HTTP API (APIBackend).
+type Backend interface {
+	// Projects
+	ListProjects(ctx context.Context) ([]models.Project, error)
+	GetProjectByCode(ctx context.Context, code string) (*models.Project, error)
+
+	// Issues
+	ListIssues(ctx context.Context, projectID string, filters map[string]string) ([]models.Issue, error)
+	GetIssueByKey(ctx context.Context, key string) (*models.Issue, error)
+	SearchIssues(ctx context.Context, query, projectID string) ([]models.Issue, error)
+	CreateIssue(ctx context.Context, projectID string, req *models.CreateIssueRequest) (*models.Issue, error)
+	UpdateIssueStatus(ctx context.Context, issueKey, newStatus string) (*models.Issue, error)
+	UpdateIssue(ctx context.Context, issueKey string, req *models.UpdateIssueRequest) (*models.Issue, error)
+	CountIssuesByProject(ctx context.Context, projectID bson.ObjectID) (map[string]int, error)
+	CountIssuesByPriority(ctx context.Context, projectID bson.ObjectID) (map[string]int, error)
+
+	// Sessions
+	ListSessions(ctx context.Context, projectID string) ([]models.SessionLog, error)
+	GetLatestSession(ctx context.Context, projectID string) (*models.SessionLog, error)
+
+	// Health records
+	GetHealthHistory(ctx context.Context, projectID string, window time.Duration) ([]models.HealthRecord, error)
+
+	// Decisions
+	ListRecentDecisions(ctx context.Context, projectID string, limit int) ([]models.Decision, error)
+	RecordDecision(ctx context.Context, projectID bson.ObjectID, decisionType, summary, issueKey string) error
+
+	// Prompts
+	ListPromptsByProject(ctx context.Context, projectID string) ([]models.Prompt, error)
+	ListAllPrompts(ctx context.Context) ([]models.Prompt, error)
+	GetPromptByID(ctx context.Context, id string) (*models.Prompt, error)
+
+	// Feedback
+	ListFeedbackByProject(ctx context.Context, projectID string) ([]models.FeedbackItem, error)
+	CreateFeedback(ctx context.Context, req *models.CreateFeedbackRequest) (*models.FeedbackItem, error)
+	TriageFeedbackItem(ctx context.Context, feedbackID string) (*models.AIAnalysis, error)
+	ReviewFeedback(ctx context.Context, feedbackID string, req *models.ReviewFeedbackRequest) (*models.FeedbackItem, error)
+	CreateIssueFromFeedback(ctx context.Context, item *models.FeedbackItem, req *models.ReviewFeedbackRequest) (*models.Issue, error)
+	LinkFeedbackToIssue(ctx context.Context, feedbackID, issueKey string) error
+
+	// VibectlMd
+	GenerateVibectlMd(ctx context.Context, projectID string) (string, error)
+	WriteVibectlMdToProject(ctx context.Context, projectID string) error
+}

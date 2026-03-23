@@ -244,11 +244,59 @@ func (s *FeedbackService) FindBySourceURL(ctx context.Context, sourceURL string)
 	return &item, nil
 }
 
-// CountPending returns the number of feedback items with triageStatus=pending.
+// CountPending returns the number of feedback items with triageStatus=pending (globally).
 func (s *FeedbackService) CountPending(ctx context.Context) (int, error) {
 	count, err := s.collection.CountDocuments(ctx, bson.D{{Key: "triageStatus", Value: models.TriageStatusPending}})
 	if err != nil {
 		return 0, fmt.Errorf("count pending feedback: %w", err)
 	}
 	return int(count), nil
+}
+
+// CountPendingByProject returns the number of pending feedback items for a project.
+func (s *FeedbackService) CountPendingByProject(ctx context.Context, projectID bson.ObjectID) (int, error) {
+	filter := bson.D{
+		{Key: "projectId", Value: projectID},
+		{Key: "triageStatus", Value: bson.D{{Key: "$in", Value: bson.A{
+			models.TriageStatusPending,
+			models.TriageStatusTriaged,
+		}}}},
+	}
+	count, err := s.collection.CountDocuments(ctx, filter)
+	if err != nil {
+		return 0, fmt.Errorf("count pending feedback by project: %w", err)
+	}
+	return int(count), nil
+}
+
+// SetTriaged marks a feedback item as triaged (AI has analyzed it).
+func (s *FeedbackService) SetTriaged(ctx context.Context, id string) error {
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid feedback ID: %w", err)
+	}
+	now := time.Now().UTC()
+	update := bson.D{{Key: "$set", Value: bson.D{
+		{Key: "triageStatus", Value: models.TriageStatusTriaged},
+		{Key: "triagedAt", Value: now},
+	}}}
+	_, err = s.collection.UpdateOne(ctx, bson.D{{Key: "_id", Value: oid}}, update)
+	if err != nil {
+		return fmt.Errorf("set triaged: %w", err)
+	}
+	return nil
+}
+
+// LinkToIssue sets the linkedIssueKey on an accepted feedback item.
+func (s *FeedbackService) LinkToIssue(ctx context.Context, id, issueKey string) error {
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid feedback ID: %w", err)
+	}
+	update := bson.D{{Key: "$set", Value: bson.D{{Key: "linkedIssueKey", Value: issueKey}}}}
+	_, err = s.collection.UpdateOne(ctx, bson.D{{Key: "_id", Value: oid}}, update)
+	if err != nil {
+		return fmt.Errorf("link feedback to issue: %w", err)
+	}
+	return nil
 }

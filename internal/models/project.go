@@ -59,6 +59,7 @@ type DeploymentConfig struct {
 	StopDev     string `json:"stopDev,omitempty" bson:"stopDev,omitempty"`
 	DeployProd  string `json:"deployProd,omitempty" bson:"deployProd,omitempty"`
 	RestartProd string `json:"restartProd,omitempty" bson:"restartProd,omitempty"`
+	StartProd   string `json:"startProd,omitempty" bson:"startProd,omitempty"`
 	ViewLogs    string `json:"viewLogs,omitempty" bson:"viewLogs,omitempty"`
 	FlyApp      string `json:"flyApp,omitempty" bson:"flyApp,omitempty"`
 	FlyRegion   string `json:"flyRegion,omitempty" bson:"flyRegion,omitempty"`
@@ -99,8 +100,11 @@ type Project struct {
 	HealthCheck           *HealthCheckConfig `json:"healthCheck,omitempty" bson:"healthCheck,omitempty"`
 	Deployment            *DeploymentConfig  `json:"deployment,omitempty" bson:"deployment,omitempty"`
 	Webhooks              []WebhookConfig    `json:"webhooks,omitempty" bson:"webhooks,omitempty"`
+	CloneStatus           string             `json:"cloneStatus,omitempty" bson:"cloneStatus,omitempty"`
+	CloneError            string             `json:"cloneError,omitempty" bson:"cloneError,omitempty"`
 	IssueCounter          int                `json:"issueCounter" bson:"issueCounter"`
 	Archived              bool               `json:"archived" bson:"archived"`
+	Paused                bool               `json:"paused" bson:"paused"`
 	RecurringThemes       []RecurringTheme   `json:"recurringThemes,omitempty" bson:"recurringThemes,omitempty"`
 	ArchitectureSummary   string             `json:"architectureSummary,omitempty" bson:"architectureSummary,omitempty"`
 	ArchitectureUpdatedAt *time.Time         `json:"architectureUpdatedAt,omitempty" bson:"architectureUpdatedAt,omitempty"`

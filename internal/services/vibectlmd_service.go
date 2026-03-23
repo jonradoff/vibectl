@@ -111,6 +111,8 @@ func (s *VibectlMdService) Generate(ctx context.Context, projectID string) (stri
 	writeSection(&b, "Goals", "goals", s.genGoals(project))
 	writeSection(&b, "Deployment", "deployment", s.genDeployment(project))
 	writeSection(&b, "Recent Decisions", "decisions", s.genDecisions(decisions))
+	pendingFeedback, _ := s.feedback.ListByProject(ctx, projectID)
+	writeSection(&b, "Pending Feedback", "feedback", genPendingFeedback(pendingFeedback))
 	writeSection(&b, "Recurring Themes", "themes", s.genThemes(project))
 	writeSection(&b, "Architecture", "architecture", s.genArchitecture(project))
 
@@ -206,6 +208,9 @@ func (s *VibectlMdService) UpdateSection(ctx context.Context, projectID string, 
 			sc = s.genDeployment(project)
 		case "decisions":
 			sc = s.genDecisions(decisions)
+		case "feedback":
+			feedbackItems, _ := s.feedback.ListByProject(ctx, projectID)
+			sc = genPendingFeedback(feedbackItems)
 		case "themes":
 			sc = s.genThemes(project)
 		case "architecture":
@@ -366,6 +371,36 @@ func (s *VibectlMdService) genDecisions(decisions []models.Decision) string {
 	var b strings.Builder
 	for _, d := range decisions {
 		fmt.Fprintf(&b, "- **%s** — %s\n", d.Timestamp.Format("2006-01-02"), d.Summary)
+	}
+	return b.String()
+}
+
+func genPendingFeedback(items []models.FeedbackItem) string {
+	var pending []models.FeedbackItem
+	for _, item := range items {
+		if item.TriageStatus == models.TriageStatusPending || item.TriageStatus == models.TriageStatusTriaged {
+			pending = append(pending, item)
+		}
+	}
+	if len(pending) == 0 {
+		return "No pending feedback items.\n"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d item(s) awaiting review:\n\n", len(pending))
+	for i, item := range pending {
+		if i >= 3 {
+			fmt.Fprintf(&b, "- ...and %d more\n", len(pending)-3)
+			break
+		}
+		snippet := item.RawContent
+		if len(snippet) > 100 {
+			snippet = snippet[:100] + "…"
+		}
+		status := "pending"
+		if item.TriageStatus == models.TriageStatusTriaged {
+			status = "triaged"
+		}
+		fmt.Fprintf(&b, "- [%s] %s (%s)\n", status, snippet, item.SubmittedAt.Format("2006-01-02"))
 	}
 	return b.String()
 }

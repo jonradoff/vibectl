@@ -27,14 +27,17 @@ func (s *PromptService) EnsureIndexes(ctx context.Context) error {
 	return err
 }
 
-// Create creates a prompt. If projectID is "*" or empty, creates a global prompt.
-func (s *PromptService) Create(ctx context.Context, projectID string, req *models.CreatePromptRequest) (*models.Prompt, error) {
+// Create creates a prompt with ownership tracking.
+func (s *PromptService) Create(ctx context.Context, projectID string, req *models.CreatePromptRequest, userID *bson.ObjectID, userName string) (*models.Prompt, error) {
 	now := time.Now().UTC()
 	p := &models.Prompt{
-		Name:      req.Name,
-		Body:      req.Body,
-		CreatedAt: now,
-		UpdatedAt: now,
+		Name:        req.Name,
+		Body:        req.Body,
+		CreatedBy:   userID,
+		CreatorName: userName,
+		Shared:      req.Shared,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	if projectID == "*" || projectID == "" {
@@ -57,17 +60,38 @@ func (s *PromptService) Create(ctx context.Context, projectID string, req *model
 	return p, nil
 }
 
-// ListByProject returns prompts for the given project PLUS all global prompts.
-func (s *PromptService) ListByProject(ctx context.Context, projectID string) ([]models.Prompt, error) {
+// ListByProject returns prompts the user can see: shared prompts + user's own personal prompts.
+func (s *PromptService) ListByProject(ctx context.Context, projectID string, userID *bson.ObjectID) ([]models.Prompt, error) {
 	oid, err := bson.ObjectIDFromHex(projectID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid project ID: %w", err)
 	}
-	// Match project-specific OR global
-	filter := bson.D{{Key: "$or", Value: bson.A{
+
+	// Scope: project-specific OR global
+	scopeFilter := bson.A{
 		bson.D{{Key: "projectId", Value: oid}},
 		bson.D{{Key: "global", Value: true}},
+	}
+
+	// Visibility: shared prompts OR user's own prompts OR legacy prompts (no createdBy field)
+	visFilter := bson.A{
+		bson.D{{Key: "shared", Value: true}},
+		bson.D{{Key: "createdBy", Value: bson.D{{Key: "$exists", Value: false}}}}, // legacy prompts
+	}
+	if userID != nil {
+		visFilter = append(visFilter, bson.D{{Key: "createdBy", Value: *userID}})
+	}
+
+	filter := bson.D{
+		{Key: "$or", Value: scopeFilter},
+		{Key: "$or", Value: visFilter},
+	}
+	// MongoDB doesn't allow two $or at the top level in the same doc. Use $and.
+	filter = bson.D{{Key: "$and", Value: bson.A{
+		bson.D{{Key: "$or", Value: scopeFilter}},
+		bson.D{{Key: "$or", Value: visFilter}},
 	}}}
+
 	opts := options.Find().SetSort(bson.D{{Key: "global", Value: -1}, {Key: "name", Value: 1}})
 	cursor, err := s.collection.Find(ctx, filter, opts)
 	if err != nil {
@@ -84,9 +108,19 @@ func (s *PromptService) ListByProject(ctx context.Context, projectID string) ([]
 	return results, nil
 }
 
-func (s *PromptService) ListAll(ctx context.Context) ([]models.Prompt, error) {
+// ListAll returns all prompts the user can see.
+func (s *PromptService) ListAll(ctx context.Context, userID *bson.ObjectID) ([]models.Prompt, error) {
+	visFilter := bson.A{
+		bson.D{{Key: "shared", Value: true}},
+		bson.D{{Key: "createdBy", Value: bson.D{{Key: "$exists", Value: false}}}},
+	}
+	if userID != nil {
+		visFilter = append(visFilter, bson.D{{Key: "createdBy", Value: *userID}})
+	}
+	filter := bson.D{{Key: "$or", Value: visFilter}}
+
 	opts := options.Find().SetSort(bson.D{{Key: "global", Value: -1}, {Key: "name", Value: 1}})
-	cursor, err := s.collection.Find(ctx, bson.D{}, opts)
+	cursor, err := s.collection.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, fmt.Errorf("find all prompts: %w", err)
 	}
@@ -124,6 +158,9 @@ func (s *PromptService) Update(ctx context.Context, id string, req *models.Updat
 	}
 	if req.Body != "" {
 		set = append(set, bson.E{Key: "body", Value: req.Body})
+	}
+	if req.Shared != nil {
+		set = append(set, bson.E{Key: "shared", Value: *req.Shared})
 	}
 	after := options.After
 	opts := options.FindOneAndUpdate().SetReturnDocument(after)

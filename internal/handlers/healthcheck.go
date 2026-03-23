@@ -98,7 +98,19 @@ func (h *HealthCheckHandler) ProbeFrontend(name, url string) models.HealthCheckR
 	return h.probeFrontend(name, url)
 }
 
+// normalizeURL ensures a URL has an http(s) scheme. Bare hostnames get https://.
+func normalizeURL(url string) string {
+	if url == "" {
+		return url
+	}
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return "https://" + url
+	}
+	return url
+}
+
 func (h *HealthCheckHandler) probe(name, url string) models.HealthCheckResult {
+	url = normalizeURL(url)
 	// Try /healthz endpoint first if the URL looks like a base URL
 	healthzURL := strings.TrimRight(url, "/") + "/healthz"
 	if result, ok := h.probeHealthz(name, healthzURL); ok {
@@ -139,6 +151,7 @@ func (h *HealthCheckHandler) probe(name, url string) models.HealthCheckResult {
 // probeFrontend checks that a frontend URL responds with a non-5xx status.
 // Frontends don't implement /healthz so we just check reachability.
 func (h *HealthCheckHandler) probeFrontend(name, url string) models.HealthCheckResult {
+	url = normalizeURL(url)
 	resp, err := h.client.Get(url)
 	if err != nil {
 		return models.HealthCheckResult{

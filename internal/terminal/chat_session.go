@@ -14,8 +14,21 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jonradoff/vibectl/internal/services"
+	"github.com/jonradoff/vibectl/internal/models"
 )
+
+// ChatSessionPersister is the persistence interface for active chat session state.
+type ChatSessionPersister interface {
+	Upsert(ctx context.Context, projectID, claudeSessionID, localPath string, messages []json.RawMessage) error
+	MarkResumable(ctx context.Context, projectID string) error
+	MarkDead(ctx context.Context, projectID string) error
+	GetResumable(ctx context.Context, projectID string) (*models.ChatSessionState, error)
+}
+
+// ChatHistoryArchiver is the persistence interface for completed chat session history.
+type ChatHistoryArchiver interface {
+	Archive(ctx context.Context, projectID, claudeSessionID string, messages []json.RawMessage, startedAt time.Time) error
+}
 
 // ChatSession represents a claude code process running in stream-json mode.
 type ChatSession struct {
@@ -31,6 +44,8 @@ type ChatSession struct {
 	messages    []json.RawMessage // buffered events for reconnection
 	dirty       bool              // true if messages changed since last persist
 	mu          sync.Mutex
+	stderrMu    sync.Mutex
+	stderrBuf   []string // recent stderr lines, capped at 50
 }
 
 // SendMessage writes a user message to claude's stdin in stream-json format.
@@ -173,12 +188,12 @@ type ChatManager struct {
 	sessions            map[string]*ChatSession
 	mu                  sync.RWMutex
 	skipPermissions     bool
-	ChatSessionService  *services.ChatSessionService
-	ChatHistoryService  *services.ChatHistoryService
+	ChatSessionService  ChatSessionPersister
+	ChatHistoryService  ChatHistoryArchiver
 }
 
 // NewChatManager creates a new chat session manager.
-func NewChatManager(chatSessionService *services.ChatSessionService, chatHistoryService *services.ChatHistoryService) *ChatManager {
+func NewChatManager(chatSessionService ChatSessionPersister, chatHistoryService ChatHistoryArchiver) *ChatManager {
 	return &ChatManager{
 		sessions:            make(map[string]*ChatSession),
 		skipPermissions:     true, // default to accept-all
@@ -235,7 +250,15 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 		home, _ := os.UserHomeDir()
 		cmd.Dir = home
 	}
-	cmd.Env = os.Environ()
+	env := os.Environ()
+	// Inject Claude OAuth token from persistent storage if available
+	if tokenData, err := os.ReadFile("/data/.claude-oauth-token"); err == nil {
+		token := strings.TrimSpace(string(tokenData))
+		if token != "" {
+			env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+token)
+		}
+	}
+	cmd.Env = env
 
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
@@ -270,8 +293,12 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 		exited:    make(chan struct{}),
 	}
 
-	// Background goroutine: read stderr and broadcast auth/API errors to clients.
+	// stderrDone is closed when the stderr goroutine has fully drained.
+	stderrDone := make(chan struct{})
+
+	// Background goroutine: read stderr, buffer all lines, forward errors immediately.
 	go func() {
+		defer close(stderrDone)
 		scanner := bufio.NewScanner(stderrPipe)
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -280,14 +307,22 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 			}
 			slog.Warn("claude stderr", "projectID", projectID, "line", line)
 
-			// Check for auth / API errors and forward to subscribers as structured error events.
-			isAuthErr := false
-			if strings.Contains(line, "authentication_error") ||
-				strings.Contains(line, "OAuth token") ||
-				strings.Contains(line, "401") {
-				isAuthErr = true
+			// Buffer all stderr lines for post-exit reporting.
+			sess.stderrMu.Lock()
+			sess.stderrBuf = append(sess.stderrBuf, line)
+			if len(sess.stderrBuf) > 50 {
+				sess.stderrBuf = sess.stderrBuf[len(sess.stderrBuf)-50:]
 			}
-			if isAuthErr || strings.Contains(line, "API Error") || strings.Contains(line, "error") {
+			sess.stderrMu.Unlock()
+
+			// Forward error lines immediately (case-insensitive match).
+			lower := strings.ToLower(line)
+			if strings.Contains(lower, "error") ||
+				strings.Contains(lower, "not logged in") ||
+				strings.Contains(lower, "please run /login") ||
+				strings.Contains(lower, "authentication") ||
+				strings.Contains(lower, "oauth") ||
+				strings.Contains(line, "401") {
 				errEvent := map[string]interface{}{
 					"type": "error",
 					"data": map[string]string{"message": line},
@@ -336,18 +371,72 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 					sess.dirty = true
 					sess.mu.Unlock()
 				}
-			}
 
-			dataCopy := make([]byte, len(line))
-			copy(dataCopy, line)
-			sess.broadcast(dataCopy)
+				dataCopy := make([]byte, len(line))
+				copy(dataCopy, line)
+				sess.broadcast(dataCopy)
+			} else {
+				// Non-JSON stdout line — check for login errors and wrap as JSON error event
+				lower := strings.ToLower(string(line))
+				if strings.Contains(lower, "not logged in") || strings.Contains(lower, "please run /login") {
+					errEvent := map[string]interface{}{
+						"type": "error",
+						"data": map[string]string{"message": string(line)},
+					}
+					if data, marshalErr := json.Marshal(errEvent); marshalErr == nil {
+						sess.broadcast(data)
+					}
+				} else {
+					// Broadcast raw for other non-JSON output
+					dataCopy := make([]byte, len(line))
+					copy(dataCopy, line)
+					sess.broadcast(dataCopy)
+				}
+			}
 		}
 
 		if err := scanner.Err(); err != nil {
 			slog.Error("chat stdout scanner error", "projectID", projectID, "error", err)
 		}
 
-		_ = cmd.Wait()
+		// Capture exit code before waiting for stderr to finish.
+		waitErr := cmd.Wait()
+		exitCode := 0
+		if waitErr != nil {
+			if exitErr, ok := waitErr.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			}
+		}
+
+		// Wait for stderr goroutine to finish (with a short timeout).
+		select {
+		case <-stderrDone:
+		case <-time.After(2 * time.Second):
+		}
+
+		// Broadcast system_error if process exited non-zero or produced stderr.
+		sess.stderrMu.Lock()
+		stderrLines := make([]string, len(sess.stderrBuf))
+		copy(stderrLines, sess.stderrBuf)
+		sess.stderrMu.Unlock()
+
+		if exitCode != 0 || len(stderrLines) > 0 {
+			slog.Error("claude process exited with error",
+				"projectID", projectID,
+				"exitCode", exitCode,
+				"stderrLines", len(stderrLines),
+			)
+			sysErr := map[string]interface{}{
+				"type": "system_error",
+				"data": map[string]interface{}{
+					"exitCode": exitCode,
+					"stderr":   stderrLines,
+				},
+			}
+			if data, marshalErr := json.Marshal(sysErr); marshalErr == nil {
+				sess.broadcast(data)
+			}
+		}
 
 		// Final persist on exit
 		m.persistSession(sess)
@@ -355,7 +444,7 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 		// Archive session to history
 		m.archiveSession(sess)
 
-		slog.Info("chat session exited", "projectID", projectID, "sessionID", sess.ID)
+		slog.Info("chat session exited", "projectID", projectID, "sessionID", sess.ID, "exitCode", exitCode)
 	}()
 
 	// Periodic persistence ticker (every 5 seconds if dirty)

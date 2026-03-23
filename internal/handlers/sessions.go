@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jonradoff/vibectl/internal/events"
 	"github.com/jonradoff/vibectl/internal/middleware"
 	"github.com/jonradoff/vibectl/internal/models"
 	"github.com/jonradoff/vibectl/internal/services"
@@ -12,10 +13,11 @@ import (
 
 type SessionHandler struct {
 	sessionService *services.SessionService
+	bus            *events.Bus
 }
 
-func NewSessionHandler(ss *services.SessionService) *SessionHandler {
-	return &SessionHandler{sessionService: ss}
+func NewSessionHandler(ss *services.SessionService, bus *events.Bus) *SessionHandler {
+	return &SessionHandler{sessionService: ss, bus: bus}
 }
 
 // ProjectSessionRoutes returns a router mounted under /api/v1/projects/{id}/sessions.
@@ -67,6 +69,7 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "CREATE_SESSION_ERROR")
 		return
 	}
+	h.bus.Publish(events.Event{Type: "session.created", ProjectID: projectID})
 	middleware.WriteJSON(w, http.StatusCreated, session)
 }
 
@@ -85,5 +88,6 @@ func (h *SessionHandler) Update(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "UPDATE_SESSION_ERROR")
 		return
 	}
+	h.bus.Publish(events.Event{Type: "session.updated", ProjectID: session.ProjectID.Hex()})
 	middleware.WriteJSON(w, http.StatusOK, session)
 }

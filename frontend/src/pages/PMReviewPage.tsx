@@ -64,20 +64,23 @@ export default function PMReviewPage() {
               <div>
                 <h2 className="text-lg font-semibold mb-3">Goal Assessments</h2>
                 <div className="space-y-3">
-                  {result.goalAssessments.map((ga, i) => (
-                    <div key={i} className="bg-gray-800 rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="font-medium text-white">{ga.goal}</span>
-                        <span className={`text-sm font-mono ${
-                          ga.coverage >= 0.7 ? 'text-green-400' :
-                          ga.coverage >= 0.4 ? 'text-yellow-400' : 'text-red-400'
-                        }`}>
-                          {(ga.coverage * 100).toFixed(0)}% covered
-                        </span>
+                  {result.goalAssessments.map((ga, i) => {
+                    const coverageNum = parseFloat(ga.coverage);
+                    return (
+                      <div key={i} className="bg-gray-800 rounded-lg p-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-medium text-white">{ga.goal}</span>
+                          <span className={`text-sm font-mono ${
+                            coverageNum >= 0.7 ? 'text-green-400' :
+                            coverageNum >= 0.4 ? 'text-yellow-400' : 'text-red-400'
+                          }`}>
+                            {(coverageNum * 100).toFixed(0)}% covered
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-300">{ga.notes}</p>
                       </div>
-                      <p className="text-sm text-gray-300">{ga.assessment}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -89,16 +92,11 @@ export default function PMReviewPage() {
                 <div className="space-y-3">
                   {result.gaps.map((gap, i) => (
                     <div key={i} className="bg-gray-800 rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="font-medium text-white">{gap.description}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded ${
-                          gap.severity === 'high' ? 'bg-red-600 text-white' :
-                          gap.severity === 'medium' ? 'bg-yellow-600 text-white' : 'bg-gray-600 text-white'
-                        }`}>
-                          {gap.severity}
-                        </span>
-                      </div>
-                      <p className="text-sm text-gray-300">{gap.suggestion}</p>
+                      <p className="font-medium text-white mb-1">{gap.description}</p>
+                      <p className="text-sm text-gray-400">
+                        Suggested: <span className="text-gray-300">{gap.suggestedIssue.title}</span>
+                        {' '}<span className="text-xs text-gray-500">({gap.suggestedIssue.type} · {gap.suggestedIssue.priority})</span>
+                      </p>
                     </div>
                   ))}
                 </div>
@@ -112,47 +110,39 @@ export default function PMReviewPage() {
                 <div className="space-y-3">
                   {result.risks.map((risk, i) => (
                     <div key={i} className="bg-gray-800 rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="font-medium text-white">{risk.description}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded ${
-                          risk.likelihood === 'high' ? 'bg-red-600 text-white' :
-                          risk.likelihood === 'medium' ? 'bg-yellow-600 text-white' : 'bg-gray-600 text-white'
-                        }`}>
-                          {risk.likelihood}
-                        </span>
-                      </div>
-                      <p className="text-sm text-gray-300">{risk.mitigation}</p>
+                      <span className="font-mono text-sm text-blue-300 mr-3">{risk.issueKey}</span>
+                      <span className="text-sm text-gray-300">{risk.concern}</span>
                     </div>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* Priority Changes */}
-            {result.priorityChanges.length > 0 && (
+            {/* Reprioritizations */}
+            {result.reprioritizations.length > 0 && (
               <div>
                 <h2 className="text-lg font-semibold mb-3">Priority Adjustments</h2>
                 <div className="space-y-2">
-                  {result.priorityChanges.map((pc, i) => (
+                  {result.reprioritizations.map((rp, i) => (
                     <div key={i} className="bg-gray-800 rounded-lg p-4 flex items-center justify-between">
                       <div>
-                        <span className="font-mono text-sm text-blue-300">{pc.issueKey}</span>
-                        <span className="text-gray-400 mx-2">{pc.currentPriority}</span>
+                        <span className="font-mono text-sm text-blue-300">{rp.issueKey}</span>
+                        <span className="text-gray-400 mx-2">{rp.currentPriority}</span>
                         <span className="text-gray-500 mx-1">&rarr;</span>
-                        <span className="text-white mx-2">{pc.suggestedPriority}</span>
+                        <span className="text-white mx-2">{rp.suggestedPriority}</span>
                       </div>
-                      <p className="text-sm text-gray-400">{pc.reason}</p>
+                      <p className="text-sm text-gray-400">{rp.reason}</p>
                     </div>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* Summary */}
+            {/* Overall Assessment */}
             <div>
-              <h2 className="text-lg font-semibold mb-3">Summary</h2>
+              <h2 className="text-lg font-semibold mb-3">Overall Assessment</h2>
               <div className="bg-gray-800 rounded-lg p-4 text-gray-300 whitespace-pre-wrap">
-                {result.summary}
+                {result.overallAssessment}
               </div>
             </div>
           </div>

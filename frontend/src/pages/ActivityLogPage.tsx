@@ -161,6 +161,9 @@ function ActivityLogRow({ entry, project }: { entry: ActivityLogEntry; project?:
               System
             </span>
           )}
+          {entry.userName && (
+            <span className="text-[10px] text-gray-500">by {entry.userName}</span>
+          )}
           <span className="text-[10px] text-gray-600 ml-auto shrink-0">{formatTime(entry.timestamp)}</span>
         </div>
         <p className="text-xs text-gray-300 mt-0.5">{entry.message}</p>

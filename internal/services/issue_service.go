@@ -119,16 +119,17 @@ func (s *IssueService) Create(ctx context.Context, projectID string, req *models
 		}
 
 		issue = models.Issue{
-			ProjectID:   pid,
-			IssueKey:    fmt.Sprintf("%s-%04d", project.Code, counter),
-			Number:      counter,
-			Title:       req.Title,
-			Description: req.Description,
-			Type:        req.Type,
-			Priority:    req.Priority,
-			Status:      "open",
-			Source:      req.Source,
-			CreatedBy:   req.CreatedBy,
+			ProjectID:        pid,
+			IssueKey:         fmt.Sprintf("%s-%04d", project.Code, counter),
+			Number:           counter,
+			Title:            req.Title,
+			Description:      req.Description,
+			Type:             req.Type,
+			Priority:         req.Priority,
+			Status:           "open",
+			Source:           req.Source,
+			SourceFeedbackID: req.SourceFeedbackID,
+			CreatedBy:        req.CreatedBy,
 			DueDate:     dueDate,
 			ReproSteps:  req.ReproSteps,
 			Attachments: attachments,
@@ -288,6 +289,20 @@ func (s *IssueService) Restore(ctx context.Context, issueKey string) error {
 	}
 	if result.MatchedCount == 0 {
 		return fmt.Errorf("issue not found: %s", issueKey)
+	}
+	return nil
+}
+
+// DeleteAllByProject permanently removes all issues (archived or not) for a project.
+// Used for cascade deletion when a project is permanently deleted.
+func (s *IssueService) DeleteAllByProject(ctx context.Context, projectID string) error {
+	pid, err := bson.ObjectIDFromHex(projectID)
+	if err != nil {
+		return fmt.Errorf("invalid project ID: %w", err)
+	}
+	_, err = s.collection().DeleteMany(ctx, bson.D{{Key: "projectId", Value: pid}})
+	if err != nil {
+		return fmt.Errorf("delete issues for project: %w", err)
 	}
 	return nil
 }

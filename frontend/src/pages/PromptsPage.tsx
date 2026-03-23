@@ -1,15 +1,18 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listAllPrompts, createPrompt, createGlobalPrompt, updatePrompt, deletePrompt, listProjects } from '../api/client'
+import { useAuth } from '../contexts/AuthContext'
 import type { Prompt, Project } from '../types'
 
 export default function PromptsPage() {
   const queryClient = useQueryClient()
+  const { currentUser } = useAuth()
   const [editing, setEditing] = useState<Prompt | null>(null)
   const [creating, setCreating] = useState(false)
   const [formName, setFormName] = useState('')
   const [formBody, setFormBody] = useState('')
   const [formProjectId, setFormProjectId] = useState('*') // default to global
+  const [formShared, setFormShared] = useState(false)
   const [filterProjectId, setFilterProjectId] = useState('')
 
   const { data: prompts = [], isLoading } = useQuery({
@@ -28,9 +31,9 @@ export default function PromptsPage() {
   const createMut = useMutation({
     mutationFn: () => {
       if (formProjectId === '*') {
-        return createGlobalPrompt({ name: formName, body: formBody })
+        return createGlobalPrompt({ name: formName, body: formBody, shared: formShared })
       }
-      return createPrompt(formProjectId, { name: formName, body: formBody })
+      return createPrompt(formProjectId, { name: formName, body: formBody, shared: formShared })
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['prompts'] })
@@ -39,7 +42,7 @@ export default function PromptsPage() {
   })
 
   const updateMut = useMutation({
-    mutationFn: () => updatePrompt(editing!.id, { name: formName, body: formBody }),
+    mutationFn: () => updatePrompt(editing!.id, { name: formName, body: formBody, shared: formShared }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['prompts'] })
       resetForm()
@@ -57,6 +60,7 @@ export default function PromptsPage() {
     setFormName('')
     setFormBody('')
     setFormProjectId('*')
+    setFormShared(false)
   }
 
   const startEdit = (p: Prompt) => {
@@ -64,6 +68,7 @@ export default function PromptsPage() {
     setCreating(false)
     setFormName(p.name)
     setFormBody(p.body)
+    setFormShared(p.shared)
     setFormProjectId(p.global ? '*' : (p.projectId || '*'))
   }
 
@@ -146,6 +151,18 @@ export default function PromptsPage() {
               rows={8}
               className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white placeholder-gray-500 font-mono focus:outline-none focus:border-indigo-500 resize-y"
             />
+            <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formShared}
+                onChange={e => setFormShared(e.target.checked)}
+                className="rounded bg-gray-900 border-gray-700 text-indigo-600 focus:ring-indigo-500"
+              />
+              Shared (visible to all users)
+              <span className="text-[10px] text-gray-600">
+                {formShared ? '(unchecked = personal, only you can see it)' : '(personal — only you)'}
+              </span>
+            </label>
             <div className="flex gap-2">
               <button
                 onClick={() => editing ? updateMut.mutate() : createMut.mutate()}
@@ -206,9 +223,20 @@ export default function PromptsPage() {
                           {project.code}
                         </span>
                       ) : null}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                        prompt.shared
+                          ? 'bg-green-500/20 text-green-400'
+                          : 'bg-gray-700/50 text-gray-500'
+                      }`}>
+                        {prompt.shared ? 'Shared' : 'Personal'}
+                      </span>
+                      {prompt.creatorName && (
+                        <span className="text-[10px] text-gray-500">by {prompt.creatorName}</span>
+                      )}
                     </div>
                     <p className="text-xs text-gray-500 font-mono line-clamp-2 whitespace-pre-wrap">{prompt.body}</p>
                   </div>
+                  {canEditPrompt(prompt, currentUser) && (
                   <div className="flex items-center gap-1 shrink-0">
                     <button
                       onClick={() => startEdit(prompt)}
@@ -233,6 +261,7 @@ export default function PromptsPage() {
                       </svg>
                     </button>
                   </div>
+                  )}
                 </div>
               </div>
             )
@@ -241,4 +270,11 @@ export default function PromptsPage() {
       )}
     </div>
   )
+}
+
+function canEditPrompt(prompt: Prompt, user: { id: string; globalRole: string } | null): boolean {
+  if (!user) return false
+  if (user.globalRole === 'super_admin') return true
+  if (!prompt.createdBy) return true // legacy prompt (no owner) — anyone can edit
+  return prompt.createdBy === user.id
 }

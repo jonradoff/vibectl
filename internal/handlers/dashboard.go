@@ -14,6 +14,7 @@ type DashboardHandler struct {
 	issueService    *services.IssueService
 	sessionService  *services.SessionService
 	feedbackService *services.FeedbackService
+	memberService   *services.ProjectMemberService
 }
 
 func NewDashboardHandler(
@@ -21,12 +22,14 @@ func NewDashboardHandler(
 	is *services.IssueService,
 	ss *services.SessionService,
 	fs *services.FeedbackService,
+	ms *services.ProjectMemberService,
 ) *DashboardHandler {
 	return &DashboardHandler{
 		projectService:  ps,
 		issueService:    is,
 		sessionService:  ss,
 		feedbackService: fs,
+		memberService:   ms,
 	}
 }
 
@@ -41,6 +44,7 @@ func (h *DashboardHandler) Routes() chi.Router {
 // counts, priority breakdowns, and pending feedback count.
 func (h *DashboardHandler) GlobalDashboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	currentUser := middleware.GetCurrentUser(r)
 
 	projects, err := h.projectService.List(ctx)
 	if err != nil {
@@ -79,12 +83,24 @@ func (h *DashboardHandler) GlobalDashboard(w http.ResponseWriter, r *http.Reques
 			lastSession = session
 		}
 
+		// Determine current user's effective role for this project.
+		currentUserRole := ""
+		if currentUser != nil {
+			if currentUser.GlobalRole == models.GlobalRoleSuperAdmin {
+				currentUserRole = string(models.ProjectRoleOwner)
+			} else if h.memberService != nil {
+				role, _ := h.memberService.GetRole(ctx, project.ID, currentUser.ID)
+				currentUserRole = string(role)
+			}
+		}
+
 		summaries = append(summaries, models.ProjectSummary{
 			Project:          project,
 			OpenIssueCount:   openCount,
 			IssuesByPriority: issuesByPriority,
 			IssuesByStatus:   issuesByStatus,
 			LastSession:      lastSession,
+			CurrentUserRole:  currentUserRole,
 		})
 	}
 

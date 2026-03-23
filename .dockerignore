@@ -1,0 +1,8 @@
+frontend/node_modules
+frontend/.vite
+.git
+*.log
+.env
+.env.*
+.env.client
+vibectl-server

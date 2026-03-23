@@ -2,9 +2,6 @@ package services
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -24,9 +21,8 @@ type adminDoc struct {
 	UpdatedAt      time.Time `bson:"updatedAt"`
 }
 
-// AdminService manages the single admin account stored in MongoDB.
-// The password is bcrypt-hashed. Session tokens are stored as SHA-256 hashes —
-// the raw token is only ever held in memory and returned to the client once.
+// AdminService manages the legacy single-admin account for CLI backward compatibility.
+// New code should use UserService + AuthSessionService instead.
 type AdminService struct {
 	collection *mongo.Collection
 }
@@ -35,23 +31,24 @@ func NewAdminService(db *mongo.Database) *AdminService {
 	return &AdminService{collection: db.Collection("admin")}
 }
 
-// hashToken returns the hex-encoded SHA-256 of a raw token string.
-func hashToken(rawToken string) string {
-	h := sha256.Sum256([]byte(rawToken))
-	return hex.EncodeToString(h[:])
+// GetPasswordHash returns the stored bcrypt hash from the legacy admin doc, or "" if none.
+// Used during startup migration to seed the users collection.
+func (s *AdminService) GetPasswordHash(ctx context.Context) (string, error) {
+	var doc adminDoc
+	err := s.collection.FindOne(ctx, bson.D{{Key: "_id", Value: adminDocID}}).Decode(&doc)
+	if err == mongo.ErrNoDocuments {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("check admin: %w", err)
+	}
+	return doc.PasswordHash, nil
 }
 
 // HasPassword returns true if an admin password has been configured.
 func (s *AdminService) HasPassword(ctx context.Context) (bool, error) {
-	var doc adminDoc
-	err := s.collection.FindOne(ctx, bson.D{{Key: "_id", Value: adminDocID}}).Decode(&doc)
-	if err == mongo.ErrNoDocuments {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("check admin: %w", err)
-	}
-	return doc.PasswordHash != "", nil
+	hash, err := s.GetPasswordHash(ctx)
+	return hash != "", err
 }
 
 // SetPassword hashes a new password and stores it, generating a fresh session token.
@@ -76,7 +73,7 @@ func (s *AdminService) SetPassword(ctx context.Context, currentPassword, newPass
 	if err != nil {
 		return "", fmt.Errorf("hash password: %w", err)
 	}
-	rawToken, err := generateAdminToken()
+	rawToken, err := generateToken()
 	if err != nil {
 		return "", fmt.Errorf("generate token: %w", err)
 	}
@@ -115,7 +112,7 @@ func (s *AdminService) Login(ctx context.Context, password string) (string, erro
 	}
 
 	// Rotate token on each successful login.
-	rawToken, err := generateAdminToken()
+	rawToken, err := generateToken()
 	if err != nil {
 		return "", fmt.Errorf("generate token: %w", err)
 	}
@@ -135,7 +132,6 @@ func (s *AdminService) Login(ctx context.Context, password string) (string, erro
 }
 
 // VerifyToken checks whether the given Bearer token is valid and unexpired.
-// The incoming token is hashed before comparison — the DB never holds plaintext tokens.
 func (s *AdminService) VerifyToken(ctx context.Context, token string) (bool, error) {
 	if token == "" {
 		return false, nil
@@ -152,15 +148,7 @@ func (s *AdminService) VerifyToken(ctx context.Context, token string) (bool, err
 		return false, nil
 	}
 	if !doc.TokenCreatedAt.IsZero() && time.Since(doc.TokenCreatedAt) > 30*24*time.Hour {
-		return false, nil // token expired
+		return false, nil
 	}
 	return true, nil
-}
-
-func generateAdminToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
 }

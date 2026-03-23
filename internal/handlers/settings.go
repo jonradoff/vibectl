@@ -13,11 +13,13 @@ import (
 // SettingsHandler handles HTTP requests for application settings.
 type SettingsHandler struct {
 	settingsService *services.SettingsService
+	dbName          string
+	dbUser          string
 }
 
 // NewSettingsHandler creates a new SettingsHandler.
-func NewSettingsHandler(ss *services.SettingsService) *SettingsHandler {
-	return &SettingsHandler{settingsService: ss}
+func NewSettingsHandler(ss *services.SettingsService, dbName, dbUser string) *SettingsHandler {
+	return &SettingsHandler{settingsService: ss, dbName: dbName, dbUser: dbUser}
 }
 
 // Routes returns the chi.Router for settings endpoints.
@@ -29,14 +31,19 @@ func (h *SettingsHandler) Routes() chi.Router {
 	return r
 }
 
-// GetSettings returns the current application settings.
+// GetSettings returns the current application settings plus system info.
 func (h *SettingsHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	settings, err := h.settingsService.Get(r.Context())
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "GET_SETTINGS_FAILED")
 		return
 	}
-	middleware.WriteJSON(w, http.StatusOK, settings)
+	type response struct {
+		*models.Settings
+		DBName string `json:"dbName"`
+		DBUser string `json:"dbUser"`
+	}
+	middleware.WriteJSON(w, http.StatusOK, response{Settings: settings, DBName: h.dbName, DBUser: h.dbUser})
 }
 
 // UpdateSettings updates application settings.

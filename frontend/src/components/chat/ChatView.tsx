@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { listProjectPrompts, ensureDir } from '../../api/client'
+import { listProjectPrompts, ensureDir, getClaudeAuthStatus, getStoredToken, submitClaudeLoginCode, submitClaudeTokenDirect } from '../../api/client'
 import { notifyServerRestarting } from '../shared/RebuildOverlay'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -117,6 +117,25 @@ export default function ChatView({
   const [showSlashCommands, setShowSlashCommands] = useState(false)
   const [showPromptPicker, setShowPromptPicker] = useState(false)
   const [isReconnecting, setIsReconnecting] = useState(false)
+  const [exitError, setExitError] = useState<{ exitCode: number; stderr: string[] } | null>(null)
+  const [showLoginModal, setShowLoginModal] = useState(false)
+
+  // Proactively check Claude Code auth status on mount
+  useEffect(() => {
+    let cancelled = false
+    getClaudeAuthStatus().then((status) => {
+      if (cancelled) return
+      if (!status.loggedIn) {
+        setExitError({ exitCode: 1, stderr: ['Not logged in'] })
+        setStatus('claude_error')
+        onStatusChange?.('claude_error')
+      }
+    }).catch(() => {
+      // Ignore — will be caught later when session starts
+    })
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const { data: savedPrompts = [] } = useQuery({
     queryKey: ['prompts', projectId],
@@ -203,7 +222,7 @@ export default function ChatView({
   useEffect(() => {
     let aborted = false
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.hostname}:4380/ws/chat`
+    const wsUrl = `${protocol}//${window.location.host}/ws/chat`
 
     const connect = () => {
       if (aborted) return
@@ -224,6 +243,7 @@ export default function ChatView({
         setIsStreaming(false)
         setCostUsd(null)
         setContextPct(null)
+        setExitError(null)
 
         // Send launch message
         ws.send(JSON.stringify({
@@ -283,6 +303,7 @@ export default function ChatView({
           // Replay is done — jump to end instantly
           isReplayingRef.current = false
           setIsReconnecting(false)
+          setExitError(null)
           setTimeout(() => scrollToBottom(true), 0)
         }
         if (s === 'exited') {
@@ -301,7 +322,16 @@ export default function ChatView({
           setStatus('connected')
           onStatusChange?.('connected')
         }
-        // For non-init system events, don't change the status — keep whatever it currently is
+        // Check for "not logged in" in system messages (message field or subtype)
+        const sysMsg = ((data.message as string) || (data.subtype as string) || '').toLowerCase()
+        if (sysMsg.includes('not logged in') || sysMsg.includes('please run /login')) {
+          setExitError({ exitCode: 1, stderr: [(data.message as string) || 'Not logged in'] })
+          setIsStreaming(false)
+          setAwaitingResult(false)
+          setStatus('claude_error')
+          onStatusChange?.('claude_error')
+          onActivityChange?.(false)
+        }
         break
       }
 
@@ -423,12 +453,21 @@ export default function ChatView({
         // Handle error results from Claude Code (e.g. auth failures)
         if (data.is_error) {
           const resultMsg = data.result as string | undefined
+          const lowerResult = (resultMsg || '').toLowerCase()
+          const isNotLoggedInResult = lowerResult.includes('not logged in') || lowerResult.includes('please run /login') || lowerResult.includes('run claude login')
           const isAuthError = typeof resultMsg === 'string' && (
             resultMsg.includes('OAuth token') ||
             resultMsg.includes('authentication_error') ||
             resultMsg.includes('401')
           )
-          if (isAuthError) {
+          if (isNotLoggedInResult) {
+            setExitError({ exitCode: 1, stderr: [resultMsg || 'Not logged in'] })
+            setIsStreaming(false)
+            setAwaitingResult(false)
+            setStatus('claude_error')
+            onStatusChange?.('claude_error')
+            onActivityChange?.(false)
+          } else if (isAuthError) {
             setIsReconnecting(true)
             setMessages((prev) => [...prev, {
               role: 'assistant',
@@ -476,7 +515,18 @@ export default function ChatView({
           errorMessage.includes('authentication_error') ||
           (errorMessage.includes('401') && errorMessage.includes('auth'))
 
-        if (isAuthError) {
+        const lowerMsg = errorMessage.toLowerCase()
+        const isNotLoggedInError = lowerMsg.includes('not logged in') || lowerMsg.includes('please run /login') || lowerMsg.includes('run claude login')
+
+        if (isNotLoggedInError) {
+          // Show the login button UI
+          setExitError({ exitCode: 1, stderr: [errorMessage] })
+          setIsStreaming(false)
+          setAwaitingResult(false)
+          setStatus('claude_error')
+          onStatusChange?.('claude_error')
+          onActivityChange?.(false)
+        } else if (isAuthError) {
           setIsReconnecting(true)
           setIsStreaming(false)
           setAwaitingResult(false)
@@ -499,6 +549,18 @@ export default function ChatView({
             }])
           }
         }
+        break
+      }
+
+      case 'system_error': {
+        // Process exited with non-zero code or stderr output — show diagnostic info.
+        const d = data.data as { exitCode?: number; stderr?: string[] }
+        setExitError({ exitCode: d.exitCode ?? -1, stderr: d.stderr ?? [] })
+        setIsStreaming(false)
+        setAwaitingResult(false)
+        setStatus('claude_error')
+        onStatusChange?.('claude_error')
+        onActivityChange?.(false)
         break
       }
 
@@ -721,9 +783,9 @@ export default function ChatView({
 
       {/* Messages area */}
       <div ref={messagesContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-3 py-2 space-y-3 min-h-0">
-        {messages.length === 0 && !isStreaming && (
+        {messages.length === 0 && !isStreaming && !exitError && (
           <div className="flex items-center justify-center h-full text-gray-600 text-sm">
-            {isConnected ? 'Send a message to start' : 'Connecting...'}
+            {isConnected ? 'Send a message to start' : status === 'exited' ? 'Session ended' : 'Connecting...'}
           </div>
         )}
 
@@ -750,6 +812,50 @@ export default function ChatView({
             Thinking...
           </div>
         )}
+
+        {/* Exit error panel — shown when claude process exited with error */}
+        {exitError && (() => {
+          const allText = exitError.stderr.join(' ').toLowerCase()
+          const isNotLoggedIn = allText.includes('not logged in') || allText.includes('please run /login') || allText.includes('run claude login')
+          return (
+            <div className="rounded-lg bg-red-950/60 border border-red-800/60 p-3 space-y-2 shrink-0">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <svg className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                  </svg>
+                  <span className="text-xs font-medium text-red-400">
+                    {isNotLoggedIn ? 'Claude Code is not logged in' : `Claude exited${exitError.exitCode !== 0 ? ` (code ${exitError.exitCode})` : ''}`}
+                  </span>
+                </div>
+                <button onClick={() => setExitError(null)} className="text-gray-600 hover:text-gray-400 text-[10px] shrink-0">dismiss</button>
+              </div>
+              {!isNotLoggedIn && exitError.stderr.length > 0 && (
+                <div className="rounded bg-black/50 px-2.5 py-2 max-h-36 overflow-y-auto">
+                  {exitError.stderr.map((line, i) => (
+                    <div key={i} className="font-mono text-[11px] text-red-300 leading-relaxed whitespace-pre-wrap">{line}</div>
+                  ))}
+                </div>
+              )}
+              {isNotLoggedIn ? (
+                <div className="flex items-center gap-2">
+                  <p className="text-[10px] text-gray-400 flex-1">Authenticate Claude Code on the server to enable chat sessions.</p>
+                  <button
+                    onClick={() => setShowLoginModal(true)}
+                    className="shrink-0 rounded bg-indigo-600 hover:bg-indigo-500 px-2.5 py-1 text-xs font-medium text-white transition-colors"
+                  >
+                    Login to Claude
+                  </button>
+                </div>
+              ) : (
+                <p className="text-[10px] text-gray-500">
+                  Common causes: missing <span className="font-mono text-gray-400">ANTHROPIC_API_KEY</span>, stale OAuth token, or Claude Code not installed. Check server logs for details.
+                </p>
+              )}
+            </div>
+          )
+        })()}
+        {showLoginModal && <ClaudeLoginModal onClose={() => setShowLoginModal(false)} />}
 
         {isReconnecting && (
           <div className="flex items-center gap-2 text-amber-400 text-xs px-2 py-1.5 rounded bg-amber-900/20 border border-amber-700/30">
@@ -811,6 +917,7 @@ export default function ChatView({
                     <div className="text-xs text-white font-medium truncate flex items-center gap-1.5">
                       {p.name}
                       {p.global && <span className="text-[9px] text-indigo-300 bg-indigo-600/20 px-1 rounded">*</span>}
+                      {p.creatorName && <span className="text-[9px] text-gray-500">by {p.creatorName}</span>}
                     </div>
                     <div className="text-[10px] text-gray-500 truncate mt-0.5">{p.body}</div>
                   </button>
@@ -1280,8 +1387,6 @@ interface DiffLine {
 function computeDiffLines(oldStr: string, newStr: string): DiffLine[] {
   const oldLines = oldStr.split('\n')
   const newLines = newStr.split('\n')
-  const lines: DiffLine[] = []
-
   // Simple LCS-based diff
   const m = oldLines.length
   const n = newLines.length
@@ -1456,4 +1561,278 @@ function getToolSummary(name: string, input: Record<string, unknown>): string {
   if (name === 'Grep' && input.pattern) return String(input.pattern)
   if (name === 'Agent' && input.description) return String(input.description)
   return ''
+}
+
+const CODE_TTL_SECONDS = 55
+
+function ClaudeLoginModal({ onClose }: { onClose: () => void }) {
+  const [tab, setTab] = useState<'oauth' | 'direct'>('oauth')
+  const [loading, setLoading] = useState(true)
+  const [authUrl, setAuthUrl] = useState<string | null>(null)
+  const [pkceParams, setPkceParams] = useState<{ codeVerifier: string; clientId: string; redirectUri: string; state: string } | null>(null)
+  const [codeInput, setCodeInput] = useState('')
+  const [directToken, setDirectToken] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const [done, setDone] = useState(false)
+  const [countdown, setCountdown] = useState(CODE_TTL_SECONDS)
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const startSession = (token: string | null) => {
+    setLoading(true)
+    setError('')
+    fetch('/api/v1/admin/claude-login', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      .then(r => r.json())
+      .then((data: { authUrl: string; codeVerifier: string; clientId: string; redirectUri: string; state: string }) => {
+        setAuthUrl(data.authUrl)
+        setPkceParams({ codeVerifier: data.codeVerifier, clientId: data.clientId, redirectUri: data.redirectUri, state: data.state })
+        setLoading(false)
+        setCountdown(CODE_TTL_SECONDS)
+        window.open(data.authUrl, '_blank')
+      })
+      .catch(() => {
+        setError('Failed to start login flow')
+        setLoading(false)
+      })
+  }
+
+  // Fetch PKCE params from backend and open OAuth URL
+  useEffect(() => {
+    startSession(getStoredToken())
+  }, [])
+
+  // Countdown timer — warns user when the auth code is about to expire
+  useEffect(() => {
+    if (loading || done) return
+    if (countdownRef.current) clearInterval(countdownRef.current)
+    countdownRef.current = setInterval(() => {
+      setCountdown(prev => {
+        if (prev <= 1) {
+          // Code expired — auto-refresh
+          clearInterval(countdownRef.current!)
+          setCodeInput('')
+          startSession(getStoredToken())
+          return CODE_TTL_SECONDS
+        }
+        return prev - 1
+      })
+    }, 1000)
+    return () => { if (countdownRef.current) clearInterval(countdownRef.current) }
+  }, [loading, done])
+
+  // Extract the authorization code from either a raw code string or a full callback URL.
+  const extractCode = (input: string): string => {
+    try {
+      const u = new URL(input.trim())
+      const extracted = u.searchParams.get('code')
+      if (extracted) return extracted
+    } catch {
+      // Not a URL, use as-is
+    }
+    return input.trim()
+  }
+
+  // Core exchange logic: try client-side first (no server round-trip), fall back to server-side.
+  const submitCode = async (rawInput: string) => {
+    if (!pkceParams) return
+    const code = extractCode(rawInput)
+
+    let stored = false
+    try {
+      // Attempt client-side token exchange directly with platform.claude.com.
+      // This avoids the server-to-server round-trip. Will fail silently if CORS blocks it.
+      const resp = await fetch('https://platform.claude.com/v1/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: pkceParams.redirectUri,
+          client_id: pkceParams.clientId,
+          code_verifier: pkceParams.codeVerifier,
+        }),
+      })
+      if (resp.ok) {
+        const data = await resp.json()
+        if (data.access_token) {
+          await submitClaudeTokenDirect(data.access_token)
+          stored = true
+        }
+      }
+    } catch {
+      // CORS block or network error — fall through to server-side
+    }
+
+    if (!stored) {
+      await submitClaudeLoginCode(code, pkceParams.codeVerifier, pkceParams.clientId, pkceParams.redirectUri, pkceParams.state)
+    }
+  }
+
+  const handleSubmitCode = async () => {
+    if (!pkceParams || !codeInput.trim()) return
+    setSubmitting(true)
+    setError('')
+    try {
+      await submitCode(codeInput.trim())
+      setDone(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to complete login')
+      setSubmitting(false)
+    }
+  }
+
+  const handlePasteCode = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pasted = e.clipboardData.getData('text').trim()
+    if (!pasted) return
+    setCodeInput(pasted)
+    // Auto-submit immediately on paste — codes expire in ~60s
+    setTimeout(() => {
+      if (!pkceParams) return
+      setSubmitting(true)
+      setError('')
+      submitCode(pasted)
+        .then(() => setDone(true))
+        .catch(err => {
+          setError(err instanceof Error ? err.message : 'Failed to complete login')
+          setSubmitting(false)
+        })
+    }, 0)
+    e.preventDefault()
+  }
+
+  const handleSubmitDirect = async () => {
+    if (!directToken.trim()) return
+    setSubmitting(true)
+    setError('')
+    try {
+      await submitClaudeTokenDirect(directToken.trim())
+      setDone(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to store token')
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={onClose}>
+      <div className="w-full max-w-md bg-gray-800 rounded-xl border border-gray-700 shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-gray-700 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-white">Login to Claude Code</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Tabs */}
+        {!done && (
+          <div className="flex border-b border-gray-700">
+            <button
+              onClick={() => { setTab('oauth'); setError('') }}
+              className={`flex-1 py-2 text-xs font-medium transition-colors ${tab === 'oauth' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-gray-500 hover:text-gray-300'}`}
+            >
+              OAuth Login
+            </button>
+            <button
+              onClick={() => { setTab('direct'); setError('') }}
+              className={`flex-1 py-2 text-xs font-medium transition-colors ${tab === 'direct' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-gray-500 hover:text-gray-300'}`}
+            >
+              Paste Token
+            </button>
+          </div>
+        )}
+
+        <div className="px-5 py-4 space-y-3">
+          {done ? (
+            <p className="text-sm text-green-400 font-medium">
+              Authentication successful! Close this dialog to start using Claude Code.
+            </p>
+          ) : tab === 'oauth' ? (
+            <>
+              {loading && (
+                <div className="flex items-center gap-2 text-gray-400 text-sm">
+                  <div className="w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                  Starting login process…
+                </div>
+              )}
+              {!loading && authUrl && (
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-3">
+                    <p className="text-xs text-indigo-300 font-medium mb-1">Step 1: Authenticate in the browser tab that just opened</p>
+                    <p className="text-xs text-indigo-200/70">
+                      If it didn't open, <a href={authUrl} target="_blank" rel="noopener noreferrer" className="underline hover:text-indigo-200">click here</a>.
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-xs text-indigo-300 font-medium">Step 2: Paste the code shown after login</p>
+                      <span className={`text-xs font-mono font-semibold ${countdown <= 15 ? 'text-red-400' : countdown <= 30 ? 'text-yellow-400' : 'text-indigo-400'}`}>
+                        {countdown}s
+                      </span>
+                    </div>
+                    <p className="text-xs text-indigo-200/60 mb-2">The code auto-submits when pasted — move fast, codes expire in ~60s.</p>
+                    {countdown <= 15 && (
+                      <p className="text-xs text-yellow-400 mb-2">Expiring soon — will auto-refresh if time runs out.</p>
+                    )}
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={codeInput}
+                        onChange={(e) => setCodeInput(e.target.value)}
+                        onPaste={handlePasteCode}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSubmitCode()}
+                        placeholder="Paste authorization code here"
+                        autoFocus
+                        className="flex-1 bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      />
+                      <button
+                        onClick={handleSubmitCode}
+                        disabled={submitting || !codeInput.trim()}
+                        className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium px-4 py-2 rounded-lg transition-colors shrink-0"
+                      >
+                        {submitting ? 'Signing in…' : 'Submit'}
+                      </button>
+                    </div>
+                    {error && <p className="text-red-400 text-xs mt-1">{error}</p>}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-gray-600 bg-gray-700/40 p-3">
+                <p className="text-xs text-gray-300 font-medium mb-1">Paste your Claude OAuth token</p>
+                <p className="text-xs text-gray-400 mb-3">
+                  On a machine with Claude Code installed, run:<br />
+                  <code className="text-indigo-300 font-mono">claude auth status --json</code><br />
+                  and copy the <code className="text-indigo-300 font-mono">oauthToken</code> value (<span className="font-mono">sk-ant-oat01-…</span>).
+                </p>
+                <textarea
+                  value={directToken}
+                  onChange={(e) => setDirectToken(e.target.value)}
+                  placeholder="sk-ant-oat01-…"
+                  rows={3}
+                  className="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-white text-xs font-mono placeholder-gray-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 resize-none"
+                />
+                <button
+                  onClick={handleSubmitDirect}
+                  disabled={submitting || !directToken.trim()}
+                  className="mt-2 w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium py-2 rounded-lg transition-colors"
+                >
+                  {submitting ? 'Saving…' : 'Save Token'}
+                </button>
+                {error && <p className="text-red-400 text-xs mt-1">{error}</p>}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="px-5 pb-4">
+          <button onClick={onClose} className="w-full rounded-lg bg-gray-700 hover:bg-gray-600 py-2 text-sm text-gray-300 transition-colors">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }

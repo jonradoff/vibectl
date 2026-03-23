@@ -5,6 +5,7 @@ export interface ProjectStatus {
   terminalStatus: string
   isActive: boolean
   isWaiting?: boolean
+  isError?: boolean
   healthUp?: boolean   // all endpoints up
   healthDown?: boolean // all endpoints down
   healthHasResults?: boolean
@@ -58,6 +59,7 @@ export function ActiveProjectProvider({ children }: { children: ReactNode }) {
         existing.terminalStatus === status.terminalStatus &&
         existing.isActive === status.isActive &&
         existing.isWaiting === status.isWaiting &&
+        existing.isError === status.isError &&
         existing.healthUp === status.healthUp &&
         existing.healthDown === status.healthDown &&
         existing.healthHasResults === status.healthHasResults

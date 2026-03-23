@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -218,7 +219,11 @@ func (h *FilesystemHandler) WriteFile(w http.ResponseWriter, r *http.Request) {
 		relPath := r.URL.Query().Get("path")
 		projectID := chi.URLParam(r, "id")
 		if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
-			h.activityLogService.LogAsync("file_edit", "Edited file: "+relPath, &oid, "", nil)
+			if u := middleware.GetCurrentUser(r); u != nil {
+				h.activityLogService.LogAsyncWithUser("file_edit", "Edited file: "+relPath, &oid, &u.ID, u.DisplayName, "", nil)
+			} else {
+				h.activityLogService.LogAsync("file_edit", "Edited file: "+relPath, &oid, "", nil)
+			}
 		}
 	}
 
@@ -282,5 +287,226 @@ func (h *FilesystemHandler) CheckDir(w http.ResponseWriter, r *http.Request) {
 	}
 
 	middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{"exists": info.IsDir()})
+}
+
+// DetectGitRemote checks if a directory has a git remote and returns its URL.
+// Query param: ?path=/absolute/path
+func (h *FilesystemHandler) DetectGitRemote(w http.ResponseWriter, r *http.Request) {
+	dirPath := r.URL.Query().Get("path")
+	if dirPath == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "path query param is required", "INVALID_PATH")
+		return
+	}
+
+	absPath, err := filepath.Abs(dirPath)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid path", "INVALID_PATH")
+		return
+	}
+
+	// Check directory exists
+	if _, err := os.Stat(absPath); err != nil {
+		middleware.WriteJSON(w, http.StatusOK, map[string]string{"remoteUrl": ""})
+		return
+	}
+
+	cmd := exec.Command("git", "-C", absPath, "remote", "get-url", "origin")
+	out, err := cmd.Output()
+	if err != nil {
+		middleware.WriteJSON(w, http.StatusOK, map[string]string{"remoteUrl": ""})
+		return
+	}
+	remoteURL := strings.TrimSpace(string(out))
+	middleware.WriteJSON(w, http.StatusOK, map[string]string{"remoteUrl": remoteURL})
+}
+
+// DetectDeploySh looks for a deploy.sh in the given directory.
+// Query param: ?path=/absolute/path
+func (h *FilesystemHandler) DetectDeploySh(w http.ResponseWriter, r *http.Request) {
+	dirPath := r.URL.Query().Get("path")
+	if dirPath == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "path query param is required", "INVALID_PATH")
+		return
+	}
+	absPath, err := filepath.Abs(dirPath)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid path", "INVALID_PATH")
+		return
+	}
+
+	shPath := filepath.Join(absPath, "deploy.sh")
+	info, err := os.Stat(shPath)
+	if err != nil || info.IsDir() {
+		middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{"found": false})
+		return
+	}
+
+	f, err := os.Open(shPath)
+	if err != nil {
+		middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{"found": true, "preview": ""})
+		return
+	}
+	defer f.Close()
+	buf := make([]byte, 4096)
+	n, _ := f.Read(buf)
+	preview := strings.TrimSpace(string(buf[:n]))
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"found":   true,
+		"preview": preview,
+		"command": "./deploy.sh",
+	})
+}
+
+// DetectProjectScripts checks for deploy.sh, start.sh, and fly.toml in one call.
+// Returns suggested DeploymentConfig fields. Query param: ?path=/absolute/path
+func (h *FilesystemHandler) DetectProjectScripts(w http.ResponseWriter, r *http.Request) {
+	dirPath := r.URL.Query().Get("path")
+	if dirPath == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "path query param is required", "INVALID_PATH")
+		return
+	}
+	absPath, err := filepath.Abs(dirPath)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid path", "INVALID_PATH")
+		return
+	}
+
+	result := map[string]interface{}{
+		"deployShFound": false,
+		"startShFound":  false,
+		"flyTomlFound":  false,
+	}
+
+	// deploy.sh → deployProd
+	if info, err := os.Stat(filepath.Join(absPath, "deploy.sh")); err == nil && !info.IsDir() {
+		result["deployShFound"] = true
+		result["deployProd"] = "./deploy.sh"
+	}
+
+	// start.sh → startDev
+	if info, err := os.Stat(filepath.Join(absPath, "start.sh")); err == nil && !info.IsDir() {
+		result["startShFound"] = true
+		result["startDev"] = "./start.sh"
+	}
+
+	// fly.toml → startProd, restartProd, viewLogs (and optionally overrides deployProd)
+	if data, err := os.ReadFile(filepath.Join(absPath, "fly.toml")); err == nil {
+		appName := ""
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "app") {
+				parts := strings.SplitN(line, "=", 2)
+				if len(parts) == 2 {
+					appName = strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+				}
+				break
+			}
+		}
+		if appName != "" {
+			result["flyTomlFound"] = true
+			result["flyAppName"] = appName
+			result["startProd"] = "fly apps start " + appName
+			result["restartProd"] = "fly apps restart " + appName
+			result["viewLogs"] = "fly logs -a " + appName
+			// Only set deployProd from fly.toml if deploy.sh wasn't found
+			if _, ok := result["deployProd"]; !ok {
+				result["deployProd"] = "fly deploy"
+			}
+		}
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, result)
+}
+
+// DetectStartSh looks for a start.sh in the given directory.
+// Query param: ?path=/absolute/path
+func (h *FilesystemHandler) DetectStartSh(w http.ResponseWriter, r *http.Request) {
+	dirPath := r.URL.Query().Get("path")
+	if dirPath == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "path query param is required", "INVALID_PATH")
+		return
+	}
+	absPath, err := filepath.Abs(dirPath)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid path", "INVALID_PATH")
+		return
+	}
+
+	shPath := filepath.Join(absPath, "start.sh")
+	info, err := os.Stat(shPath)
+	if err != nil || info.IsDir() {
+		middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{"found": false})
+		return
+	}
+
+	// Read first 4KB to show a preview and look for hints
+	f, err := os.Open(shPath)
+	if err != nil {
+		middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{"found": true, "preview": ""})
+		return
+	}
+	defer f.Close()
+	buf := make([]byte, 4096)
+	n, _ := f.Read(buf)
+	preview := strings.TrimSpace(string(buf[:n]))
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"found":   true,
+		"preview": preview,
+		"command": "./start.sh",
+	})
+}
+
+// DetectFlyToml looks for a fly.toml in the given directory, parses the app name,
+// and returns suggested deployment commands. Query param: ?path=/absolute/path
+func (h *FilesystemHandler) DetectFlyToml(w http.ResponseWriter, r *http.Request) {
+	dirPath := r.URL.Query().Get("path")
+	if dirPath == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "path query param is required", "INVALID_PATH")
+		return
+	}
+
+	absPath, err := filepath.Abs(dirPath)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid path", "INVALID_PATH")
+		return
+	}
+
+	tomlPath := filepath.Join(absPath, "fly.toml")
+	data, err := os.ReadFile(tomlPath)
+	if err != nil {
+		// No fly.toml found — return empty result, not an error
+		middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{"found": false})
+		return
+	}
+
+	// Parse app name: look for line starting with `app = "`
+	appName := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "app") {
+			// handles: app = "myapp" or app = 'myapp'
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				appName = strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+			}
+			break
+		}
+	}
+
+	if appName == "" {
+		middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{"found": true, "appName": ""})
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"found":       true,
+		"appName":     appName,
+		"deployProd":  "fly deploy",
+		"startProd":   "fly apps start " + appName,
+		"restartProd": "fly apps restart " + appName,
+		"viewLogs":    "fly logs -a " + appName,
+	})
 }
 

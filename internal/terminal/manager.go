@@ -5,12 +5,23 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/creack/pty"
 	"github.com/google/uuid"
 )
+
+// userHomesBase returns the base directory for per-user home directories.
+// Uses /data (Fly volume) when available, otherwise falls back to ~/.vibectl-user-homes.
+func userHomesBase() string {
+	if _, err := os.Stat("/data"); err == nil {
+		return "/data/users"
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".vibectl-user-homes")
+}
 
 const defaultBufferSize = 256 * 1024 // 256KB ring buffer for reconnection replay
 
@@ -271,6 +282,100 @@ func (m *Manager) StartSession(projectID, projectCode, localPath string, initial
 		}()
 	}
 
+	return sess, nil
+}
+
+// StartShellSession spawns an interactive shell for a remote user with an isolated HOME.
+// key is a unique session identifier (e.g. "user:{userID}"); userID is used to derive the home path.
+// If localWorkDir is non-empty it must be an existing directory on this machine; the shell
+// will start there instead of the default synthetic workspace.
+// If a live session already exists for key, it is returned as-is (reconnect).
+func (m *Manager) StartShellSession(key, userID, localWorkDir string) (*TerminalSession, error) {
+	homeDir := filepath.Join(userHomesBase(), userID, "home")
+	defaultWorkDir := filepath.Join(userHomesBase(), userID, "workspace")
+
+	if err := os.MkdirAll(homeDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create user home: %w", err)
+	}
+
+	// Resolve working directory: use provided localWorkDir if it exists, otherwise default.
+	workDir := defaultWorkDir
+	if localWorkDir != "" {
+		info, err := os.Stat(localWorkDir)
+		if err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("local path %q does not exist or is not a directory", localWorkDir)
+		}
+		workDir = localWorkDir
+	} else {
+		if err := os.MkdirAll(defaultWorkDir, 0700); err != nil {
+			return nil, fmt.Errorf("failed to create user workspace: %w", err)
+		}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if existing, ok := m.sessions[key]; ok {
+		if existing.IsAlive() {
+			return existing, nil
+		}
+		existing.Close()
+		delete(m.sessions, key)
+	}
+
+	// Run claude directly — users get a constrained Claude Code session, not a full shell.
+	cmd := exec.Command("claude")
+	cmd.Dir = workDir
+	cmd.Env = []string{
+		"TERM=xterm-256color",
+		"HOME=" + homeDir,
+		"USER=user",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	}
+
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start shell pty: %w", err)
+	}
+
+	now := time.Now()
+	sess := &TerminalSession{
+		ID:           uuid.New().String(),
+		ProjectID:    key,
+		ProjectCode:  "shell",
+		LocalPath:    workDir,
+		Cmd:          cmd,
+		Pty:          ptmx,
+		StartedAt:    now,
+		LastActivity: now,
+		Buffer:       NewRingBuffer(defaultBufferSize),
+		exited:       make(chan struct{}),
+	}
+
+	go func() {
+		defer close(sess.exited)
+		defer sess.closeAllSubscribers()
+		buf := make([]byte, 4096)
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				data := make([]byte, n)
+				copy(data, buf[:n])
+				sess.mu.Lock()
+				sess.Buffer.Write(data)
+				sess.LastActivity = time.Now()
+				sess.mu.Unlock()
+				sess.broadcast(data)
+			}
+			if err != nil {
+				slog.Debug("shell pty read loop ended", "key", key, "error", err)
+				return
+			}
+		}
+	}()
+
+	m.sessions[key] = sess
+	slog.Info("shell session started", "key", key, "userID", userID, "homeDir", homeDir, "workDir", workDir)
 	return sess, nil
 }
 

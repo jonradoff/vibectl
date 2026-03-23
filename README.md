@@ -6,7 +6,7 @@ VibeCtl is a self-hosted project management system built for the way software is
 
 > *We're entering software's creator era — where the gap between idea and working product has collapsed. VibeCtl is the cockpit for that new reality.*
 
-![VibeCtl Dashboard](docs/screenshot.png)
+---
 
 ## Why VibeCtl
 
@@ -19,6 +19,7 @@ VibeCtl provides:
 - A **web UI** for visual project management and monitoring
 - **Health checks** that know the difference between "frontend is down" and "backend /healthz is degraded"
 - **Feedback triage** backed by Claude — user reports automatically convert to issues
+- **Team access** via GitHub OAuth — pre-authorize team members by GitHub username, role-based per project
 
 ---
 
@@ -54,7 +55,12 @@ VibeCtl provides:
 
 ### Feedback Queue
 - Collect feedback from GitHub comments, manual input, or API
-- AI triage with Claude: matches to existing issues or proposes new ones
+- Quick ad-hoc feedback from the project card — no need to leave the dashboard
+- AI triage with Claude: analyzes feedback and proposes issue title, type, priority, and repro steps
+- Three-column review panel (Pending | Accepted | Dismissed) directly in each project card
+- Accept → automatically creates an issue using the AI proposal; linked issue key shown inline
+- Bulk accept/dismiss and batch AI triage for high-volume feedback
+- Pending feedback badge on each project card for at-a-glance review status
 - Recurring theme detection across feedback
 - Webhook fires after each AI triage completes
 
@@ -63,6 +69,13 @@ VibeCtl provides:
 - Activity log for all significant events
 - Chat history for Claude Code sessions
 
+### Multi-user Access
+- Admin signs in with password; team members sign in via **GitHub OAuth**
+- Admin pre-authorizes users by GitHub username and global role
+- Unauthorized GitHub accounts get a clear "ask your admin" screen
+- Per-project roles: owner, devops, developer, contributor, reporter, viewer
+- API keys for CLI/MCP access (named tokens, revocable)
+
 ### CLI (`vibectl`)
 - Full project management from the terminal
 - Auth token stored in `~/.vibectl/token`
@@ -70,87 +83,114 @@ VibeCtl provides:
 
 ### MCP Server
 - Local stdio transport — no HTTP, no port, works directly with Claude Code
-- 20 tools covering projects, issues, sessions, health, prompts, and decisions
+- 24 tools covering projects, issues, sessions, health, prompts, decisions, and **feedback**
+- Agents can capture, triage, and resolve feedback without leaving Claude Code
 - See [skill.md](skill.md) for full tool reference
-
-### Admin Authentication
-- Password-gate on first launch — setup screen guides you through CLI setup
-- Admin password stored bcrypt-hashed in MongoDB (never in a file)
-- Session tokens generated on login, rotate on each login, expire after 30 days
-- Sign-out button in sidebar; 401 auto-redirects to login
-- Protected endpoints: rebuild, password change
-
-### Settings
-- Global settings page (gear icon in sidebar)
-- VIBECTL.md auto-regen schedule: off / hourly / daily / weekly
 
 ---
 
 ## Quick Start
 
 ### Prerequisites
-- Go 1.21+
-- Node.js 18+ (for frontend)
-- MongoDB (local or Atlas)
 
-### Setup
+- **Go 1.21+**
+- **Node.js 18+** (frontend build)
+- **MongoDB** — MongoDB Atlas free tier works great; local MongoDB also works
+
+### 1. Get MongoDB
+
+**Option A — MongoDB Atlas (recommended for first-timers)**
+1. Sign up at [cloud.mongodb.com](https://cloud.mongodb.com) — free tier is sufficient
+2. Create a cluster, then click **Connect → Drivers** and copy the connection string
+3. It looks like: `mongodb+srv://username:password@cluster0.xxxxx.mongodb.net/`
+
+**Option B — Local MongoDB**
+```bash
+# macOS
+brew install mongodb-community && brew services start mongodb-community
+# MONGODB_URI=mongodb://localhost:27017
+```
+
+### 2. Clone and configure
 
 ```bash
-# Clone and enter the project
 git clone https://github.com/jonradoff/vibectl
 cd vibectl
 
-# Copy environment config
 cp .env.example .env
-# Edit .env: set MONGODB_URI, ANTHROPIC_API_KEY
-
-# Start the server (builds + runs binary with auto-restart)
-make dev
-
-# In another terminal, start the Vite dev server (optional, for UI)
-make frontend-dev
+# Edit .env — at minimum set MONGODB_URI
 ```
 
-The server runs on `:4380`, the Vite dev server on `:4370`.
-
-### Build the CLI
+### 3. Start the server
 
 ```bash
-make build-cli
-# Installs to ./cli/vibectl (or add to PATH)
+make dev          # builds + runs backend on :4380
+make frontend-dev # in another terminal — Vite dev server on :4370 with HMR
 ```
 
-### Configure MCP in Claude Code
+Open [http://localhost:4370](http://localhost:4370) (or :4380 for the production build).
 
-Add to `~/.claude.json` (user scope) or `.mcp.json` (project scope):
+On first launch with no users in the database, VibeCtl runs in **open mode** — no login required. Use `vibectl admin set-password` to set a password and enable the auth gate.
 
-```json
-{
-  "mcpServers": {
-    "vibectl": {
-      "command": "/path/to/vibectl/vibectl-mcp",
-      "args": [
-        "--mongodb-uri", "mongodb://localhost:27017",
-        "--database", "vibectl"
-      ]
-    }
-  }
-}
+### 4. (Optional) Enable GitHub OAuth for team access
+
+This lets team members sign in with their GitHub accounts instead of needing a shared password.
+
+1. Go to **GitHub → Settings → Developer settings → OAuth Apps → New OAuth App**
+2. Fill in:
+   - **Homepage URL**: `http://localhost:4380` (your server URL)
+   - **Authorization callback URL**: `http://localhost:4380/api/v1/auth/github/callback`
+3. Copy the **Client ID** and generate a **Client Secret**
+4. Add to `.env`:
+   ```
+   GITHUB_CLIENT_ID=your_client_id
+   GITHUB_CLIENT_SECRET=your_client_secret
+   ```
+5. Restart the server
+6. In VibeCtl → **Users**, click **Pre-authorize user** and enter their GitHub username
+
+Team members navigate to VibeCtl, click **Continue with GitHub**, and are in. Users not pre-authorized see an "access denied" screen with instructions to ask the admin.
+
+---
+
+## Deploying to Fly.io
+
+```bash
+# Create app (first time only)
+fly apps create your-app-name --org personal
+
+# Set production secrets
+fly secrets set \
+  MONGODB_URI="mongodb+srv://..." \
+  DATABASE_NAME="vibectl-prod" \
+  BASE_URL="https://your-app-name.fly.dev" \
+  ALLOWED_ORIGINS="https://your-app-name.fly.dev" \
+  API_KEY_ENCRYPTION_KEY="$(openssl rand -hex 16)" \
+  ANTHROPIC_API_KEY="sk-ant-..." \
+  GITHUB_CLIENT_ID="your_github_client_id" \
+  GITHUB_CLIENT_SECRET="your_github_client_secret"
+
+# Deploy
+fly deploy
 ```
 
-Or with Atlas:
-```json
-{
-  "mcpServers": {
-    "vibectl": {
-      "command": "/path/to/vibectl/vibectl-mcp",
-      "args": ["--mongodb-uri", "mongodb+srv://...", "--database", "vibectl"]
-    }
-  }
-}
-```
+**For GitHub OAuth in production**, update your GitHub OAuth App's callback URL to:
+`https://your-app-name.fly.dev/api/v1/auth/github/callback`
 
-**Privacy Policy:** VibeCtl's MCP server connects directly to your local MongoDB instance. No data is sent to external servers by the MCP server itself. See [https://www.metavert.io/privacy-policy](https://www.metavert.io/privacy-policy) for full details.
+### fly.toml reference
+
+```toml
+app = "your-app-name"
+primary_region = "iad"
+
+[env]
+  PORT = "4380"
+  DATABASE_NAME = "vibectl-prod"   # override per-environment
+
+[http_service]
+  internal_port = 4380
+  force_https = true
+```
 
 ---
 
@@ -163,7 +203,7 @@ vibectl <command> <action> [flags]
 ### Authentication
 
 ```bash
-vibectl admin set-password        # Set password (first run: leave current blank)
+vibectl admin set-password        # Set/change the admin password
 vibectl admin login               # Authenticate, saves token to ~/.vibectl/token
 vibectl admin logout              # Remove saved token
 ```
@@ -226,6 +266,57 @@ vibectl generate-md --all
 
 ---
 
+## Configure MCP in Claude Code
+
+Add to `~/.claude.json` (user scope) or `.mcp.json` (project scope):
+
+```json
+{
+  "mcpServers": {
+    "vibectl": {
+      "command": "/path/to/vibectl/vibectl-mcp",
+      "args": [
+        "--mongodb-uri", "mongodb://localhost:27017",
+        "--database", "vibectl"
+      ]
+    }
+  }
+}
+```
+
+Or with Atlas:
+```json
+{
+  "mcpServers": {
+    "vibectl": {
+      "command": "/path/to/vibectl/vibectl-mcp",
+      "args": ["--mongodb-uri", "mongodb+srv://...", "--database", "vibectl"]
+    }
+  }
+}
+```
+
+**Privacy Policy:** VibeCtl's MCP server connects directly to your local MongoDB instance. No data is sent to external servers by the MCP server itself. See [https://www.metavert.io/privacy-policy](https://www.metavert.io/privacy-policy) for full details.
+
+---
+
+## Configuration Reference
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MONGODB_URI` | Yes | `mongodb://localhost:27017` | MongoDB connection string |
+| `DATABASE_NAME` | No | `vibectl` | Database name — use different names per environment |
+| `PORT` | No | `4380` | HTTP port |
+| `BASE_URL` | No | `http://localhost:4380` | Public server URL (used for OAuth callbacks) |
+| `ALLOWED_ORIGINS` | No | `http://localhost:4370` | CORS + OAuth redirect origin |
+| `ANTHROPIC_API_KEY` | No | — | Enables AI triage, PM review, architecture agents |
+| `GITHUB_TOKEN` | No | — | Enables GitHub comment sweeper |
+| `GITHUB_CLIENT_ID` | No | — | GitHub OAuth App client ID |
+| `GITHUB_CLIENT_SECRET` | No | — | GitHub OAuth App client secret |
+| `API_KEY_ENCRYPTION_KEY` | No | — | 32-char key for encrypting stored API keys |
+
+---
+
 ## MCP Working Examples
 
 The MCP server provides 20 tools for Claude Code. Here are 5 working examples:
@@ -244,10 +335,10 @@ Returns the full VIBECTL.md — open issues by priority, deployment commands, re
 Use vibectl MCP tool: create_issue(
   projectCode: "LCMS",
   title: "Upload fails when filename contains spaces",
-  description: "File upload returns 400 when the original filename has spaces. The server does not URL-encode the filename before storage.",
+  description: "File upload returns 400 when the original filename has spaces.",
   type: "bug",
   priority: "P1",
-  reproSteps: "1. Pick a file named 'my document.pdf'\n2. Click Upload\n3. See 400 Bad Request"
+  reproSteps: "1. Pick a file named 'my document.pdf'\n2. Click Upload\n3. See 400"
 )
 ```
 
@@ -257,18 +348,13 @@ Use vibectl MCP tool: create_issue(
 Use vibectl MCP tool: search_issues(query: "upload filename spaces", projectCode: "LCMS")
 ```
 
-Returns matching issues scored by relevance. If none exist, proceed to create.
-
 ### 4. Close an issue and log the decision
 
 ```
-# First, transition the issue to fixed
 Use vibectl MCP tool: update_issue_status(issueKey: "LCMS-0017", newStatus: "fixed")
-
-# Then record the architectural decision that resolved it
 Use vibectl MCP tool: record_decision(
   projectCode: "LCMS",
-  summary: "Fixed upload filename handling by URL-encoding in the storage layer (pkg/storage/upload.go). Chose server-side encoding over client-side to keep the API surface simple.",
+  summary: "Fixed upload filename handling by URL-encoding in the storage layer.",
   issueKey: "LCMS-0017"
 )
 ```
@@ -276,29 +362,9 @@ Use vibectl MCP tool: record_decision(
 ### 5. Check what's broken in production
 
 ```
-# Get deployment and health config
 Use vibectl MCP tool: get_deployment_info(projectCode: "LCMS")
-
-# Get 24-hour uptime history
 Use vibectl MCP tool: get_health_status(projectCode: "LCMS")
 ```
-
-Returns structured health records showing status per endpoint over time. Cross-reference with deployment info to identify when a deploy caused degradation.
-
----
-
-## Configuration
-
-### Environment Variables (`.env`)
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `MONGODB_URI` | Yes | MongoDB connection string |
-| `DATABASE_NAME` | No | Database name (default: `vibectl`) |
-| `PORT` | No | HTTP port (default: `4380`) |
-| `ANTHROPIC_API_KEY` | No | Enables AI triage, PM review, architecture agents |
-| `GITHUB_TOKEN` | No | Enables GitHub comment sweeper |
-| `ALLOWED_ORIGINS` | No | CORS origins (default: `*`) |
 
 ---
 
@@ -323,8 +389,6 @@ VibeCtl implements a health check standard for backend services. Add a `/healthz
 
 **Status values**: `healthy`, `degraded`, `unhealthy`
 
-Frontend apps don't need `/healthz` — VibeCtl checks that the main URL returns a non-5xx response.
-
 The `pkg/healthz` package implements this protocol for Go services:
 
 ```go
@@ -333,10 +397,7 @@ import "github.com/jonradoff/vibectl/pkg/healthz"
 checks := map[string]healthz.CheckFunc{
     "mongodb": func() error { return db.Ping(ctx, nil) },
 }
-kpis := func() []healthz.KPI {
-    return []healthz.KPI{{Name: "open_issues", Value: 5, Unit: "count"}}
-}
-r.Get("/healthz", healthz.Handler("1.0.0", checks, kpis))
+r.Get("/healthz", healthz.Handler("1.0.0", checks, nil))
 ```
 
 ---
@@ -388,20 +449,22 @@ frontend/
 
 ## Roadmap
 
-### v0.8 (current)
+### v0.9 (current)
 - Project, issue, feedback management with AI triage
 - Issue comments and bulk operations
 - VIBECTL.md generation with configurable auto-regen schedule
 - Claude Code MCP integration (20 tools)
 - Health check monitoring with webhook alerting
+- Multi-user access: GitHub OAuth, role-based permissions (project + global), API keys
+- CI tab: commit, push, deploy actions per project
 - Admin auth gate: bcrypt password, 30-day token expiry, auto-logout on 401
 - Webhooks: HMAC-signed HTTP POST for P0 issues, health transitions, feedback triage
 - Global search across all issues
 - Settings page
 - CLI with full feature parity
+- Fly.io one-command deployment
 
 ### Next
-- Multi-user access with role-based permissions
 - Scheduled PM reviews
 - Mobile-friendly PWA
 
