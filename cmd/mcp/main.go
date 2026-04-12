@@ -64,7 +64,7 @@ func main() {
 		db := client.Database(*database)
 
 		// Create services.
-		projectService := services.NewProjectService(db)
+		projectService := services.NewProjectService(db, nil) // no event bus in standalone MCP
 		issueService := services.NewIssueService(db, projectService)
 		feedbackService := services.NewFeedbackService(db)
 		sessionService := services.NewSessionService(db)

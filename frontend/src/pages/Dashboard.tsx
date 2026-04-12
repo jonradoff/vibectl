@@ -7,12 +7,16 @@ import 'react-resizable/css/styles.css'
 import { getGlobalDashboard, getBulkStartProdStreamUrl, getBulkRestartProdStreamUrl } from '../api/client'
 import ProjectCard from '../components/projects/ProjectCard'
 import ProjectForm from '../components/projects/ProjectForm'
-import UniversePanel from '../components/dashboard/UniversePanel'
+import MissionControl from '../components/dashboard/MissionControl'
+import ChatView from '../components/chat/ChatView'
 import { useActiveProject } from '../contexts/ActiveProjectContext'
 import { useAuth } from '../contexts/AuthContext'
 import type { Layout, LayoutItem } from 'react-grid-layout'
 
-const LAYOUT_VERSION = 3 // bump to invalidate saved layouts when grid config changes
+// Permanent grid slots
+const MC_KEY = '__mission_control__'
+const WS_KEY = '__workspace__'
+const LAYOUT_VERSION = 6 // bumped: claude usage moved into Mission Control tab
 const LAYOUT_KEY = `vibectl-dashboard-layouts-v${LAYOUT_VERSION}`
 
 function loadLayouts(): Record<string, LayoutItem[]> | undefined {
@@ -33,30 +37,33 @@ function generateDefaultLayouts(projectIds: string[]): Record<string, LayoutItem
   const layouts: Record<string, LayoutItem[]> = {}
 
   for (const [breakpoint, colCount] of Object.entries(cols)) {
-    const defaultW = Math.max(2, Math.floor(colCount / 3)) // 2 at lg (3/row), 2 at md (2/row), 1 at sm
-    layouts[breakpoint] = projectIds.map((id, i) => ({
+    const defaultW = Math.max(2, Math.floor(colCount / 3))
+    // MC spans full width at the top
+    const mcItem: LayoutItem = { i: MC_KEY, x: 0, y: 0, w: colCount, h: 3, minW: 2, minH: 2 }
+    // Workspace card: 2-wide next to MC row or below it
+    const wsItem: LayoutItem = { i: WS_KEY, x: 0, y: 3, w: defaultW, h: 3, minW: 2, minH: 2 }
+    const projectItems: LayoutItem[] = projectIds.map((id, i) => ({
       i: id,
-      x: (i * defaultW) % colCount,
-      y: Math.floor((i * defaultW) / colCount) * 3,
+      x: ((i + 1) * defaultW) % colCount, // offset by 1 to account for workspace
+      y: 3 + Math.floor(((i + 1) * defaultW) / colCount) * 3,
       w: defaultW,
       h: 3,
       minW: 2,
       minH: 2,
     }))
+    layouts[breakpoint] = [mcItem, wsItem, ...projectItems]
   }
 
   return layouts
 }
 
 /**
- * Reconcile saved layouts with the current set of visible project IDs.
- * - Existing items keep their saved position and size.
- * - Removed items are filtered out.
- * - New items are placed in the first available gap at the bottom.
+ * Reconcile saved layouts with the current set of all grid IDs (MC + visible projects).
+ * MC is always kept/added; project items are added/removed as needed.
  */
 function reconcileLayouts(
   saved: Record<string, LayoutItem[]>,
-  visibleIds: Set<string>,
+  allIds: Set<string>, // includes MC_KEY
 ): Record<string, LayoutItem[]> {
   const cols: Record<string, number> = { lg: 6, md: 4, sm: 2 }
   const result: Record<string, LayoutItem[]> = {}
@@ -64,27 +71,21 @@ function reconcileLayouts(
   for (const [breakpoint, savedItems] of Object.entries(saved)) {
     const colCount = cols[breakpoint] ?? 3
 
-    // Keep items that are still visible, preserving their position/size
-    const kept = savedItems.filter((l) => visibleIds.has(l.i))
+    const kept = savedItems.filter((l) => allIds.has(l.i))
     const keptIds = new Set(kept.map((l) => l.i))
-
-    // Find IDs that need to be added
-    const newIds = [...visibleIds].filter((id) => !keptIds.has(id))
+    const newIds = [...allIds].filter((id) => !keptIds.has(id))
 
     if (newIds.length === 0) {
       result[breakpoint] = kept
       continue
     }
 
-    // Build an occupancy grid to find open slots
-    // Find the max y+h among existing items
     let maxBottom = 0
     for (const item of kept) {
       const bottom = item.y + item.h
       if (bottom > maxBottom) maxBottom = bottom
     }
 
-    // Build set of occupied cells
     const occupied = new Set<string>()
     for (const item of kept) {
       for (let row = item.y; row < item.y + item.h; row++) {
@@ -94,13 +95,23 @@ function reconcileLayouts(
       }
     }
 
-    // Place new items: scan rows for a 1-wide, 3-tall opening
     const placed: LayoutItem[] = []
     for (const id of newIds) {
+      // MC always gets placed full-width at y=0 when new
+      if (id === MC_KEY) {
+        placed.push({ i: MC_KEY, x: 0, y: 0, w: colCount, h: 3, minW: 2, minH: 2 })
+        continue
+      }
+      // Workspace gets default placement when new
+      if (id === WS_KEY) {
+        const defaultW = Math.max(2, Math.floor(colCount / 3))
+        placed.push({ i: WS_KEY, x: 0, y: maxBottom, w: defaultW, h: 3, minW: 2, minH: 2 })
+        continue
+      }
+
       const defaultW = Math.max(2, Math.floor(colCount / 3)), h = 3, w = defaultW
       let foundX = -1, foundY = -1
 
-      // Search from top, trying to find gaps first, then append at bottom
       for (let row = 0; row <= maxBottom + h; row++) {
         for (let col = 0; col < colCount; col++) {
           let fits = true
@@ -109,25 +120,16 @@ function reconcileLayouts(
               if (occupied.has(`${col + dx},${row + dy}`)) fits = false
             }
           }
-          if (fits) {
-            foundX = col
-            foundY = row
-            break
-          }
+          if (fits) { foundX = col; foundY = row; break }
         }
         if (foundX >= 0) break
       }
 
-      if (foundX < 0) {
-        // Fallback: place at the very bottom
-        foundX = 0
-        foundY = maxBottom
-      }
+      if (foundX < 0) { foundX = 0; foundY = maxBottom }
 
       const layout: LayoutItem = { i: id, x: foundX, y: foundY, w, h, minW: 1, minH: 2 }
       placed.push(layout)
 
-      // Mark cells as occupied
       for (let row = foundY; row < foundY + h; row++) {
         for (let col = foundX; col < foundX + w; col++) {
           occupied.add(`${col},${row}`)
@@ -171,20 +173,29 @@ function Dashboard() {
   const { currentUser } = useAuth()
   const isSuperAdmin = currentUser?.globalRole === 'super_admin'
 
+  const workspaceDir = currentUser?.workspaceDir || ''
+
   const { data: dashboard, isLoading, error } = useQuery({
     queryKey: ['globalDashboard'],
     queryFn: getGlobalDashboard,
   })
 
+  useEffect(() => {
+    if (error && (error as Error).message?.toLowerCase().includes('authentication')) {
+      window.dispatchEvent(new CustomEvent('vibectl:unauthorized'))
+    }
+  }, [error])
+
   const handleLayoutChange = useCallback((_: Layout, allLayouts: Partial<Record<string, Layout>>) => {
     saveLayouts(allLayouts as Record<string, LayoutItem[]>)
   }, [])
 
-  // Snap width to allowed values after resize completes
+  // Snap project card widths to allowed values after resize; MC is exempt
   const handleResizeStop = useCallback((layout: Layout) => {
     const allowed = [2, 3, 6]
     let changed = false
     for (const item of layout as LayoutItem[]) {
+      if (item.i === MC_KEY || item.i === WS_KEY) continue
       const closest = allowed.reduce((prev, curr) =>
         Math.abs(curr - item.w) < Math.abs(prev - item.w) ? curr : prev
       )
@@ -195,11 +206,10 @@ function Dashboard() {
       }
     }
     if (changed) {
-      // Save the snapped layout and force re-render
       const saved = loadLayouts() || {}
-      // Apply snap to all breakpoints
       for (const bp of Object.keys(saved)) {
         for (const item of saved[bp] as LayoutItem[]) {
+          if (item.i === MC_KEY || item.i === WS_KEY) continue
           const closest = allowed.reduce((prev, curr) =>
             Math.abs(curr - item.w) < Math.abs(prev - item.w) ? curr : prev
           )
@@ -215,11 +225,6 @@ function Dashboard() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-950 p-6">
-        <div className="mb-8 grid grid-cols-3 gap-4">
-          {[...Array(3)].map((_, i) => (
-            <div key={i} className="h-20 animate-pulse rounded-lg bg-gray-800" />
-          ))}
-        </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[...Array(6)].map((_, i) => (
             <div key={i} className="h-48 animate-pulse rounded-lg bg-gray-800" />
@@ -230,10 +235,23 @@ function Dashboard() {
   }
 
   if (error) {
+    const isAuthError = (error as Error).message?.toLowerCase().includes('authentication') ||
+      (error as Error).message?.toLowerCase().includes('unauthorized')
     return (
-      <div className="min-h-screen bg-gray-950 p-6">
-        <div className="rounded bg-red-900/30 p-4 text-red-400">
-          Failed to load dashboard: {(error as Error).message}
+      <div className="min-h-screen bg-gray-950 p-6 flex items-center justify-center">
+        <div className="rounded bg-red-900/30 p-6 text-red-400 text-center max-w-sm">
+          <p className="font-medium mb-2">
+            {isAuthError ? 'Session expired' : 'Failed to load dashboard'}
+          </p>
+          <p className="text-sm text-red-400/70 mb-4">
+            {isAuthError ? 'Please sign in again.' : (error as Error).message}
+          </p>
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('vibectl:unauthorized'))}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-sm font-medium"
+          >
+            Sign in again
+          </button>
         </div>
       </div>
     )
@@ -241,24 +259,21 @@ function Dashboard() {
 
   if (!dashboard) return null
 
-  const { totalProjects, totalOpenIssues, pendingFeedback, projectSummaries } = dashboard
+  const { projectSummaries } = dashboard
 
   const visibleSummaries = projectSummaries.filter((s) => !closedProjectIds.has(s.project.id))
   const hiddenSummaries = projectSummaries.filter((s) => closedProjectIds.has(s.project.id))
   const visibleIds = visibleSummaries.map((s) => s.project.id)
-  const visibleIdSet = new Set(visibleIds)
+  // MC and Workspace are always in the grid
+  const allIds = new Set([MC_KEY, WS_KEY, ...visibleIds])
   const savedLayouts = loadLayouts()
 
-  // Reconcile: keep existing positions, only add/remove what changed
   const layouts = (() => {
     if (!savedLayouts) return generateDefaultLayouts(visibleIds)
-
     const savedKeys = new Set(Object.values(savedLayouts)[0]?.map((l) => l.i) ?? [])
-    const exactMatch = savedKeys.size === visibleIdSet.size && [...visibleIdSet].every((k) => savedKeys.has(k))
+    const exactMatch = savedKeys.size === allIds.size && [...allIds].every((k) => savedKeys.has(k))
     if (exactMatch) return savedLayouts
-
-    // There's a difference — reconcile to preserve existing positions
-    const reconciled = reconcileLayouts(savedLayouts, visibleIdSet)
+    const reconciled = reconcileLayouts(savedLayouts, allIds)
     saveLayouts(reconciled)
     return reconciled
   })()
@@ -290,6 +305,7 @@ function Dashboard() {
           </div>
         )}
       </div>
+
       {bulkModal && createPortal(
         <BulkStreamModal title={bulkModal.title} url={bulkModal.url} onClose={() => setBulkModal(null)} />,
         document.body
@@ -303,43 +319,9 @@ function Dashboard() {
         />
       )}
 
-      {/* Universe visualization panel */}
-      <UniversePanel />
-
-      {/* Global stats bar */}
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="rounded-lg bg-gray-800 p-4">
-          <p className="text-sm text-gray-400">Total Projects</p>
-          <p className="text-3xl font-bold text-white">{totalProjects}</p>
-        </div>
-        <div className="rounded-lg bg-gray-800 p-4">
-          <p className="text-sm text-gray-400">Open Issues</p>
-          <p className="text-3xl font-bold text-white">{totalOpenIssues}</p>
-        </div>
-        <div className="rounded-lg bg-gray-800 p-4">
-          <p className="text-sm text-gray-400">Pending Feedback</p>
-          <p className="text-3xl font-bold text-white">{pendingFeedback}</p>
-        </div>
-      </div>
-
-      {/* Project cards grid */}
+      {/* Unified grid: MC + project cards can be freely arranged */}
       <div ref={gridContainerRef}>
-        {projectSummaries.length === 0 ? (
-          <div className="rounded-lg border border-gray-700 bg-gray-800 p-12 text-center">
-            <p className="text-lg text-gray-400">No projects yet.</p>
-            <button
-              onClick={() => setShowCreateProject(true)}
-              className="mt-3 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-            >
-              + Create Your First Project
-            </button>
-          </div>
-        ) : visibleSummaries.length === 0 ? (
-          <div className="rounded-lg border border-gray-700 bg-gray-800 p-12 text-center">
-            <p className="text-lg text-gray-400">All project windows are closed.</p>
-            <p className="mt-1 text-sm text-gray-500">Select a project from the sidebar to open it.</p>
-          </div>
-        ) : gridWidth > 0 ? (
+        {gridWidth > 0 && (
           <ResponsiveGridLayout
             key={layoutKey}
             className="layout"
@@ -352,16 +334,22 @@ function Dashboard() {
             onLayoutChange={handleLayoutChange}
             onResizeStop={handleResizeStop}
           >
+            <div key={MC_KEY} className="h-full">
+              <MissionControl />
+            </div>
+            <div key={WS_KEY} className="h-full">
+              <WorkspaceCard workspaceDir={workspaceDir} />
+            </div>
             {visibleSummaries.map((summary) => (
               <div key={summary.project.id} data-project-id={summary.project.id} className="h-full">
                 <ProjectCard summary={summary} />
               </div>
             ))}
           </ResponsiveGridLayout>
-        ) : null}
+        )}
       </div>
 
-      {/* Hidden cards: keep chat connections alive but not visible */}
+      {/* Hidden cards: keep chat connections alive */}
       <div className="hidden">
         {hiddenSummaries.map((summary) => (
           <ProjectCard key={summary.project.id} summary={summary} />
@@ -463,6 +451,101 @@ function BulkStreamModal({ title, url, onClose }: { title: string; url: string; 
             <p className="text-xs text-green-400 font-medium pt-1">✓ All done</p>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Workspace Card ───────────────────────────────────────────────────────────
+
+function WorkspaceCard({ workspaceDir }: { workspaceDir: string }) {
+  const [showSettings, setShowSettings] = useState(false)
+  const [dirInput, setDirInput] = useState(workspaceDir)
+  const [saving, setSaving] = useState(false)
+  const { refreshUser } = useAuth()
+
+  // Sync input when prop changes
+  useEffect(() => { setDirInput(workspaceDir) }, [workspaceDir])
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const { updateSelfProfile } = await import('../api/client')
+      await updateSelfProfile({ workspaceDir: dirInput.trim() || undefined })
+      await refreshUser()
+      setShowSettings(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-full rounded-lg border border-cyan-700/40 bg-gray-800 overflow-hidden">
+      {/* Header */}
+      <div className="drag-handle flex items-center justify-between px-3 py-2 bg-gray-900 border-b border-cyan-700/40 shrink-0 cursor-grab select-none">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold bg-cyan-600/20 text-cyan-300 uppercase tracking-wider">
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z" />
+            </svg>
+            Workspace
+          </span>
+          {workspaceDir && (
+            <span className="text-[10px] font-mono text-gray-500 truncate max-w-[200px]">{workspaceDir}</span>
+          )}
+        </div>
+        <button
+          onMouseDown={e => e.stopPropagation()}
+          onClick={() => setShowSettings(v => !v)}
+          className="text-gray-500 hover:text-gray-300 transition-colors"
+          title="Workspace settings"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Inline settings */}
+      {showSettings && (
+        <div className="px-3 py-2 border-b border-cyan-700/40 bg-gray-900/80 space-y-2" onMouseDown={e => e.stopPropagation()}>
+          <label className="block text-[10px] text-gray-400 uppercase tracking-wider">Working directory</label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={dirInput}
+              onChange={e => setDirInput(e.target.value)}
+              placeholder="/Users/you"
+              className="flex-1 rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs font-mono text-gray-100 focus:border-cyan-500 focus:outline-none"
+            />
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="rounded bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 px-2.5 py-1 text-[10px] font-medium text-white transition-colors"
+            >
+              {saving ? '...' : 'Save'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Content */}
+      <div className="flex-1 min-h-0">
+        {workspaceDir ? (
+          <ChatView
+            projectId="__workspace__"
+            projectCode="WKSP"
+            localPath={workspaceDir}
+          />
+        ) : (
+          <div className="flex items-center justify-center h-full text-gray-600 text-sm px-4 text-center">
+            <div>
+              <p className="mb-1">Click the gear icon to set your workspace directory</p>
+              <p className="text-[10px] text-gray-700">The root path where your projects live</p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

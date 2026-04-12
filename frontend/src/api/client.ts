@@ -1,5 +1,6 @@
 import type {
   Project,
+  UnitDefinition,
   Issue,
   FeedbackItem,
   SessionLog,
@@ -26,6 +27,8 @@ import type {
   ClientInstance,
   ProjectPathEntry,
   ProjectUniverseData,
+  Plan,
+  PlanListResponse,
 } from '../types';
 
 const BASE = '/api/v1';
@@ -125,7 +128,7 @@ export const updateUser = (userId: string, data: Partial<Pick<User, 'displayName
   request<User>(`/users/${userId}`, { method: 'PUT', body: JSON.stringify(data) });
 
 // ---- User self-profile ----
-export const updateSelfProfile = (data: Partial<Pick<User, 'displayName' | 'email' | 'gitName' | 'gitEmail'>>): Promise<User> =>
+export const updateSelfProfile = (data: Partial<Pick<User, 'displayName' | 'email' | 'gitName' | 'gitEmail' | 'workspaceDir' | 'claudeCodeFontSize'>>): Promise<User> =>
   request<User>('/users/me', { method: 'PUT', body: JSON.stringify(data) });
 
 export const setSelfAnthropicKey = (key: string): Promise<void> =>
@@ -185,8 +188,8 @@ export const getBulkRestartProdStreamUrl = (): string => {
 };
 
 export const changeOwnPassword = (currentPassword: string, newPassword: string): Promise<{ token: string }> =>
-  request<{ token: string }>('/users/me/change-password', {
-    method: 'POST',
+  request<{ token: string }>('/users/me/password', {
+    method: 'PUT',
     body: JSON.stringify({ currentPassword, newPassword }),
   });
 
@@ -292,6 +295,26 @@ export const listArchivedProjects = () =>
   request<Project[]>('/projects/archived');
 export const getProjectDashboard = (id: string) =>
   request<ProjectSummary>(`/projects/${id}/dashboard`);
+
+// ---- Multi-module units ----
+export const createMultiModuleProject = (data: {
+  name: string; code: string; description: string;
+  links: { localPath?: string; githubUrl?: string };
+  goals?: string[]; projectType: 'multi'; units: UnitDefinition[];
+}) =>
+  request<{ parent: Project; units: Project[] }>('/projects', { method: 'POST', body: JSON.stringify(data) });
+
+export const listUnits = (projectId: string) =>
+  request<Project[]>(`/projects/${projectId}/units`);
+
+export const addUnit = (projectId: string, unit: UnitDefinition) =>
+  request<Project>(`/projects/${projectId}/units`, { method: 'POST', body: JSON.stringify(unit) });
+
+export const detachUnit = (projectId: string, unitId: string) =>
+  request<void>(`/projects/${projectId}/units/${unitId}/detach`, { method: 'POST' });
+
+export const attachUnit = (projectId: string, existingProjectId: string) =>
+  request<Project>(`/projects/${projectId}/units/attach`, { method: 'POST', body: JSON.stringify({ projectId: existingProjectId }) });
 
 // ---- Issues ----
 export const listIssues = (projectId: string, params?: Record<string, string>) => {
@@ -458,6 +481,21 @@ export const updatePrompt = (promptId: string, data: { name?: string; body?: str
 export const deletePrompt = (promptId: string) =>
   request<void>(`/prompts/${promptId}`, { method: 'DELETE' });
 
+// ---- Plans ----
+export const listPlans = (params?: { projectId?: string; status?: string; limit?: number; offset?: number }) => {
+  const qs = params ? '?' + new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])
+  ).toString() : '';
+  return request<PlanListResponse>(`/plans${qs}`);
+};
+export const getPlan = (planId: string) =>
+  request<Plan>(`/plans/${planId}`);
+export const updatePlanStatus = (planId: string, status: string, feedback?: string) =>
+  request<{ status: string }>(`/plans/${planId}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ status, feedback }),
+  });
+
 // ---- Activity Log ----
 export const listActivityLog = (params?: { projectId?: string; type?: string; limit?: number; offset?: number }) => {
   const qs = params ? '?' + new URLSearchParams(
@@ -534,12 +572,52 @@ export const submitClaudeTokenDirect = (token: string) =>
     body: JSON.stringify({ token }),
   });
 
+// ---- MCP Servers ----
+export interface MCPServerInfo {
+  name: string;
+  type: string;
+  command?: string;
+  url?: string;
+  source: string;
+  argsCount?: number;
+}
+export const listMCPServers = (projectPath?: string) => {
+  const qs = projectPath ? `?projectPath=${encodeURIComponent(projectPath)}` : '';
+  return request<{ servers: MCPServerInfo[] }>(`/admin/mcp-servers${qs}`);
+};
+
+// ---- Claude Subscription Usage ----
+export interface UsageBucket {
+  utilization: number;
+  resetsAt: string;
+}
+export interface SubscriptionUsage {
+  fiveHour: UsageBucket | null;
+  sevenDay: UsageBucket | null;
+  sevenDaySonnet?: UsageBucket | null;
+  sevenDayOpus?: UsageBucket | null;
+  extraUsage?: { isEnabled: boolean; monthlyLimit: number | null; usedCredits: number } | null;
+  subscriptionType: string;
+}
+export const getSubscriptionUsage = () =>
+  request<SubscriptionUsage>('/admin/subscription-usage');
+
+// ---- Claude Usage ----
+export const getClaudeUsageSummary = () =>
+  request<import('../types').ClaudeUsageSummary[]>('/claude-usage/summary');
+
+export const updateClaudeUsageConfig = (config: import('../types').ClaudeUsageConfig) =>
+  request<import('../types').ClaudeUsageConfig>('/claude-usage/config', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+
 // ---- Dashboard ----
 export const getGlobalDashboard = () =>
   request<GlobalDashboard>('/dashboard');
 
-export const getUniverseData = () =>
-  request<ProjectUniverseData[]>('/dashboard/universe');
+export const getUniverseData = (days?: number) =>
+  request<ProjectUniverseData[]>(`/dashboard/universe${days ? `?days=${days}` : ''}`);
 
 // ---- AI Agents ----
 export const triageFeedback = (id: string) =>

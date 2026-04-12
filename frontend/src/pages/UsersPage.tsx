@@ -287,7 +287,7 @@ function UserRow({ user, isSelf, onUpdate, onReload }: {
             onClick={() => setShowSetPassword(true)}
             className="text-xs text-indigo-400 hover:text-indigo-300 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1 transition-colors disabled:opacity-50"
           >
-            {user.email ? 'Reset password' : 'Set password'}
+            Reset password
           </button>
         )}
         {!isSelf && (
@@ -535,29 +535,23 @@ function SetPasswordInlineModal({ userName, hasEmail, onCancel, onConfirm, busy 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={onCancel}>
       <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}>
-        {hasEmail ? (
-          <>
-            <h3 className="text-sm font-semibold text-white mb-2">Reset password for {userName}?</h3>
-            <p className="text-xs text-gray-400 mb-4">
-              A new temporary password will be generated. The user will be required to set a new password on next login.
-            </p>
-          </>
-        ) : (
-          <>
-            <h3 className="text-sm font-semibold text-white mb-3">Set password for {userName}</h3>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Email address</label>
-              <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="user@example.com" autoFocus
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-              />
-            </div>
-          </>
+        <h3 className="text-sm font-semibold text-white mb-2">Reset password for {userName}?</h3>
+        <p className="text-xs text-gray-400 mb-4">
+          A random temporary password will be generated. The user will be required to change it on next login.
+        </p>
+        {!hasEmail && (
+          <div className="mb-4">
+            <label className="block text-xs text-gray-400 mb-1">Email address (required for password login)</label>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="user@example.com" autoFocus
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
         )}
-        <div className="flex justify-end gap-2 mt-4">
+        <div className="flex justify-end gap-2">
           <button onClick={onCancel} className="text-xs text-gray-400 hover:text-white px-3 py-1.5 rounded transition-colors">Cancel</button>
           <button onClick={() => onConfirm(hasEmail ? undefined : (email || undefined))} disabled={busy || (!hasEmail && !email.trim())}
             className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors">
-            {busy ? 'Generating…' : hasEmail ? 'Reset Password' : 'Set Password'}
+            {busy ? 'Generating…' : 'Reset Password'}
           </button>
         </div>
       </div>

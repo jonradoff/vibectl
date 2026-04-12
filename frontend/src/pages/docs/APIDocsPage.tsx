@@ -102,6 +102,11 @@ function APIDocsPage() {
         <Endpoint method="PUT" path="/api/v1/settings" desc="Update application settings." body='{ "vibectlMdAutoRegen": bool, "vibectlMdSchedule": "hourly|daily|weekly" }' />
       </EndpointGroup>
 
+      <EndpointGroup name="Claude Usage">
+        <Endpoint method="GET" path="/api/v1/claude-usage/summary" desc="Returns current-week usage summaries for all known Claude logins." auth response="ClaudeUsageSummary[]" />
+        <Endpoint method="PUT" path="/api/v1/claude-usage/config" desc="Create or update weekly limit, label, and alert threshold for a login identity." auth body='{ "tokenHash": "...", "loginLabel": "...", "weeklyTokenLimit": 50000000, "alertThreshold": 70 }' />
+      </EndpointGroup>
+
       <EndpointGroup name="Webhooks">
         <Endpoint
           method="PUT"

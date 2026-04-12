@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listIssues, updateProject, createIssue, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh } from '../../api/client'
+import { listIssues, updateProject, createIssue, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects } from '../../api/client'
 import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, DeploymentConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ActivityLogEntry } from '../../types'
 import { priorityColors, typeColors } from '../../types'
 import ChatView from '../chat/ChatView'
@@ -19,13 +19,26 @@ import ServerModeClaudeTab from './ServerModeClaudeTab'
 
 interface ProjectCardProps {
   summary: ProjectSummary
+  embedded?: boolean // true when rendered inside MultiModuleCard (no own header chrome)
 }
 
-type CardTab = 'terminal' | 'shell' | 'issues' | 'files' | 'history' | 'health' | 'log' | 'settings' | 'members' | 'ci' | 'feedback'
+type CardTab = 'terminal' | 'shell' | 'issues' | 'files' | 'history' | 'health' | 'log' | 'settings' | 'members' | 'ci' | 'feedback' | 'modules'
 
-export default function ProjectCard({ summary }: ProjectCardProps) {
+export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
   const { project, openIssueCount } = summary
-  const [activeTab, setActiveTab] = useState<CardTab>('health')
+  const [activeTab, setActiveTabRaw] = useState<CardTab>(() => {
+    try {
+      const saved = localStorage.getItem(`vibectl-card-tab-${project.id}`)
+      if (saved && ['terminal','shell','issues','files','history','health','log','settings','members','ci','feedback','modules'].includes(saved)) {
+        return saved as CardTab
+      }
+    } catch { /* ignore */ }
+    return 'terminal'
+  })
+  const setActiveTab = (tab: CardTab) => {
+    setActiveTabRaw(tab)
+    try { localStorage.setItem(`vibectl-card-tab-${project.id}`, tab) } catch { /* ignore */ }
+  }
   const [terminalStatus, setTerminalStatus] = useState<string>('disconnected')
   const [isActive, setIsActive] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -35,6 +48,17 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
   const isActiveProject = activeProjectId === project.id
   const queryClient = useQueryClient()
   const { currentUser } = useAuth()
+
+  const isUnit = !!project.parentId
+  const isMultiModule = project.projectType === 'multi'
+
+  // Fetch parent project name for unit cards
+  const { data: parentProject } = useQuery({
+    queryKey: ['project', project.parentId],
+    queryFn: () => getProject(project.parentId!),
+    enabled: isUnit,
+    staleTime: 300_000,
+  })
 
   const handleSessionSnapshot = useCallback((snapshot: ChatSessionSnapshot) => {
     setCurrentSession(snapshot)
@@ -121,6 +145,7 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
   }, [project.id, queryClient])
 
   const [rebuilding, setRebuilding] = useState(false)
+  const [showHealthDetail, setShowHealthDetail] = useState(false)
   const handleRebuild = useCallback(async () => {
     setRebuilding(true)
     try {
@@ -163,13 +188,14 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
   const isServerMode = displayMode === 'server'
 
   const tabs: { key: CardTab; label: string; icon: string; tooltip: string }[] = [
-    { key: 'health', label: 'Health', icon: 'health', tooltip: 'Health & KPIs' },
     { key: 'terminal', label: 'Claude Code', icon: 'terminal', tooltip: 'Claude Code' },
+    { key: 'health', label: 'Health', icon: 'health', tooltip: 'Health & KPIs' },
     ...(shellEnabled || isSuperAdmin ? [{ key: 'shell' as CardTab, label: 'Shell', icon: 'shell', tooltip: 'Interactive Shell' }] : []),
     { key: 'issues', label: 'Issues', icon: 'issues', tooltip: 'Issues' },
     { key: 'feedback', label: 'Feedback', icon: 'feedback', tooltip: 'Feedback Review' },
     { key: 'files', label: 'Files', icon: 'files', tooltip: 'File Explorer' },
     { key: 'ci', label: 'CI', icon: 'ci', tooltip: 'CI / Deploy' },
+    ...(isMultiModule || isUnit ? [{ key: 'modules' as CardTab, label: 'Modules', icon: 'modules', tooltip: 'Manage Units' }] : []),
   ]
 
   const menuItems: { key: CardTab; label: string; icon: string }[] = [
@@ -199,21 +225,41 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
   const cardContent = (
     <div
       onClick={handleCardClick}
-      className={isFullscreen
-        ? 'fixed inset-0 z-50 flex flex-col bg-gray-800'
-        : `flex flex-col h-full rounded-lg border bg-gray-800 overflow-hidden transition-all duration-200 ${
-            isActiveProject
-              ? 'border-indigo-500 shadow-[0_0_12px_rgba(99,102,241,0.4)] ring-1 ring-indigo-500/50'
-              : 'border-gray-700'
-          }`
+      className={embedded
+        ? 'flex flex-col h-full bg-gray-800 overflow-hidden'
+        : isFullscreen
+          ? 'fixed inset-0 z-50 flex flex-col bg-gray-800'
+          : `flex flex-col h-full rounded-lg border bg-gray-800 overflow-hidden transition-all duration-200 ${
+              isActiveProject
+                ? 'border-indigo-500 shadow-[0_0_12px_rgba(99,102,241,0.4)] ring-1 ring-indigo-500/50'
+                : 'border-gray-700'
+            }`
       }>
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 bg-gray-900 border-b border-gray-700 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="drag-handle text-sm font-semibold text-white truncate cursor-grab select-none">
-            {project.name}
-          </span>
-          <span className="drag-handle text-[10px] font-mono text-gray-500 shrink-0 cursor-grab select-none">({project.code})</span>
+          {!embedded && <>
+            {isUnit && parentProject && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setActiveProjectId(parentProject.id); const el = document.querySelector(`[data-project-id="${parentProject.id}"]`); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }}
+                className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-300/70 hover:text-purple-300 transition-colors shrink-0 mr-0.5"
+                title={`Module of ${parentProject.name} — click to select`}
+              >
+                <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 7.125C2.25 6.504 2.754 6 3.375 6h6c.621 0 1.125.504 1.125 1.125v3.75c0 .621-.504 1.125-1.125 1.125h-6a1.125 1.125 0 0 1-1.125-1.125v-3.75ZM14.25 8.625c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v8.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 0 1-1.125-1.125v-8.25ZM3.75 16.125c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v2.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 0 1-1.125-1.125v-2.25Z" />
+                </svg>
+                {parentProject.name}
+                <span className="text-gray-600">/</span>
+              </button>
+            )}
+            <span className="drag-handle text-sm font-semibold text-white truncate cursor-grab select-none">
+              {project.name}
+            </span>
+            <span className="drag-handle text-[10px] font-mono text-gray-500 shrink-0 cursor-grab select-none">({project.code})</span>
+            {isMultiModule && (
+              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-purple-500/20 text-purple-300 shrink-0">orchestrator</span>
+            )}
+          </>}
           {(() => {
             const frontendUrl = monitorEnv === 'dev'
               ? project.healthCheck?.frontend.devUrl
@@ -221,9 +267,10 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
                 ? project.healthCheck?.frontend.prodUrl
                 : (project.healthCheck?.frontend.devUrl || project.healthCheck?.frontend.prodUrl);
             if (!frontendUrl) return null;
+            const href = /^https?:\/\//i.test(frontendUrl) ? frontendUrl : `http://${frontendUrl}`;
             return (
               <a
-                href={frontendUrl}
+                href={href}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="relative z-20 inline-flex items-center gap-1 rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-indigo-500 transition-colors shrink-0"
@@ -289,7 +336,9 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
             </span>
           )}
           {monitorEnv && healthHasResults && (
-            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowHealthDetail(true) }}
+              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer hover:ring-1 hover:ring-white/20 transition-all ${
               healthAllUp
                 ? 'bg-green-600/20 text-green-400'
                 : healthAllDown
@@ -300,7 +349,7 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
                 healthAllUp ? 'bg-green-400' : healthAllDown ? 'bg-red-400' : 'bg-yellow-400'
               }`} />
               {healthAllUp ? 'Up' : healthAllDown ? 'Down' : 'Degraded'}
-            </span>
+            </button>
           )}
           {isSelfProject && activeTab === 'terminal' && (
             <button
@@ -315,28 +364,32 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
               {rebuilding ? 'Rebuilding' : 'Rebuild'}
             </button>
           )}
-          <button
-            onClick={() => setIsFullscreen(!isFullscreen)}
-            className="text-gray-500 hover:text-gray-300 transition-colors"
-            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              {isFullscreen ? (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25" />
-              ) : (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
-              )}
-            </svg>
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); closeProject(project.id) }}
-            className="text-gray-500 hover:text-red-400 transition-colors"
-            title="Close window"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          {!embedded && (
+            <button
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              className="text-gray-500 hover:text-gray-300 transition-colors"
+              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {isFullscreen ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+                )}
+              </svg>
+            </button>
+          )}
+          {!embedded && !isFullscreen && (
+            <button
+              onClick={(e) => { e.stopPropagation(); closeProject(project.id) }}
+              className="text-gray-500 hover:text-red-400 transition-colors"
+              title="Close window"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 
@@ -509,8 +562,8 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
               hasGitHubUrl={!!project.links.githubUrl}
               hasDeployCmd={!!project.deployment?.deployProd}
               hasStartDevCmd={!!project.deployment?.startDev}
-              hasStartProdCmd={!!project.deployment?.startProd}
-              hasRestartProdCmd={!!project.deployment?.restartProd}
+              hasStartProdCmd={!!(project.deployment?.startProd || project.deployment?.flyApp)}
+              hasRestartProdCmd={!!(project.deployment?.restartProd || project.deployment?.flyApp)}
               paused={project.paused}
               githubUrl={project.links.githubUrl}
               isCloned={project.cloneStatus === 'cloned' || !!project.links.localPath}
@@ -535,14 +588,175 @@ export default function ProjectCard({ summary }: ProjectCardProps) {
             <MembersPanel projectId={project.id} />
           </div>
         )}
+        {activeTab === 'modules' && (isMultiModule || isUnit) && (
+          <div className="p-3 overflow-y-auto h-full">
+            <ModulesTab
+              parentId={isUnit ? project.parentId! : project.id}
+              parentProject={isUnit ? parentProject : project}
+              showParentHero={isUnit}
+            />
+          </div>
+        )}
       </div>
     </div>
   )
 
-  if (isFullscreen) {
-    return createPortal(cardContent, document.body)
+  return (
+    <>
+      {isFullscreen ? createPortal(cardContent, document.body) : cardContent}
+      {showHealthDetail && healthResults && (
+        <HealthDetailModal
+          results={healthResults}
+          projectName={project.name}
+          monitorEnv={monitorEnv || ''}
+          onClose={() => setShowHealthDetail(false)}
+        />
+      )}
+    </>
+  )
+}
+
+function HealthDetailModal({ results, projectName, monitorEnv, onClose }: {
+  results: HealthCheckResult[]
+  projectName: string
+  monitorEnv: string
+  onClose: () => void
+}) {
+  const allUp = results.every(r => r.status === 'up')
+  const allDown = results.every(r => r.status === 'down')
+
+  const statusIcon = (status: string) => {
+    if (status === 'up' || status === 'healthy') return <span className="h-2 w-2 rounded-full bg-green-400 shrink-0" />
+    if (status === 'down' || status === 'unhealthy') return <span className="h-2 w-2 rounded-full bg-red-400 shrink-0" />
+    return <span className="h-2 w-2 rounded-full bg-yellow-400 shrink-0" />
   }
-  return cardContent
+
+  const statusLabel = allUp ? 'Up' : allDown ? 'Down' : 'Degraded'
+  const statusColor = allUp ? 'text-green-400' : allDown ? 'text-red-400' : 'text-yellow-400'
+
+  return createPortal(
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="w-full max-w-lg mx-4 bg-gray-900 rounded-xl border border-gray-700 shadow-2xl" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-white">{projectName}</h3>
+            <span className={`text-xs font-medium ${statusColor}`}>{statusLabel}</span>
+            <span className="text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">{monitorEnv}</span>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Endpoints */}
+        <div className="px-5 py-4 space-y-4 max-h-[70vh] overflow-y-auto">
+          {results.map((r, i) => (
+            <div key={i} className="space-y-2">
+              <div className="flex items-center gap-2">
+                {statusIcon(r.status)}
+                <span className="text-sm font-medium text-white">{r.name}</span>
+                <span className={`text-xs font-medium ${
+                  r.status === 'up' ? 'text-green-400' : r.status === 'down' ? 'text-red-400' : 'text-yellow-400'
+                }`}>{r.status}</span>
+                {r.code ? <span className="text-[10px] text-gray-500 font-mono">HTTP {r.code}</span> : null}
+              </div>
+
+              <div className="text-[11px] text-gray-500 font-mono truncate">{r.url}</div>
+
+              {/* Error / reason for degraded/down */}
+              {r.error && (
+                <div className="rounded bg-red-900/20 border border-red-700/30 px-3 py-2">
+                  <p className="text-xs text-red-300">{r.error}</p>
+                </div>
+              )}
+
+              {/* Software info */}
+              {(r.softwareName || r.version || r.uptime) && (
+                <div className="flex gap-4 text-[11px] text-gray-400">
+                  {r.softwareName && <span>{r.softwareName}{r.version ? ` v${r.version}` : ''}</span>}
+                  {r.uptime ? <span>Uptime: {formatUptime(r.uptime)}</span> : null}
+                </div>
+              )}
+
+              {/* Dependencies */}
+              {r.dependencies && r.dependencies.length > 0 && (
+                <div className="ml-3 space-y-1">
+                  <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">Dependencies</p>
+                  {r.dependencies.map((dep, di) => (
+                    <div key={di} className="flex items-center gap-2">
+                      {statusIcon(dep.status)}
+                      <span className="text-xs text-gray-300">{dep.name}</span>
+                      <span className={`text-[10px] ${
+                        dep.status === 'healthy' ? 'text-green-400' : dep.status === 'unhealthy' ? 'text-red-400' : 'text-yellow-400'
+                      }`}>{dep.status}</span>
+                      {dep.message && <span className="text-[10px] text-gray-500 truncate">{dep.message}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* KPIs */}
+              {r.kpis && r.kpis.length > 0 && (
+                <div className="ml-3 flex flex-wrap gap-3">
+                  {r.kpis.map((kpi, ki) => (
+                    <div key={ki} className="text-[11px]">
+                      <span className="text-gray-500">{kpi.name}: </span>
+                      <span className="text-white font-medium">{kpi.value}</span>
+                      <span className="text-gray-500 ml-0.5">{kpi.unit}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {i < results.length - 1 && <hr className="border-gray-800 mt-3" />}
+            </div>
+          ))}
+
+          {/* Explanation for degraded */}
+          {!allUp && !allDown && (
+            <div className="rounded-lg bg-yellow-900/15 border border-yellow-700/30 px-3 py-2 mt-2">
+              <p className="text-xs text-yellow-300 font-medium mb-1">Why Degraded?</p>
+              <p className="text-[11px] text-yellow-200/70">
+                {results.filter(r => r.status === 'degraded').map(r =>
+                  r.error
+                    ? `${r.name}: ${r.error}`
+                    : `${r.name}: responding but not fully healthy`
+                ).join('. ')}.
+                {' '}{results.filter(r => r.status === 'down').map(r =>
+                  r.error
+                    ? `${r.name}: ${r.error}`
+                    : `${r.name}: not responding`
+                ).join('. ')}{results.some(r => r.status === 'down') ? '.' : ''}
+              </p>
+            </div>
+          )}
+
+          {allDown && (
+            <div className="rounded-lg bg-red-900/15 border border-red-700/30 px-3 py-2 mt-2">
+              <p className="text-xs text-red-300 font-medium mb-1">Why Down?</p>
+              <p className="text-[11px] text-red-200/70">
+                {results.map(r =>
+                  r.error
+                    ? `${r.name}: ${r.error}`
+                    : `${r.name}: not responding (HTTP ${r.code || '?'})`
+                ).join('. ')}.
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 pb-4">
+          <button onClick={onClose} className="w-full rounded-lg bg-gray-800 hover:bg-gray-700 py-2 text-xs text-gray-400 transition-colors">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
 }
 
 function TabIcon({ name }: { name: string }) {
@@ -607,6 +821,12 @@ function TabIcon({ name }: { name: string }) {
       return (
         <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z" />
+        </svg>
+      )
+    case 'modules':
+      return (
+        <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 7.125C2.25 6.504 2.754 6 3.375 6h6c.621 0 1.125.504 1.125 1.125v3.75c0 .621-.504 1.125-1.125 1.125h-6a1.125 1.125 0 0 1-1.125-1.125v-3.75ZM14.25 8.625c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v8.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 0 1-1.125-1.125v-8.25ZM3.75 16.125c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v2.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 0 1-1.125-1.125v-2.25Z" />
         </svg>
       )
     default:
@@ -982,7 +1202,7 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
       <div className="border-t border-gray-700/50 pt-2 mt-2">
         <div className="flex items-center justify-between mb-1.5">
           <label className={labelClass}>Deployment Commands</label>
-          {localPath && !flyDetected && (
+          {localPath && (
             <button
               type="button"
               disabled={flyDetecting}
@@ -1011,24 +1231,24 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
 
         {flyNotFound && <p className="text-[10px] text-gray-500 mb-1">No fly.toml found in local path.</p>}
 
-        {flyDetected && (
-          <div className="rounded border border-indigo-500/30 bg-indigo-500/10 p-2 mb-2 space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-indigo-300 font-medium">fly.toml: <span className="font-mono">{flyDetected.appName}</span></span>
-              <button type="button" onClick={() => setFlyDetected(null)} className="text-gray-500 hover:text-gray-400 text-[10px]">✕</button>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setDeployment({ ...deployment, provider: 'flyio', flyApp: flyDetected.appName, deployProd: flyDetected.deployProd, startProd: flyDetected.startProd, restartProd: flyDetected.restartProd, viewLogs: flyDetected.viewLogs })
-                setFlyApplied(flyDetected)
-                setFlyDetected(null)
-              }}
-              className="w-full rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-medium py-1 transition-colors"
-            >
-              Apply commands
-            </button>
-          </div>
+        {flyDetected && createPortal(
+          <FlyTomlSuggestionsModal
+            appName={flyDetected.appName}
+            suggestions={{
+              flyApp: flyDetected.appName,
+              deployProd: flyDetected.deployProd,
+              startProd: flyDetected.startProd,
+              restartProd: flyDetected.restartProd,
+              viewLogs: flyDetected.viewLogs,
+            }}
+            current={deployment}
+            onApply={(accepted) => {
+              setDeployment({ ...deployment, ...accepted })
+              setFlyDetected(null)
+            }}
+            onClose={() => setFlyDetected(null)}
+          />,
+          document.body
         )}
 
         <div className="space-y-1">
@@ -1169,67 +1389,12 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
       )}
 
       {/* Archive confirmation modal */}
-      {flyApplied && createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-          <div className="w-full max-w-sm rounded-xl bg-gray-800 shadow-2xl border border-gray-700">
-            <div className="px-6 py-5">
-              <h3 className="text-sm font-semibold text-white mb-1">fly.toml applied</h3>
-              <p className="text-xs text-gray-400 mb-4">
-                The following commands were set from <span className="font-mono text-indigo-300">{flyApplied.appName}</span>'s fly.toml. Hit <strong className="text-white">Save</strong> to persist.
-              </p>
-              <div className="space-y-2 text-xs">
-                {[
-                  { label: 'Deploy Prod', value: flyApplied.deployProd },
-                  { label: 'Start Prod', value: flyApplied.startProd },
-                  { label: 'Restart Prod', value: flyApplied.restartProd },
-                  { label: 'View Logs', value: flyApplied.viewLogs },
-                ].map((row) => (
-                  <div key={row.label} className="flex items-center gap-2">
-                    <span className="w-24 shrink-0 text-gray-500">{row.label}</span>
-                    <span className="font-mono text-gray-200 truncate">{row.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="flex justify-end px-6 pb-5">
-              <button
-                onClick={() => setFlyApplied(null)}
-                className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-xs font-medium text-white transition-colors"
-              >
-                Got it
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
-
       {showArchiveModal && createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-          <div className="w-full max-w-sm rounded-xl bg-gray-800 shadow-2xl border border-gray-700">
-            <div className="px-6 py-5">
-              <h3 className="text-sm font-semibold text-white mb-2">Archive project?</h3>
-              <p className="text-xs text-gray-400">
-                <span className="text-gray-200 font-medium">{project.name}</span> will be archived and hidden from the dashboard.
-                It can be restored later from the archived projects list.
-              </p>
-            </div>
-            <div className="flex justify-end gap-2 px-6 pb-5">
-              <button
-                onClick={() => setShowArchiveModal(false)}
-                className="rounded-lg px-4 py-2 text-xs text-gray-400 hover:text-gray-200 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { setShowArchiveModal(false); archiveMutation.mutate() }}
-                className="rounded-lg bg-red-700 hover:bg-red-600 px-4 py-2 text-xs font-medium text-white transition-colors"
-              >
-                Archive
-              </button>
-            </div>
-          </div>
-        </div>,
+        <ArchiveConfirmModal
+          project={project}
+          onCancel={() => setShowArchiveModal(false)}
+          onConfirm={() => { setShowArchiveModal(false); archiveMutation.mutate() }}
+        />,
         document.body
       )}
     </div>
@@ -1910,6 +2075,425 @@ function CompactLogRow({ entry }: { entry: ActivityLogEntry }) {
         )}
       </div>
       <span className="text-[10px] text-gray-500 shrink-0">{formatLogTime(entry.timestamp)}</span>
+    </div>
+  )
+}
+
+// ─── Modules tab (multi-module parent only) ─────────────────────────────────
+
+type AddMode = 'chooser' | 'new' | 'existing' | null
+type PostOpAction = { type: 'added' | 'detached'; unitName: string; parentName: string; parentPath: string } | null
+
+function ModulesTab({ parentId, parentProject, showParentHero }: {
+  parentId: string; parentProject?: Project | null; showParentHero?: boolean
+}) {
+  const [addMode, setAddMode] = useState<AddMode>(null)
+  const [confirmDetach, setConfirmDetach] = useState<Project | null>(null)
+  const [postOp, setPostOp] = useState<PostOpAction>(null)
+  const [unitName, setUnitName] = useState('')
+  const [unitCode, setUnitCode] = useState('')
+  const [unitPath, setUnitPath] = useState('')
+  const [unitDesc, setUnitDesc] = useState('')
+  const [selectedExisting, setSelectedExisting] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const queryClient = useQueryClient()
+  const { setActiveProjectId } = useActiveProject()
+
+  const { data: units = [], isLoading } = useQuery({
+    queryKey: ['units', parentId],
+    queryFn: () => listUnits(parentId),
+    staleTime: 60_000,
+  })
+
+  // For attach existing: get all projects, filter to eligible ones
+  const { data: allProjects = [] } = useQuery({
+    queryKey: ['projects'],
+    queryFn: listProjects,
+    enabled: addMode === 'existing',
+  })
+  const eligibleProjects = allProjects.filter(p =>
+    !p.parentId && p.projectType !== 'multi' && p.id !== parentId && !units.some(u => u.id === p.id)
+  )
+
+  const pName = parentProject?.name || 'Orchestrator'
+  const pPath = parentProject?.links.localPath || ''
+
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: ['units', parentId] })
+    queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
+    queryClient.invalidateQueries({ queryKey: ['universeData'] })
+  }
+
+  const handleAddNew = async () => {
+    setError('')
+    if (!unitName.trim() || !unitCode.trim() || !unitPath.trim()) { setError('Name, code, and path are required.'); return }
+    if (!/^[A-Z]{3,5}$/.test(unitCode)) { setError('Code must be 3-5 uppercase letters.'); return }
+    setBusy(true)
+    try {
+      await addUnit(parentId, { name: unitName.trim(), code: unitCode, path: unitPath.trim(), description: unitDesc.trim() })
+      invalidateAll()
+      setPostOp({ type: 'added', unitName: unitName.trim(), parentName: pName, parentPath: pPath })
+      setAddMode(null)
+      setUnitName(''); setUnitCode(''); setUnitPath(''); setUnitDesc('')
+    } catch (err) { setError(err instanceof Error ? err.message : 'Failed') }
+    finally { setBusy(false) }
+  }
+
+  const handleAttachExisting = async () => {
+    if (!selectedExisting) return
+    setBusy(true)
+    setError('')
+    try {
+      const attached = await attachUnit(parentId, selectedExisting)
+      invalidateAll()
+      setPostOp({ type: 'added', unitName: attached.unitName || attached.name, parentName: pName, parentPath: pPath })
+      setAddMode(null)
+      setSelectedExisting('')
+    } catch (err) { setError(err instanceof Error ? err.message : 'Failed') }
+    finally { setBusy(false) }
+  }
+
+  const handleDetach = async () => {
+    if (!confirmDetach) return
+    setBusy(true)
+    try {
+      await detachUnit(parentId, confirmDetach.id)
+      invalidateAll()
+      setPostOp({ type: 'detached', unitName: confirmDetach.unitName || confirmDetach.name, parentName: pName, parentPath: pPath })
+      setConfirmDetach(null)
+    } catch { /* ignore */ }
+    finally { setBusy(false) }
+  }
+
+  const buildPrompt = (op: NonNullable<PostOpAction>) => {
+    if (op.type === 'added') {
+      return `The module "${op.unitName}" was just added to the ${op.parentName} multi-module project. Review and update the CLAUDE.md files:\n- Orchestrator: ${op.parentPath}/CLAUDE.md\n- New module and all sibling modules\n\nEnsure the orchestrator's unit table is current, and that the new module's CLAUDE.md describes how it integrates with the other modules, what interfaces it exposes, and what contracts it should respect.`
+    }
+    return `The module "${op.unitName}" was just detached from the ${op.parentName} multi-module project and is now independent. Review and update the CLAUDE.md files:\n- Orchestrator: ${op.parentPath}/CLAUDE.md — remove the detached module from the unit table\n- Remaining sibling modules — remove references to the detached module`
+  }
+
+  if (isLoading) return <div className="p-4 text-sm text-gray-500">Loading units...</div>
+
+  return (
+    <div className="space-y-3">
+      {/* Parent hero for unit cards */}
+      {showParentHero && parentProject && (
+        <button
+          onClick={() => { setActiveProjectId(parentProject.id); const el = document.querySelector(`[data-project-id="${parentProject.id}"]`); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }}
+          className="w-full rounded-lg border border-purple-700/40 bg-purple-900/10 px-3 py-2 flex items-center gap-2 text-left hover:bg-purple-900/20 transition-colors"
+        >
+          <svg className="w-4 h-4 text-purple-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 7.125C2.25 6.504 2.754 6 3.375 6h6c.621 0 1.125.504 1.125 1.125v3.75c0 .621-.504 1.125-1.125 1.125h-6a1.125 1.125 0 0 1-1.125-1.125v-3.75ZM14.25 8.625c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v8.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 0 1-1.125-1.125v-8.25ZM3.75 16.125c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v2.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 0 1-1.125-1.125v-2.25Z" />
+          </svg>
+          <div>
+            <p className="text-xs font-semibold text-purple-300">{parentProject.name}</p>
+            <p className="text-[10px] text-purple-400/60">Orchestrator — click to select</p>
+          </div>
+        </button>
+      )}
+
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Units ({units.length})</h3>
+        <button onClick={() => setAddMode('chooser')} className="text-[10px] text-indigo-400 hover:text-indigo-300 font-medium">+ Add Unit</button>
+      </div>
+
+      {/* Add chooser modal */}
+      {addMode === 'chooser' && (
+        <div className="rounded-lg border border-gray-700 bg-gray-900/50 p-3 space-y-2">
+          <p className="text-xs text-gray-400">How would you like to add a unit?</p>
+          <div className="flex gap-2">
+            <button onClick={() => setAddMode('new')} className="flex-1 rounded border border-gray-600 bg-gray-700 hover:border-indigo-500 px-3 py-2 text-xs text-gray-200 transition-colors">Create New</button>
+            <button onClick={() => setAddMode('existing')} className="flex-1 rounded border border-gray-600 bg-gray-700 hover:border-indigo-500 px-3 py-2 text-xs text-gray-200 transition-colors">Attach Existing</button>
+          </div>
+          <button onClick={() => setAddMode(null)} className="text-[10px] text-gray-500 hover:text-gray-300">Cancel</button>
+        </div>
+      )}
+
+      {/* Create new form */}
+      {addMode === 'new' && (
+        <div className="rounded-lg border border-gray-700 bg-gray-900/50 p-3 space-y-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] text-gray-400 uppercase tracking-wider">Create New Unit</span>
+            <button onClick={() => setAddMode(null)} className="text-[10px] text-gray-500 hover:text-gray-300">Cancel</button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <input type="text" value={unitName} onChange={e => setUnitName(e.target.value)} placeholder="Unit Name" autoFocus
+              className="rounded border border-gray-600 bg-gray-700 px-2 py-1.5 text-xs text-gray-100 focus:border-indigo-500 focus:outline-none" />
+            <input type="text" value={unitCode} onChange={e => setUnitCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5))} placeholder="CODE" maxLength={5}
+              className="rounded border border-gray-600 bg-gray-700 px-2 py-1.5 text-xs font-mono text-gray-100 focus:border-indigo-500 focus:outline-none" />
+          </div>
+          <input type="text" value={unitPath} onChange={e => setUnitPath(e.target.value)} placeholder="Relative path (e.g. units/combat)"
+            className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1.5 text-xs font-mono text-gray-100 focus:border-indigo-500 focus:outline-none" />
+          <input type="text" value={unitDesc} onChange={e => setUnitDesc(e.target.value)} placeholder="Description (optional)"
+            className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1.5 text-xs text-gray-100 focus:border-indigo-500 focus:outline-none" />
+          {error && <p className="text-[10px] text-red-400">{error}</p>}
+          <button onClick={handleAddNew} disabled={busy}
+            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-[10px] font-medium px-3 py-1 rounded transition-colors">
+            {busy ? 'Adding...' : 'Create & Add'}
+          </button>
+        </div>
+      )}
+
+      {/* Attach existing form */}
+      {addMode === 'existing' && (
+        <div className="rounded-lg border border-gray-700 bg-gray-900/50 p-3 space-y-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] text-gray-400 uppercase tracking-wider">Attach Existing Project</span>
+            <button onClick={() => setAddMode(null)} className="text-[10px] text-gray-500 hover:text-gray-300">Cancel</button>
+          </div>
+          {eligibleProjects.length === 0 ? (
+            <p className="text-xs text-gray-500">No eligible projects to attach. Projects already in a multi-module setup or orchestrators cannot be attached.</p>
+          ) : (
+            <>
+              <select value={selectedExisting} onChange={e => setSelectedExisting(e.target.value)}
+                className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1.5 text-xs text-gray-100 focus:border-indigo-500 focus:outline-none">
+                <option value="">Select a project...</option>
+                {eligibleProjects.map(p => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.code})</option>
+                ))}
+              </select>
+              {error && <p className="text-[10px] text-red-400">{error}</p>}
+              <button onClick={handleAttachExisting} disabled={busy || !selectedExisting}
+                className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-[10px] font-medium px-3 py-1 rounded transition-colors">
+                {busy ? 'Attaching...' : 'Attach'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Units list */}
+      <div className="divide-y divide-gray-800/60">
+        {units.map(unit => (
+          <div key={unit.id} className="flex items-center justify-between py-2">
+            <div className="min-w-0">
+              <button
+                onClick={() => { setActiveProjectId(unit.id); const el = document.querySelector(`[data-project-id="${unit.id}"]`); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }}
+                className="flex items-center gap-1.5 text-xs text-gray-300 hover:text-white transition-colors"
+              >
+                <span className="font-medium">{unit.unitName || unit.name}</span>
+                <span className="font-mono text-gray-500">({unit.code})</span>
+              </button>
+              <p className="text-[10px] text-gray-600 font-mono">{unit.unitPath}</p>
+            </div>
+            <button onClick={() => setConfirmDetach(unit)} className="text-[10px] text-red-400/60 hover:text-red-400 transition-colors shrink-0">
+              Remove
+            </button>
+          </div>
+        ))}
+        {units.length === 0 && <p className="text-xs text-gray-600 py-3">No units yet</p>}
+      </div>
+
+      {/* Detach confirmation modal */}
+      {confirmDetach && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={() => setConfirmDetach(null)}>
+          <div className="w-full max-w-sm rounded-xl bg-gray-800 border border-gray-700 p-5 space-y-3" onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-white">Remove module?</h3>
+            <p className="text-xs text-gray-400">
+              <span className="text-gray-200 font-medium">{confirmDetach.unitName || confirmDetach.name}</span> will be detached from{' '}
+              <span className="text-gray-200 font-medium">{pName}</span> and become an independent project.
+              It will remain on the dashboard. Archive it separately if you want it removed.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmDetach(null)} className="text-xs text-gray-400 hover:text-white px-3 py-1.5 rounded transition-colors">Cancel</button>
+              <button onClick={handleDetach} disabled={busy}
+                className="bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors">
+                {busy ? 'Detaching...' : 'Detach'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Post-operation prompt modal */}
+      {postOp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={() => setPostOp(null)}>
+          <div className="w-full max-w-md rounded-xl bg-gray-800 border border-gray-700 p-5 space-y-3" onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-white">
+              {postOp.type === 'added' ? 'Module added' : 'Module detached'}
+            </h3>
+            <p className="text-xs text-gray-400">
+              CLAUDE.md files have been automatically updated. You can optionally send the following prompt to the orchestrator's Claude Code to refine the integration context:
+            </p>
+            <pre className="text-[10px] text-gray-300 bg-gray-900 border border-gray-700 rounded p-2.5 whitespace-pre-wrap max-h-32 overflow-y-auto">
+              {buildPrompt(postOp)}
+            </pre>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setPostOp(null)} className="text-xs text-gray-400 hover:text-white px-3 py-1.5 rounded transition-colors">Dismiss</button>
+              <button
+                onClick={() => { navigator.clipboard.writeText(buildPrompt(postOp)); setPostOp(null) }}
+                className="bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors">
+                Copy Prompt
+              </button>
+              <button
+                onClick={() => {
+                  // Send to orchestrator's Claude Code via WebSocket
+                  // Find the orchestrator's ChatView and inject the message
+                  const event = new CustomEvent('vibectl:send-to-project', { detail: { projectId: parentId, text: buildPrompt(postOp) } })
+                  window.dispatchEvent(event)
+                  setPostOp(null)
+                }}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors">
+                Send to Orchestrator
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Archive confirmation with multi-module warning ─────────────────────────
+
+// ─── Fly.toml suggestions modal ──────────────────────────────────────────────
+
+type SuggestionField = { key: keyof DeploymentConfig; label: string }
+const SUGGESTION_FIELDS: SuggestionField[] = [
+  { key: 'flyApp', label: 'Fly App' },
+  { key: 'deployProd', label: 'Deploy Prod' },
+  { key: 'startProd', label: 'Start Prod' },
+  { key: 'restartProd', label: 'Restart Prod' },
+  { key: 'viewLogs', label: 'View Logs' },
+]
+
+function FlyTomlSuggestionsModal({ appName, suggestions, current, onApply, onClose }: {
+  appName: string
+  suggestions: Partial<DeploymentConfig>
+  current: DeploymentConfig
+  onApply: (accepted: Partial<DeploymentConfig>) => void
+  onClose: () => void
+}) {
+  const [accepted, setAccepted] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {}
+    for (const f of SUGGESTION_FIELDS) {
+      const suggested = suggestions[f.key] as string | undefined
+      const currentVal = current[f.key] as string | undefined
+      // Only auto-check if current field is blank and there's a suggestion
+      if (suggested && !currentVal) init[f.key] = true
+    }
+    return init
+  })
+
+  const toggle = (key: string) => setAccepted(prev => ({ ...prev, [key]: !prev[key] }))
+
+  const handleApply = () => {
+    const result: Partial<DeploymentConfig> = {}
+    for (const f of SUGGESTION_FIELDS) {
+      if (accepted[f.key]) {
+        (result as Record<string, string>)[f.key] = suggestions[f.key] as string
+      }
+    }
+    onApply(result)
+  }
+
+  const acceptedCount = Object.values(accepted).filter(Boolean).length
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-xl bg-gray-800 shadow-2xl border border-gray-700" onClick={e => e.stopPropagation()}>
+        <div className="px-6 pt-5 pb-3">
+          <h3 className="text-sm font-semibold text-white mb-1">fly.toml detected: <span className="font-mono text-indigo-300">{appName}</span></h3>
+          <p className="text-xs text-gray-400">Select which suggestions to apply. You'll still need to Save to persist changes.</p>
+        </div>
+
+        <div className="px-6 pb-4">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-gray-500 uppercase tracking-wider border-b border-gray-700">
+                <th className="py-1.5 text-left w-8"></th>
+                <th className="py-1.5 text-left">Field</th>
+                <th className="py-1.5 text-left">Current</th>
+                <th className="py-1.5 text-left">Suggested</th>
+              </tr>
+            </thead>
+            <tbody>
+              {SUGGESTION_FIELDS.map(f => {
+                const suggested = suggestions[f.key] as string | undefined
+                const currentVal = current[f.key] as string | undefined
+                const hasSuggestion = !!suggested
+                const isDifferent = suggested !== currentVal
+                const isChecked = !!accepted[f.key]
+
+                return (
+                  <tr key={f.key} className="border-b border-gray-800/50">
+                    <td className="py-2">
+                      {hasSuggestion && isDifferent ? (
+                        <input type="checkbox" checked={isChecked} onChange={() => toggle(f.key)}
+                          className="rounded border-gray-600 bg-gray-700 text-indigo-500 focus:ring-indigo-500 w-3.5 h-3.5" />
+                      ) : hasSuggestion && !isDifferent ? (
+                        <span className="text-green-500 text-[10px]">✓</span>
+                      ) : null}
+                    </td>
+                    <td className="py-2 text-gray-400 font-medium">{f.label}</td>
+                    <td className="py-2 font-mono text-gray-500 max-w-[140px] truncate" title={currentVal || ''}>
+                      {currentVal || <span className="text-gray-700 italic">not set</span>}
+                    </td>
+                    <td className={`py-2 font-mono max-w-[140px] truncate ${hasSuggestion && isDifferent ? 'text-indigo-300' : 'text-gray-600'}`} title={suggested || ''}>
+                      {hasSuggestion ? suggested : <span className="text-gray-700">—</span>}
+                      {hasSuggestion && !isDifferent && <span className="ml-1 text-[9px] text-green-500/70">same</span>}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex justify-end gap-2 px-6 pb-5">
+          <button onClick={onClose} className="rounded-lg px-4 py-2 text-xs text-gray-400 hover:text-gray-200 transition-colors">
+            Cancel
+          </button>
+          <button onClick={handleApply} disabled={acceptedCount === 0}
+            className="rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 px-4 py-2 text-xs font-medium text-white transition-colors">
+            Apply {acceptedCount > 0 ? `(${acceptedCount})` : ''}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ArchiveConfirmModal({ project, onCancel, onConfirm }: {
+  project: Project; onCancel: () => void; onConfirm: () => void
+}) {
+  const isMulti = project.projectType === 'multi'
+  const { data: units = [] } = useQuery({
+    queryKey: ['units', project.id],
+    queryFn: () => listUnits(project.id),
+    enabled: isMulti,
+  })
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+      <div className="w-full max-w-sm rounded-xl bg-gray-800 shadow-2xl border border-gray-700">
+        <div className="px-6 py-5">
+          <h3 className="text-sm font-semibold text-white mb-2">Archive project?</h3>
+          <p className="text-xs text-gray-400">
+            <span className="text-gray-200 font-medium">{project.name}</span> will be archived and hidden from the dashboard.
+            It can be restored later from the archived projects list.
+          </p>
+          {isMulti && units.length > 0 && (
+            <div className="mt-3 rounded-lg border border-amber-700/50 bg-amber-900/10 px-3 py-2">
+              <p className="text-xs text-amber-300 font-medium mb-1">This will also archive {units.length} module{units.length > 1 ? 's' : ''}:</p>
+              <ul className="text-[10px] text-amber-200/70 space-y-0.5">
+                {units.map(u => (
+                  <li key={u.id}>{u.unitName || u.name} ({u.code})</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 px-6 pb-5">
+          <button onClick={onCancel} className="rounded-lg px-4 py-2 text-xs text-gray-400 hover:text-gray-200 transition-colors">
+            Cancel
+          </button>
+          <button onClick={onConfirm} className="rounded-lg bg-red-700 hover:bg-red-600 px-4 py-2 text-xs font-medium text-white transition-colors">
+            Archive{isMulti && units.length > 0 ? ` (${units.length + 1} projects)` : ''}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

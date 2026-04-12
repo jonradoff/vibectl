@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createProject, checkDir, ensureDir, detectGitRemote, detectProjectScripts, suggestClonePath, suggestNewPath } from '../../api/client';
+import { createProject, createMultiModuleProject, checkDir, ensureDir, detectGitRemote, detectProjectScripts, suggestClonePath, suggestNewPath } from '../../api/client';
 import type { DetectedScripts } from '../../api/client';
+import type { UnitDefinition } from '../../types';
 
 interface ProjectFormProps {
   open: boolean;
@@ -9,8 +10,9 @@ interface ProjectFormProps {
   onCreated: () => void;
 }
 
-type Step = 'basics' | 'repo';
+type Step = 'basics' | 'repo' | 'units';
 type RepoMode = 'clone' | 'local' | 'new';
+type ProjectType = 'simple' | 'multi';
 
 function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
   const queryClient = useQueryClient();
@@ -20,7 +22,13 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [description, setDescription] = useState('');
+  const [projectType, setProjectType] = useState<ProjectType>('simple');
   const [step1Error, setStep1Error] = useState('');
+
+  // Units (multi-module only)
+  const emptyUnit = (): UnitDefinition => ({ name: '', code: '', path: '', description: '' });
+  const [units, setUnits] = useState<UnitDefinition[]>([emptyUnit()]);
+  const [unitsError, setUnitsError] = useState('');
 
   // Step 2 — mode selection
   const [repoMode, setRepoMode] = useState<RepoMode>('clone');
@@ -122,9 +130,25 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
     },
   });
 
+  const multiMutation = useMutation({
+    mutationFn: createMultiModuleProject,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['globalDashboard'] });
+      onCreated();
+      onClose();
+    },
+    onError: (err: Error) => {
+      setStep2Error(err.message);
+      setSubmitting(false);
+    },
+  });
+
   function reset() {
     setStep('basics');
     setName(''); setCode(''); setDescription('');
+    setProjectType('simple');
+    setUnits([emptyUnit()]); setUnitsError('');
     setRepoMode('clone');
     setGithubUrl(''); setSuggestedPath('');
     setLocalPath(''); setDetectedRemote(''); setLocalGithubUrl(''); setDirExists(null); setDetectedScripts(null);
@@ -140,7 +164,25 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
     setStep1Error('');
     if (!name.trim()) { setStep1Error('Name is required.'); return; }
     if (!/^[A-Z]{3,5}$/.test(code)) { setStep1Error('Code must be 3–5 uppercase letters.'); return; }
+    setStep(projectType === 'multi' ? 'units' : 'repo');
+  }
+
+  function handleUnitsNext() {
+    setUnitsError('');
+    const valid = units.filter(u => u.name.trim() && u.code.trim() && u.path.trim());
+    if (valid.length === 0) { setUnitsError('At least one unit with name, code, and path is required.'); return; }
+    for (const u of valid) {
+      if (!/^[A-Z]{3,5}$/.test(u.code)) { setUnitsError(`Unit code "${u.code}" must be 3–5 uppercase letters.`); return; }
+    }
+    const codes = new Set(valid.map(u => u.code));
+    if (codes.has(code)) { setUnitsError('Unit codes must not duplicate the parent project code.'); return; }
+    if (codes.size !== valid.length) { setUnitsError('Unit codes must be unique.'); return; }
+    setUnits(valid); // trim empty rows
     setStep('repo');
+  }
+
+  function updateUnit(index: number, field: keyof UnitDefinition, value: string) {
+    setUnits(prev => prev.map((u, i) => i === index ? { ...u, [field]: value } : u));
   }
 
   async function handleCreate() {
@@ -185,7 +227,14 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
       if (Object.keys(d).length > 0) deployment = d;
     }
 
-    mutation.mutate({ name: name.trim(), code, description: description.trim(), links, goals: [], deployment });
+    if (projectType === 'multi') {
+      multiMutation.mutate({
+        name: name.trim(), code, description: description.trim(), links, goals: [],
+        projectType: 'multi', units,
+      });
+    } else {
+      mutation.mutate({ name: name.trim(), code, description: description.trim(), links, goals: [], deployment });
+    }
   }
 
   if (!open) return null;
@@ -199,8 +248,9 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
             <h2 className="text-base font-semibold text-white">New Project</h2>
             <div className="flex items-center gap-1.5 text-xs text-gray-500">
               <span className={step === 'basics' ? 'text-indigo-400 font-medium' : ''}>1. Basics</span>
+              {projectType === 'multi' && <><span>→</span><span className={step === 'units' ? 'text-indigo-400 font-medium' : ''}>2. Units</span></>}
               <span>→</span>
-              <span className={step === 'repo' ? 'text-indigo-400 font-medium' : ''}>2. Repository</span>
+              <span className={step === 'repo' ? 'text-indigo-400 font-medium' : ''}>{projectType === 'multi' ? '3' : '2'}. Repository</span>
             </div>
           </div>
           <button onClick={handleClose} className="text-gray-400 hover:text-white">
@@ -248,6 +298,29 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
                   placeholder="What is this project?"
                 />
               </div>
+              <div>
+                <label className="block text-sm text-gray-300 mb-1.5">Project type</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    { type: 'simple' as ProjectType, label: 'Simple', desc: 'Single codebase, one Claude Code agent' },
+                    { type: 'multi' as ProjectType, label: 'Multi-Module', desc: 'Orchestrator + units, each with own agent' },
+                  ]).map(({ type, label, desc }) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setProjectType(type)}
+                      className={`rounded-lg border p-3 text-left text-sm transition-colors ${
+                        projectType === type
+                          ? 'border-indigo-500 bg-indigo-600/20 text-white'
+                          : 'border-gray-600 bg-gray-700 text-gray-400 hover:border-gray-500 hover:text-gray-300'
+                      }`}
+                    >
+                      <div className="font-medium text-xs">{label}</div>
+                      <div className="text-[10px] text-gray-500 mt-0.5">{desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
               {step1Error && <p className="text-sm text-red-400">{step1Error}</p>}
               <div className="flex justify-end gap-3 pt-1">
                 <button type="button" onClick={handleClose} className="rounded-lg px-4 py-2 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
@@ -258,7 +331,53 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
             </form>
           )}
 
-          {/* ---- STEP 2: Repository ---- */}
+          {/* ---- STEP 2: Units (multi-module only) ---- */}
+          {step === 'units' && (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-400">
+                Define the units for <span className="text-white font-medium">{name}</span>. Each unit gets its own Claude Code agent.
+              </p>
+              <div className="space-y-3 max-h-80 overflow-y-auto">
+                {units.map((unit, i) => (
+                  <div key={i} className="rounded-lg border border-gray-700 bg-gray-900/50 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-gray-400">Unit {i + 1}</span>
+                      {units.length > 1 && (
+                        <button type="button" onClick={() => setUnits(prev => prev.filter((_, j) => j !== i))}
+                          className="text-xs text-red-400 hover:text-red-300">Remove</button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="text" value={unit.name} onChange={e => updateUnit(i, 'name', e.target.value)}
+                        placeholder="Unit Name" className="rounded border border-gray-600 bg-gray-700 px-2 py-1.5 text-sm text-gray-100 focus:border-indigo-500 focus:outline-none" />
+                      <input type="text" value={unit.code} onChange={e => updateUnit(i, 'code', e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5))}
+                        placeholder="CODE" maxLength={5} className="rounded border border-gray-600 bg-gray-700 px-2 py-1.5 text-sm font-mono text-gray-100 focus:border-indigo-500 focus:outline-none" />
+                    </div>
+                    <input type="text" value={unit.path} onChange={e => updateUnit(i, 'path', e.target.value)}
+                      placeholder="Relative path (e.g. units/combat)" className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1.5 text-sm font-mono text-gray-100 focus:border-indigo-500 focus:outline-none" />
+                    <input type="text" value={unit.description} onChange={e => updateUnit(i, 'description', e.target.value)}
+                      placeholder="Description (optional)" className="w-full rounded border border-gray-600 bg-gray-700 px-2 py-1.5 text-sm text-gray-100 focus:border-indigo-500 focus:outline-none" />
+                  </div>
+                ))}
+              </div>
+              <button type="button" onClick={() => setUnits(prev => [...prev, emptyUnit()])}
+                className="text-xs text-indigo-400 hover:text-indigo-300 font-medium">+ Add Unit</button>
+              {unitsError && <p className="text-sm text-red-400">{unitsError}</p>}
+              <div className="flex items-center justify-between pt-1">
+                <button type="button" onClick={() => setStep('basics')} className="rounded-lg px-4 py-2 text-sm text-gray-400 hover:text-gray-200">
+                  ← Back
+                </button>
+                <div className="flex gap-3">
+                  <button type="button" onClick={handleClose} className="rounded-lg px-4 py-2 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
+                  <button type="button" onClick={handleUnitsNext} className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-500">
+                    Next →
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ---- STEP {projectType === 'multi' ? 3 : 2}: Repository ---- */}
           {step === 'repo' && (
             <div className="space-y-5">
               <p className="text-sm text-gray-400">
@@ -398,7 +517,7 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
               {step2Error && <p className="text-sm text-red-400">{step2Error}</p>}
 
               <div className="flex items-center justify-between pt-1">
-                <button type="button" onClick={() => setStep('basics')} className="rounded-lg px-4 py-2 text-sm text-gray-400 hover:text-gray-200">
+                <button type="button" onClick={() => setStep(projectType === 'multi' ? 'units' : 'basics')} className="rounded-lg px-4 py-2 text-sm text-gray-400 hover:text-gray-200">
                   ← Back
                 </button>
                 <div className="flex gap-3">
@@ -411,14 +530,17 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
                     disabled={
                       submitting ||
                       mutation.isPending ||
+                      multiMutation.isPending ||
                       (repoMode === 'clone' && !githubUrl.trim()) ||
                       (repoMode === 'new' && (!newPath || newPathLoading))
                     }
                     className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {submitting || mutation.isPending
+                    {submitting || mutation.isPending || multiMutation.isPending
                       ? 'Creating…'
-                      : repoMode === 'clone' ? 'Create & Clone' : 'Create Project'}
+                      : repoMode === 'clone' ? 'Create & Clone'
+                      : projectType === 'multi' ? 'Create Multi-Module Project'
+                      : 'Create Project'}
                   </button>
                 </div>
               </div>

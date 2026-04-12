@@ -59,6 +59,34 @@ Auto-detection is run:
 - As a background step immediately after creation in Clone/New modes
 - On demand via the "⚡ Examine fly.toml" and "⚡ Detect start.sh" buttons in project Settings
 
+# Claude Code Auth & Session Management
+
+VibeCtl spawns Claude Code processes in stream-json mode (`-p --input-format stream-json --output-format stream-json`). Key rules for auth and sessions:
+
+## Token handling — never override native auth
+
+- **Do NOT pass `CLAUDE_CODE_OAUTH_TOKEN`** from the macOS keychain. Claude Code manages its own token refresh cycle via the keychain. Forcing a snapshot as an env var causes 401s when the token rotates.
+- Only set `CLAUDE_CODE_OAUTH_TOKEN` for **explicitly user-provided tokens**: per-project tokens set via `/login`, or tokens stored in the persistent token file (`~/.vibectl/.claude-oauth-token` or `/data/.claude-oauth-token`).
+- Reading the keychain is fine for **read-only purposes** (e.g., computing a stable hash for usage tracking identity), but never inject it into the process environment.
+
+## Session resume (`--resume`)
+
+- `/compact` and `/reload` kill the Claude process and restart with `--resume <sessionID>`. This preserves conversation context and reloads MCPs (fresh process).
+- `/fresh` starts a brand new session with no `--resume` — all prior context is lost. Use when the session is poisoned (e.g., oversized images in context).
+- During restart, the WebSocket stays open but there's no active Claude session. Messages sent during this window must be **queued** (via `pendingMessagesRef` / `compactingRef`) and flushed after `restarted` status arrives.
+
+## Auth error handling
+
+- Auth errors (401, `authentication_error`) must show the **login UI** (not auto-restart), because auto-restart with bad credentials loops forever.
+- Auth errors can arrive via two paths: `error` type events (from stderr) and `result` type events with `is_error: true`. **Both** must route to the login UI.
+- The `isNotLoggedIn` check in the exit error panel must match both "not logged in" strings AND `authentication_error` / `invalid authentication` strings.
+
+## Permission modes
+
+- Default: `--permission-mode acceptEdits` (auto-approves reads/edits, blocks dangerous ops).
+- Plan mode tools (`EnterPlanMode`, `ExitPlanMode`) must be in `--allowedTools` — otherwise `acceptEdits` silently denies them and plan mode gets stuck.
+- `--dangerously-skip-permissions` is used when the user sets permissions to "auto" via `/permissions auto`.
+
 # UI Conventions
 
 - **No browser dialogs** — Never use `confirm()`, `alert()`, or `prompt()`. Always use a styled React modal instead.

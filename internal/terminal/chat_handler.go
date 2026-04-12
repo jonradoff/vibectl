@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -31,11 +32,19 @@ type ChatUserMessage struct {
 // PromptLogger is called when a user sends a prompt to Claude Code.
 type PromptLogger func(projectID, text string)
 
+// PlanLogger is called when Claude Code enters plan mode or the user responds to a plan.
+type PlanLogger func(projectID, requestID, planText string)
+
+// PlanResponseLogger is called when the user accepts or rejects a plan.
+type PlanResponseLogger func(projectID, requestID, status, feedback string)
+
 // ChatWebSocketHandler handles WebSocket connections for chat mode.
 type ChatWebSocketHandler struct {
-	manager      *ChatManager
-	upgrader     websocket.Upgrader
-	promptLogger PromptLogger
+	manager            *ChatManager
+	upgrader           websocket.Upgrader
+	promptLogger       PromptLogger
+	planLogger         PlanLogger
+	planResponseLogger PlanResponseLogger
 	// RoleChecker is an optional function called before starting a new chat session.
 	// If it returns role "none" or an error, the launch is rejected.
 	// Leave nil to skip the check (standalone mode).
@@ -55,6 +64,26 @@ func NewChatWebSocketHandler(manager *ChatManager, promptLogger PromptLogger) *C
 			},
 		},
 	}
+}
+
+// extractPlanText tries known field names to find the plan content from a tool input map.
+func extractPlanText(input map[string]interface{}) string {
+	for _, key := range []string{"plan", "prompt", "content", "text", "message", "description", "plan_text"} {
+		if pt, ok := input[key].(string); ok && pt != "" {
+			return pt
+		}
+	}
+	// Fallback: serialize the whole input
+	if b, err := json.Marshal(input); err == nil {
+		return string(b)
+	}
+	return ""
+}
+
+// SetPlanLoggers configures callbacks for plan mode event logging.
+func (h *ChatWebSocketHandler) SetPlanLoggers(planLogger PlanLogger, planResponseLogger PlanResponseLogger) {
+	h.planLogger = planLogger
+	h.planResponseLogger = planResponseLogger
 }
 
 // HandleConnection upgrades to WebSocket and handles chat I/O.
@@ -109,6 +138,8 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 		}
 	}
 
+	var activeProjectID string
+
 	// startReader subscribes to claude's stdout stream and forwards events.
 	startReader := func(sess *ChatSession) chan struct{} {
 		outputCh, unsub := sess.Subscribe()
@@ -128,6 +159,46 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 					if !ok {
 						sendStatus("exited")
 						return
+					}
+					// Intercept plan mode events for logging.
+					// Plans arrive as assistant messages with tool_use blocks named EnterPlanMode/ExitPlanMode,
+					// OR as control_request events.
+					if h.planLogger != nil && activeProjectID != "" {
+						var evt struct {
+							Type      string `json:"type"`
+							RequestID string `json:"request_id"`
+							Request   struct {
+								Subtype  string                 `json:"subtype"`
+								ToolName string                 `json:"tool_name"`
+								Input    map[string]interface{} `json:"input"`
+							} `json:"request"`
+							Message struct {
+								Content []struct {
+									Type  string                 `json:"type"`
+									ID    string                 `json:"id"`
+									Name  string                 `json:"name"`
+									Input map[string]interface{} `json:"input"`
+								} `json:"content"`
+							} `json:"message"`
+						}
+						if json.Unmarshal(data, &evt) == nil {
+							// Check control_request events
+							if evt.Type == "control_request" {
+								if evt.Request.Subtype == "plan_mode_respond" || evt.Request.ToolName == "EnterPlanMode" || evt.Request.ToolName == "ExitPlanMode" {
+									planText := extractPlanText(evt.Request.Input)
+									go h.planLogger(activeProjectID, evt.RequestID, planText)
+								}
+							}
+							// Check assistant messages with plan tool_use blocks
+							if evt.Type == "assistant" {
+								for _, block := range evt.Message.Content {
+									if block.Type == "tool_use" && (block.Name == "EnterPlanMode" || block.Name == "ExitPlanMode" || block.Name == "ExitPlan") {
+										planText := extractPlanText(block.Input)
+										go h.planLogger(activeProjectID, block.ID, planText)
+									}
+								}
+							}
+						}
 					}
 					// Forward the raw JSON event from claude directly
 					if err := sendRaw(data); err != nil {
@@ -174,7 +245,6 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 		}
 	}()
 
-	var activeProjectID string
 
 	defer func() {
 		close(stopCh)
@@ -214,7 +284,8 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 
 			slog.Info("chat launch requested", "projectID", launch.ProjectID, "localPath", launch.LocalPath)
 
-			if h.RoleChecker != nil {
+			// Skip role check for workspace session.
+			if h.RoleChecker != nil && launch.ProjectID != "__workspace__" {
 				role, err := h.RoleChecker(r.Context(), launch.ProjectID)
 				if err != nil || role == "none" {
 					errMsg := "insufficient permissions for project"
@@ -422,6 +493,238 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 
 			sendStatus("restarted")
 			readerDone = startReader(newSess)
+
+		case "fresh_start":
+			// Start a completely new session, discarding all context.
+			if activeProjectID == "" {
+				continue
+			}
+
+			var freshMsg struct {
+				SkipPermissions bool `json:"skipPermissions"`
+			}
+			if msg.Data != nil {
+				json.Unmarshal(msg.Data, &freshMsg)
+			}
+
+			slog.Info("fresh start requested", "projectID", activeProjectID)
+
+			// Unsubscribe from old session
+			if unsubscribe != nil {
+				close(unsubscribe)
+				unsubscribe = nil
+			}
+			if readerDone != nil {
+				<-readerDone
+				readerDone = nil
+			}
+
+			var localPath string
+			if oldSess := h.manager.GetSession(activeProjectID); oldSess != nil {
+				localPath = oldSess.LocalPath
+				oldSess.Close()
+			}
+			h.manager.RemoveSession(activeProjectID)
+			h.manager.SetSkipPermissions(freshMsg.SkipPermissions)
+
+			// Start fresh — no resume, no session ID
+			newSess, startErr := h.manager.StartSession(activeProjectID, localPath)
+			if startErr != nil {
+				slog.Error("failed to fresh start chat session", "error", startErr)
+				sendJSON("error", map[string]string{"message": startErr.Error()})
+				activeProjectID = ""
+				continue
+			}
+
+			sendStatus("restarted")
+			readerDone = startReader(newSess)
+
+		case "control_response":
+			// Forward permission approval/denial to Claude's stdin.
+			if activeProjectID == "" {
+				continue
+			}
+			var ctrlMsg struct {
+				RequestID string          `json:"requestId"`
+				Response  json.RawMessage `json:"response"`
+			}
+			if err := json.Unmarshal(msg.Data, &ctrlMsg); err != nil {
+				slog.Error("invalid control_response message", "error", err)
+				continue
+			}
+			sess := h.manager.GetSession(activeProjectID)
+			if sess == nil {
+				continue
+			}
+			if err := sess.SendControlResponse(ctrlMsg.RequestID, ctrlMsg.Response); err != nil {
+				slog.Error("failed to send control response", "error", err)
+				sendJSON("error", map[string]string{"message": err.Error()})
+			}
+
+			// Log plan responses (accept/reject)
+			if h.planResponseLogger != nil {
+				var resp struct {
+					Behavior string `json:"behavior"`
+					Message  string `json:"message"`
+				}
+				if json.Unmarshal(ctrlMsg.Response, &resp) == nil {
+					if resp.Behavior == "allow" || resp.Behavior == "deny" {
+						status := "accepted"
+						if resp.Behavior == "deny" {
+							status = "rejected"
+						}
+						go h.planResponseLogger(activeProjectID, ctrlMsg.RequestID, status, resp.Message)
+					}
+				}
+			}
+
+		case "set_project_token":
+			// Set a per-project Claude OAuth token and restart/launch the session with the new account.
+			var tokenMsg struct {
+				Token     string `json:"token"`
+				ProjectID string `json:"projectId"`
+				LocalPath string `json:"localPath"`
+			}
+			if err := json.Unmarshal(msg.Data, &tokenMsg); err != nil {
+				slog.Error("invalid set_project_token message", "error", err)
+				continue
+			}
+
+			// Determine which project this is for
+			pid := activeProjectID
+			if pid == "" {
+				pid = tokenMsg.ProjectID
+			}
+			if pid == "" {
+				slog.Warn("set_project_token: no project ID available")
+				continue
+			}
+
+			h.manager.SetProjectToken(pid, tokenMsg.Token)
+			slog.Info("per-project Claude token set", "projectID", pid)
+
+			// Tear down old session if one exists
+			if unsubscribe != nil {
+				close(unsubscribe)
+				unsubscribe = nil
+			}
+			oldSess := h.manager.GetSession(pid)
+			lp := tokenMsg.LocalPath
+			if oldSess != nil {
+				if lp == "" {
+					lp = oldSess.LocalPath
+				}
+				oldSess.Close()
+			}
+			if readerDone != nil {
+				<-readerDone
+				readerDone = nil
+			}
+			h.manager.RemoveSession(pid)
+
+			// Start fresh session (new account = new session, don't resume)
+			newSess, startErr := h.manager.StartSession(pid, lp)
+			if startErr != nil {
+				slog.Error("failed to restart with new token", "error", startErr)
+				sendJSON("error", map[string]string{"message": startErr.Error()})
+				activeProjectID = ""
+				continue
+			}
+			activeProjectID = pid
+			sendStatus("restarted")
+			readerDone = startReader(newSess)
+
+		case "login_start":
+			// Start PKCE OAuth flow: generate params, open browser, return params to frontend.
+			// Does NOT touch the keychain — token is stored per-project in memory only.
+			var loginMsg struct {
+				ProjectID string `json:"projectId"`
+				LocalPath string `json:"localPath"`
+			}
+			if msg.Data != nil {
+				json.Unmarshal(msg.Data, &loginMsg)
+			}
+
+			params := generatePKCELogin()
+			if params == nil {
+				sendJSON("login_status", map[string]string{"status": "error", "message": "Failed to generate login parameters"})
+				continue
+			}
+
+			// Open browser on macOS
+			if err := exec.Command("open", params.AuthURL).Start(); err != nil {
+				slog.Error("failed to open browser", "error", err, "url", params.AuthURL[:80])
+			}
+
+			sendJSON("login_params", map[string]string{
+				"authUrl":      params.AuthURL,
+				"codeVerifier": params.CodeVerifier,
+				"clientId":     params.ClientID,
+				"redirectUri":  params.RedirectURI,
+				"state":        params.State,
+			})
+
+		case "login_exchange":
+			// Exchange an OAuth code for a token and set it per-project.
+			var exchangeMsg struct {
+				Code         string `json:"code"`
+				CodeVerifier string `json:"codeVerifier"`
+				ClientID     string `json:"clientId"`
+				RedirectURI  string `json:"redirectUri"`
+				ProjectID    string `json:"projectId"`
+				LocalPath    string `json:"localPath"`
+			}
+			if err := json.Unmarshal(msg.Data, &exchangeMsg); err != nil {
+				sendJSON("login_status", map[string]string{"status": "error", "message": "Invalid exchange message"})
+				continue
+			}
+
+			token, exchangeErr := exchangeCodeForToken(exchangeMsg.Code, exchangeMsg.CodeVerifier, exchangeMsg.ClientID, exchangeMsg.RedirectURI)
+			if exchangeErr != nil {
+				sendJSON("login_status", map[string]string{"status": "error", "message": exchangeErr.Error()})
+				continue
+			}
+
+			pid := activeProjectID
+			if pid == "" {
+				pid = exchangeMsg.ProjectID
+			}
+			if pid == "" {
+				sendJSON("login_status", map[string]string{"status": "error", "message": "No project context"})
+				continue
+			}
+
+			h.manager.SetProjectToken(pid, token)
+
+			// Tear down old session
+			if unsubscribe != nil {
+				close(unsubscribe)
+				unsubscribe = nil
+			}
+			oldSess := h.manager.GetSession(pid)
+			lp := exchangeMsg.LocalPath
+			if oldSess != nil {
+				if lp == "" {
+					lp = oldSess.LocalPath
+				}
+				oldSess.Close()
+			}
+			if readerDone != nil {
+				<-readerDone
+				readerDone = nil
+			}
+			h.manager.RemoveSession(pid)
+
+			newSess, startErr := h.manager.StartSession(pid, lp)
+			if startErr != nil {
+				sendJSON("login_status", map[string]string{"status": "error", "message": startErr.Error()})
+				activeProjectID = ""
+				continue
+			}
+			activeProjectID = pid
+			readerDone = startReader(newSess)
+			sendJSON("login_status", map[string]string{"status": "success", "message": "Logged in successfully"})
+			sendStatus("restarted")
 
 		default:
 			slog.Warn("unknown chat message type", "type", msg.Type)

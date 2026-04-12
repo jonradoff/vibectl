@@ -90,7 +90,7 @@ func main() {
 	// Core services
 	// -------------------------------------------------------------------------
 	clientInstanceService := services.NewClientInstanceService(db)
-	projectService := services.NewProjectService(db)
+	projectService := services.NewProjectService(db, eventBus)
 	issueService := services.NewIssueService(db, projectService)
 	feedbackService := services.NewFeedbackService(db)
 	sessionService := services.NewSessionService(db) // work-session logs, NOT auth sessions
@@ -100,6 +100,8 @@ func main() {
 	settingsService := services.NewSettingsService(db)
 	webhookService := services.NewWebhookService(db)
 	adminService := services.NewAdminService(db) // legacy admin (CLI compat)
+
+	claudeUsageService := services.NewClaudeUsageService(db)
 
 	// Multi-user services
 	userService := services.NewUserService(db, cfg.APIKeyEncryptionKey)
@@ -127,6 +129,7 @@ func main() {
 		authSessionService.EnsureIndexes,
 		memberService.EnsureIndexes,
 		checkoutService.EnsureIndexes,
+		claudeUsageService.EnsureIndexes,
 	} {
 		if err := fn(idxCtx); err != nil {
 			slog.Error("failed to ensure indexes", "error", err)
@@ -179,11 +182,15 @@ func main() {
 	// -------------------------------------------------------------------------
 	promptService := services.NewPromptService(db)
 	activityLogService := services.NewActivityLogService(db)
+	planService := services.NewPlanService(db)
 	if err := promptService.EnsureIndexes(idxCtx); err != nil {
 		slog.Error("failed to ensure prompt indexes", "error", err)
 	}
 	if err := activityLogService.EnsureIndexes(idxCtx); err != nil {
 		slog.Error("failed to ensure activity log indexes", "error", err)
+	}
+	if err := planService.EnsureIndexes(idxCtx); err != nil {
+		slog.Error("failed to ensure plan indexes", "error", err)
 	}
 
 	vibectlMdService := services.NewVibectlMdService(projectService, issueService, feedbackService, sessionService, decisionService, healthRecordService, config.Version)
@@ -214,6 +221,25 @@ func main() {
 	}
 
 	chatManager := terminal.NewChatManager(chatSessionService, chatHistoryService)
+	chatManager.UsageRecorder = func(tokenHash, projectID, sessionID, model string, inputTokens, outputTokens, cacheRead, cacheCreation int64) {
+		rec := &models.ClaudeUsageRecord{
+			TokenHash:           tokenHash,
+			ProjectID:           projectID,
+			SessionID:           sessionID,
+			Model:               model,
+			InputTokens:         inputTokens,
+			OutputTokens:        outputTokens,
+			CacheReadTokens:     cacheRead,
+			CacheCreationTokens: cacheCreation,
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := claudeUsageService.Record(ctx, rec); err != nil {
+				slog.Error("failed to record claude usage", "error", err)
+			}
+		}()
+	}
 	chatWSHandler := terminal.NewChatWebSocketHandler(chatManager, func(projectID, text string) {
 		snippet := text
 		if len(snippet) > 120 {
@@ -224,8 +250,46 @@ func main() {
 			activityLogService.LogAsync("prompt_sent", "Sent prompt to Claude Code", &oid, snippet, meta)
 		}
 	})
+	chatWSHandler.SetPlanLoggers(
+		func(projectID, requestID, planText string) {
+			plan := &models.Plan{
+				RequestID: requestID,
+				PlanText:  planText,
+				Status:    "pending",
+			}
+			if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
+				plan.ProjectID = &oid
+			}
+			planService.CreateAsync(plan)
+
+			// Also log to activity log
+			snippet := planText
+			if len(snippet) > 120 {
+				snippet = snippet[:120] + "..."
+			}
+			meta := bson.M{"fullText": planText, "requestId": requestID}
+			if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
+				activityLogService.LogAsync("plan_received", "Claude Code generated a plan", &oid, snippet, meta)
+			}
+		},
+		func(projectID, requestID, status, feedback string) {
+			if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					planService.UpdateStatusByRequestID(ctx, &oid, requestID, status, feedback)
+				}()
+				msg := "Plan " + status
+				if feedback != "" {
+					msg += " with feedback"
+				}
+				activityLogService.LogAsync("plan_"+status, msg, &oid, feedback, bson.M{"requestId": requestID})
+			}
+		},
+	)
 	chatHistoryHandler := handlers.NewChatHistoryHandler(chatHistoryService)
 	chatSessionHandler := handlers.NewChatSessionHandler(chatSessionService, chatHistoryService)
+	planHandler := handlers.NewPlanHandler(planService)
 
 	// -------------------------------------------------------------------------
 	// Handlers
@@ -252,6 +316,7 @@ func main() {
 		ghSweeper = ingestion.NewGitHubSweeper(projectService, feedbackService, cfg.GitHubToken)
 	}
 
+	claudeUsageHandler := handlers.NewClaudeUsageHandler(claudeUsageService)
 	healthCheckHandler := handlers.NewHealthCheckHandler(projectService, healthRecordService)
 	uploadHandler := handlers.NewUploadHandler("./uploads")
 	agentHandler := handlers.NewAgentHandler(pmAgent, archAgent, ghSweeper, projectService, vibectlMdService, decisionService)
@@ -381,6 +446,11 @@ func main() {
 					r.Mount("/members", memberHandler.Routes())
 					r.Mount("/checkout", checkoutHandler.Routes())
 					r.Mount("/ci", ciHandler.Routes())
+					// Multi-module units
+					r.Get("/units", projectHandler.ListUnits)
+					r.Post("/units", projectHandler.AddUnit)
+					r.Post("/units/attach", projectHandler.AttachUnit)
+					r.Post("/units/{unitId}/detach", projectHandler.DetachUnit)
 					// Clone / remote dev
 					r.Mount("/", cloneHandler.Routes())
 				})
@@ -403,6 +473,8 @@ func main() {
 			r.Get("/admin/claude-login", adminHandler.ClaudeLogin)
 			r.Post("/admin/claude-login-code", adminHandler.ClaudeLoginCode)
 			r.Post("/admin/claude-token-direct", adminHandler.ClaudeTokenDirect)
+			r.Get("/admin/mcp-servers", adminHandler.ListMCPServers)
+			r.Get("/admin/subscription-usage", adminHandler.GetSubscriptionUsage)
 
 			r.Get("/chat-history/{historyId}", chatHistoryHandler.GetByID)
 			r.Mount("/issues", issueHandler.IssueRoutes())
@@ -413,9 +485,14 @@ func main() {
 			r.Mount("/uploads", uploadHandler.Routes())
 			r.Mount("/prompts", promptHandler.PromptRoutes())
 			r.Mount("/activity-log", activityLogHandler.Routes())
+			r.Mount("/plans", planHandler.Routes())
 			r.Mount("/settings", settingsHandler.Routes())
 			r.Mount("/client-instances", clientInstanceHandler.Routes())
 			r.Get("/events/stream", eventsHandler.Stream)
+
+			// Claude Code usage monitoring
+			r.Get("/claude-usage/summary", claudeUsageHandler.GetSummary)
+			r.Put("/claude-usage/config", claudeUsageHandler.UpdateConfig)
 		}) // end protected group
 
 		// Mode info — public, no auth required, served locally even in client mode.

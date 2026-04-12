@@ -12,6 +12,7 @@ import (
 
 func (s *MCPServer) registerTools() {
 	defer s.registerAdditionalTools()
+	defer s.registerMultiModuleTools()
 	// 1. list_projects
 	s.server.AddTool(
 		mcp.NewTool("list_projects",
@@ -841,4 +842,113 @@ func (s *MCPServer) handleAcceptFeedback(ctx context.Context, req mcp.CallToolRe
 		}
 	}
 	return jsonResult(item)
+}
+
+// ── Multi-module tools ───────────────────────────────────────────────────────
+
+func (s *MCPServer) registerMultiModuleTools() {
+	s.server.AddTool(
+		mcp.NewTool("create_multi_module_project",
+			mcp.WithDescription("Create a multi-module project with an orchestrator and initial units. Each unit gets its own Claude Code agent. Directories and CLAUDE.md files are auto-scaffolded."),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Project name (e.g. AgentArena)")),
+			mcp.WithString("code", mcp.Required(), mcp.Description("Project code, 3-5 uppercase letters (e.g. ARENA)")),
+			mcp.WithString("description", mcp.Description("Project description")),
+			mcp.WithString("localPath", mcp.Required(), mcp.Description("Root directory path for the project")),
+			mcp.WithString("units", mcp.Required(), mcp.Description("JSON array of units, each with: name, code, path, description. Example: [{\"name\":\"Agents\",\"code\":\"AGNT\",\"path\":\"units/agents\",\"description\":\"Agent definitions\"}]")),
+		),
+		s.handleCreateMultiModuleProject,
+	)
+
+	s.server.AddTool(
+		mcp.NewTool("list_units",
+			mcp.WithDescription("List all units in a multi-module project."),
+			mcp.WithReadOnlyHintAnnotation(true),
+			mcp.WithString("projectCode", mcp.Required(), mcp.Description("Parent project code")),
+		),
+		s.handleListUnits,
+	)
+
+	s.server.AddTool(
+		mcp.NewTool("add_unit",
+			mcp.WithDescription("Add a new unit to an existing multi-module project."),
+			mcp.WithString("projectCode", mcp.Required(), mcp.Description("Parent project code")),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Unit name")),
+			mcp.WithString("code", mcp.Required(), mcp.Description("Unit code, 3-5 uppercase letters")),
+			mcp.WithString("path", mcp.Required(), mcp.Description("Relative path from project root (e.g. units/combat)")),
+			mcp.WithString("description", mcp.Description("Unit description")),
+		),
+		s.handleAddUnit,
+	)
+}
+
+func (s *MCPServer) handleCreateMultiModuleProject(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, _ := req.RequireString("name")
+	code, _ := req.RequireString("code")
+	localPath, _ := req.RequireString("localPath")
+	unitsJSON, _ := req.RequireString("units")
+	var description string
+	if args := req.GetArguments(); args != nil {
+		if v, ok := args["description"].(string); ok { description = v }
+	}
+
+	var units []models.UnitDefinition
+	if err := json.Unmarshal([]byte(unitsJSON), &units); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid units JSON: %v", err)), nil
+	}
+
+	createReq := &models.CreateProjectRequest{
+		Name:        name,
+		Code:        code,
+		Description: description,
+		Links:       models.ProjectLinks{LocalPath: localPath},
+		ProjectType: "multi",
+		Units:       units,
+	}
+
+	parent, unitProjects, err := s.backend.CreateMultiModuleProject(ctx, createReq)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to create multi-module project: %v", err)), nil
+	}
+
+	return jsonResult(map[string]any{
+		"parent": parent,
+		"units":  unitProjects,
+	})
+}
+
+func (s *MCPServer) handleListUnits(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	projectCode, _ := req.RequireString("projectCode")
+	project, err := s.backend.GetProjectByCode(ctx, projectCode)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
+	}
+	units, err := s.backend.ListUnits(ctx, project.ID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to list units: %v", err)), nil
+	}
+	return jsonResult(units)
+}
+
+func (s *MCPServer) handleAddUnit(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	projectCode, _ := req.RequireString("projectCode")
+	name, _ := req.RequireString("name")
+	code, _ := req.RequireString("code")
+	path, _ := req.RequireString("path")
+	var description string
+	if args := req.GetArguments(); args != nil {
+		if v, ok := args["description"].(string); ok { description = v }
+	}
+
+	project, err := s.backend.GetProjectByCode(ctx, projectCode)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("project not found: %v", err)), nil
+	}
+
+	unit, err := s.backend.AddUnit(ctx, project.ID, models.UnitDefinition{
+		Name: name, Code: code, Path: path, Description: description,
+	})
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to add unit: %v", err)), nil
+	}
+	return jsonResult(unit)
 }

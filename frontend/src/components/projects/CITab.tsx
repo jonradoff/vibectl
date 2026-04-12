@@ -23,9 +23,18 @@ interface CITabProps {
   onPausedChange?: (paused: boolean) => void;
 }
 
+export type CILogEntry = { time: string; source: string; text: string; isError?: boolean }
+
 export default function CITab({ projectId, hasLocalPath, hasGitHubUrl, hasDeployCmd, hasStartDevCmd, hasStartProdCmd, hasRestartProdCmd, paused, githubUrl, isCloned, cloneStreaming, cloneLog, hasGitHubPAT, onClone, onPull, onSaveGithubUrl, onPausedChange }: CITabProps) {
   const hasProdData = hasDeployCmd || hasStartProdCmd || hasRestartProdCmd;
   const [env, setEnv] = useState<'prod' | 'dev'>(!hasProdData && hasStartDevCmd ? 'dev' : 'prod');
+  const [ciLog, setCiLog] = useState<CILogEntry[]>([]);
+  const logRef = useRef<HTMLDivElement>(null);
+
+  const appendLog = (source: string, text: string, isError?: boolean) => {
+    setCiLog(prev => [...prev, { time: new Date().toLocaleTimeString(), source, text, isError }]);
+    setTimeout(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, 50);
+  };
 
   const { data: ciStatus, isLoading, refetch } = useQuery<CIStatus>({
     queryKey: ['ciStatus', projectId],
@@ -70,9 +79,9 @@ export default function CITab({ projectId, hasLocalPath, hasGitHubUrl, hasDeploy
           {/* Individual prod actions */}
           {(hasDeployCmd || hasStartProdCmd || hasRestartProdCmd) && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {hasDeployCmd && <DeployCard projectId={projectId} />}
-              {hasStartProdCmd && <StartProdCard projectId={projectId} />}
-              {hasRestartProdCmd && <RestartProdCard projectId={projectId} />}
+              {hasDeployCmd && <DeployCard projectId={projectId} appendLog={appendLog} />}
+              {hasStartProdCmd && <StartProdCard projectId={projectId} appendLog={appendLog} />}
+              {hasRestartProdCmd && <RestartProdCard projectId={projectId} appendLog={appendLog} />}
             </div>
           )}
         </div>
@@ -82,7 +91,7 @@ export default function CITab({ projectId, hasLocalPath, hasGitHubUrl, hasDeploy
         <div className="space-y-6">
           {/* Restart Dev — primary action */}
           {hasStartDevCmd && (
-            <RestartDevCard projectId={projectId} />
+            <RestartDevCard projectId={projectId} appendLog={appendLog} />
           )}
           {!hasStartDevCmd && (
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
@@ -99,6 +108,25 @@ export default function CITab({ projectId, hasLocalPath, hasGitHubUrl, hasDeploy
             )}
             <CommitCard projectId={projectId} hasLocalPath={hasLocalPath} />
             <PushCard projectId={projectId} hasLocalPath={hasLocalPath} hasGitHubUrl={hasGitHubUrl} />
+          </div>
+        </div>
+      )}
+
+      {/* Shared CI output terminal */}
+      {ciLog.length > 0 && (
+        <div className="border-t border-gray-800 pt-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Output</span>
+            <button onClick={() => setCiLog([])} className="text-[10px] text-gray-600 hover:text-gray-400 transition-colors">Clear</button>
+          </div>
+          <div ref={logRef} className="bg-gray-950 border border-gray-800 rounded-lg p-2.5 max-h-48 overflow-y-auto space-y-0.5">
+            {ciLog.map((entry, i) => (
+              <div key={i} className="flex gap-2 text-[10px] font-mono leading-relaxed">
+                <span className="text-gray-600 shrink-0">{entry.time}</span>
+                <span className="text-indigo-400/70 shrink-0">[{entry.source}]</span>
+                <span className={entry.isError ? 'text-red-400' : 'text-gray-300'}>{entry.text}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -453,20 +481,19 @@ function PushCard({ projectId, hasLocalPath, hasGitHubUrl }: { projectId: string
   );
 }
 
-function DeployCard({ projectId }: { projectId: string }) {
-  const [output, setOutput] = useState('');
+function DeployCard({ projectId, appendLog }: { projectId: string; appendLog: (source: string, text: string, isError?: boolean) => void }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
   const [confirming, setConfirming] = useState(false);
 
   const run = async () => {
     setConfirming(false);
-    setError(''); setOutput(''); setBusy(true);
+    setBusy(true);
+    appendLog('Deploy', 'Deploying to production...');
     try {
       const res = await ciDeploy(projectId);
-      setOutput(res.output || res.status);
+      appendLog('Deploy', res.output || res.status || 'Done');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      appendLog('Deploy', e instanceof Error ? e.message : 'Failed', true);
     } finally {
       setBusy(false);
     }
@@ -482,63 +509,50 @@ function DeployCard({ projectId }: { projectId: string }) {
         </svg>
       }
     >
-      <div className="space-y-2 mt-3">
+      <div className="mt-3">
         {confirming ? (
           <div className="space-y-2">
             <p className="text-xs text-amber-400">Deploy to production?</p>
             <div className="flex gap-2">
-              <button onClick={run} className="flex-1 bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium py-1.5 rounded transition-colors">
-                Yes, deploy
-              </button>
-              <button onClick={() => setConfirming(false)} className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-medium py-1.5 rounded transition-colors border border-gray-700">
-                Cancel
-              </button>
+              <button onClick={run} className="flex-1 bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium py-1.5 rounded transition-colors">Yes, deploy</button>
+              <button onClick={() => setConfirming(false)} className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-medium py-1.5 rounded transition-colors border border-gray-700">Cancel</button>
             </div>
           </div>
         ) : (
-          <button
-            onClick={() => setConfirming(true)}
-            disabled={busy}
-            className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-medium py-1.5 rounded transition-colors"
-          >
+          <button onClick={() => setConfirming(true)} disabled={busy}
+            className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-medium py-1.5 rounded transition-colors">
             {busy ? 'Deploying…' : 'Deploy to prod'}
           </button>
         )}
-        {output && <OutputBox text={output} />}
-        {error && <p className="text-red-400 text-xs">{error}</p>}
       </div>
     </ActionCard>
   );
 }
 
-function RestartDevCard({ projectId }: { projectId: string }) {
-  const [lines, setLines] = useState<string[]>([]);
+function RestartDevCard({ projectId, appendLog }: { projectId: string; appendLog: (source: string, text: string, isError?: boolean) => void }) {
   const [streaming, setStreaming] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
-  const logRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [lines]);
 
   const run = () => {
-    setLines([]); setError(''); setDone(false); setStreaming(true);
+    setError(''); setDone(false); setStreaming(true);
+    appendLog('Restart Dev', 'Starting dev server...');
     const es = new EventSource(getRestartDevStreamUrl(projectId));
     es.onmessage = (e) => {
       const line = e.data as string;
       if (line === 'DONE') {
         es.close(); setStreaming(false); setDone(true);
+        appendLog('Restart Dev', 'Done');
       } else if (line.startsWith('ERROR:')) {
-        setError(line.slice(6).trim()); es.close(); setStreaming(false); setDone(true);
+        const msg = line.slice(6).trim();
+        setError(msg); es.close(); setStreaming(false); setDone(true);
+        appendLog('Restart Dev', msg, true);
       } else {
-        setLines(prev => [...prev, line]);
+        appendLog('Restart Dev', line);
       }
     };
-    es.onerror = () => { es.close(); setStreaming(false); setError('Connection lost'); };
+    es.onerror = () => { es.close(); setStreaming(false); setError('Connection lost'); appendLog('Restart Dev', 'Connection lost', true); };
   };
-
-  const reset = () => { setLines([]); setDone(false); setError(''); };
 
   return (
     <ActionCard
@@ -550,59 +564,36 @@ function RestartDevCard({ projectId }: { projectId: string }) {
         </svg>
       }
     >
-      <div className="space-y-2 mt-3">
-        {streaming || lines.length > 0 || done || error ? (
-          <>
-            <div ref={logRef} className="max-h-48 overflow-y-auto">
-              {lines.length > 0 && (
-                <pre className="text-[10px] text-gray-300 bg-gray-950 border border-gray-800 rounded p-2 whitespace-pre-wrap break-all">
-                  {lines.join('\n')}
-                </pre>
-              )}
-              {streaming && lines.length === 0 && (
-                <div className="flex items-center gap-2 text-xs text-indigo-300">
-                  <div className="w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                  Starting…
-                </div>
-              )}
-              {streaming && lines.length > 0 && (
-                <div className="flex items-center gap-1 mt-1 text-[10px] text-indigo-400">
-                  <div className="w-2 h-2 border border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                  Running…
-                </div>
-              )}
-            </div>
-            {error && <p className="text-red-400 text-xs">{error}</p>}
-            {done && !error && <p className="text-xs text-green-400">✓ Done</p>}
-            {(done || error) && (
-              <button onClick={reset} className="text-[10px] text-gray-500 hover:text-gray-300">Run again</button>
-            )}
-          </>
-        ) : (
-          <button onClick={run}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium py-1.5 rounded transition-colors">
-            Restart Dev
-          </button>
-        )}
+      <div className="mt-3 space-y-2">
+        <button onClick={run} disabled={streaming}
+          className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium py-1.5 rounded transition-colors">
+          {streaming ? (
+            <span className="flex items-center justify-center gap-2">
+              <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              Running…
+            </span>
+          ) : done ? 'Restart Dev Again' : 'Restart Dev'}
+        </button>
+        {error && <p className="text-red-400 text-xs">{error}</p>}
+        {done && !error && <p className="text-xs text-green-400">✓ Done — see output below</p>}
       </div>
     </ActionCard>
   );
 }
 
-function RestartProdCard({ projectId }: { projectId: string }) {
-  const [output, setOutput] = useState('');
+function RestartProdCard({ projectId, appendLog }: { projectId: string; appendLog: (source: string, text: string, isError?: boolean) => void }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
   const [confirming, setConfirming] = useState(false);
 
   const run = async () => {
     setConfirming(false);
-    setError(''); setOutput(''); setBusy(true);
+    setBusy(true);
+    appendLog('Restart Prod', 'Restarting production...');
     try {
       const res = await ciRestartProd(projectId);
-      setOutput(res.output || res.status);
+      appendLog('Restart Prod', res.output || res.status || 'Done');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      appendLog('Restart Prod', e instanceof Error ? e.message : 'Failed', true);
     } finally {
       setBusy(false);
     }
@@ -618,7 +609,7 @@ function RestartProdCard({ projectId }: { projectId: string }) {
         </svg>
       }
     >
-      <div className="space-y-2 mt-3">
+      <div className="mt-3">
         {confirming ? (
           <div className="space-y-2">
             <p className="text-xs text-amber-400">Restart production?</p>
@@ -633,25 +624,22 @@ function RestartProdCard({ projectId }: { projectId: string }) {
             {busy ? 'Restarting…' : 'Restart Prod'}
           </button>
         )}
-        {output && <OutputBox text={output} />}
-        {error && <p className="text-red-400 text-xs">{error}</p>}
       </div>
     </ActionCard>
   );
 }
 
-function StartProdCard({ projectId }: { projectId: string }) {
-  const [output, setOutput] = useState('');
+function StartProdCard({ projectId, appendLog }: { projectId: string; appendLog: (source: string, text: string, isError?: boolean) => void }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
 
   const run = async () => {
-    setError(''); setOutput(''); setBusy(true);
+    setBusy(true);
+    appendLog('Start Prod', 'Starting production...');
     try {
       const res = await ciStartProd(projectId);
-      setOutput(res.output || res.status);
+      appendLog('Start Prod', res.output || res.status || 'Done');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      appendLog('Start Prod', e instanceof Error ? e.message : 'Failed', true);
     } finally {
       setBusy(false);
     }
@@ -667,13 +655,11 @@ function StartProdCard({ projectId }: { projectId: string }) {
         </svg>
       }
     >
-      <div className="space-y-2 mt-3">
+      <div className="mt-3">
         <button onClick={run} disabled={busy}
           className="w-full bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium py-1.5 rounded transition-colors">
           {busy ? 'Starting…' : 'Start Prod'}
         </button>
-        {output && <OutputBox text={output} />}
-        {error && <p className="text-red-400 text-xs">{error}</p>}
       </div>
     </ActionCard>
   );

@@ -30,7 +30,11 @@ type ProjectUniverseData struct {
 	CurrentHealth        string         `json:"currentHealth"`   // "up"/"down"/"degraded"/"unknown"/"none"
 	PendingFeedbackCount int            `json:"pendingFeedbackCount"`
 	LastActivityAt       *string        `json:"lastActivityAt,omitempty"`
-	DeployCount          int            `json:"deployCount"` // deploys in last 30 days
+	PromptCount          int            `json:"promptCount"`          // total prompts for this project
+	LastPromptAt         *string        `json:"lastPromptAt,omitempty"` // RFC3339 timestamp of last prompt_sent
+	ProjectType          string         `json:"projectType,omitempty"` // "multi" for multi-module projects
+	ParentID             string         `json:"parentId,omitempty"`
+	UnitName             string         `json:"unitName,omitempty"`
 }
 
 type PMReviewResult struct {

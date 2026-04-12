@@ -1,8 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jonradoff/vibectl/internal/events"
@@ -54,6 +59,12 @@ func (h *ProjectHandler) Routes() chi.Router {
 	r.Post("/{id}/archive", h.Archive)
 	r.Post("/{id}/unarchive", h.Unarchive)
 	r.Get("/{id}/dashboard", h.Dashboard)
+
+	// Multi-module unit routes
+	r.Get("/{id}/units", h.ListUnits)
+	r.With(middleware.RequireSuperAdmin).Post("/{id}/units", h.AddUnit)
+	r.With(middleware.RequireSuperAdmin).Post("/{id}/units/attach", h.AttachUnit)
+	r.With(middleware.RequireSuperAdmin).Post("/{id}/units/{unitId}/detach", h.DetachUnit)
 	return r
 }
 
@@ -144,11 +155,21 @@ func (h *ProjectHandler) Archive(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Look up project name for logging before archiving.
+	proj, _ := h.projectService.GetByID(r.Context(), id)
+	projName := id
+	if proj != nil {
+		projName = proj.Name + " (" + proj.Code + ")"
+	}
+
 	if err := h.projectService.Archive(r.Context(), id); err != nil {
 		middleware.WriteError(w, http.StatusBadRequest, err.Error(), "ARCHIVE_FAILED")
 		return
 	}
-	h.bus.Publish(events.Event{Type: "project.updated", ProjectID: id})
+	if h.activityLogService != nil {
+		oid, _ := bson.ObjectIDFromHex(id)
+		h.activityLogService.LogAsyncWithUser("project_archived", "Archived project: "+projName, &oid, &user.ID, user.DisplayName, "", nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -159,11 +180,11 @@ func (h *ProjectHandler) Unarchive(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusBadRequest, err.Error(), "UNARCHIVE_FAILED")
 		return
 	}
-	h.bus.Publish(events.Event{Type: "project.updated", ProjectID: id})
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // Create decodes a CreateProjectRequest, validates it, and creates the project.
+// For multi-module projects (projectType="multi" with units), creates parent + units.
 // Requires super_admin (enforced by route middleware).
 func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req models.CreateProjectRequest
@@ -172,12 +193,46 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Multi-module project creation.
+	if req.ProjectType == "multi" && len(req.Units) > 0 {
+		parent, units, err := h.projectService.CreateMultiModule(r.Context(), &req)
+		if err != nil {
+			middleware.WriteError(w, http.StatusBadRequest, err.Error(), "CREATE_PROJECT_FAILED")
+			return
+		}
+			// Scaffold directories and CLAUDE.md files in background.
+		if parent.Links.LocalPath != "" {
+			go scaffoldMultiModule(parent, units)
+		}
+
+		if h.activityLogService != nil {
+			user := middleware.GetCurrentUser(r)
+			uid := &parent.ID
+			var userID *bson.ObjectID
+			userName := ""
+			if user != nil { userID = &user.ID; userName = user.DisplayName }
+			h.activityLogService.LogAsyncWithUser("project_created", "Created multi-module project: "+parent.Name+" ("+parent.Code+") with "+fmt.Sprintf("%d", len(units))+" units", uid, userID, userName, "", nil)
+		}
+		middleware.WriteJSON(w, http.StatusCreated, map[string]interface{}{
+			"parent": parent.MaskSecrets(),
+			"units":  maskProjects(units),
+		})
+		return
+	}
+
 	project, err := h.projectService.Create(r.Context(), &req)
 	if err != nil {
 		middleware.WriteError(w, http.StatusBadRequest, err.Error(), "CREATE_PROJECT_FAILED")
 		return
 	}
-	h.bus.Publish(events.Event{Type: "project.created", ProjectID: project.ID.Hex()})
+	if h.activityLogService != nil {
+		user := middleware.GetCurrentUser(r)
+		pid := project.ID
+		var userID *bson.ObjectID
+		userName := ""
+		if user != nil { userID = &user.ID; userName = user.DisplayName }
+		h.activityLogService.LogAsyncWithUser("project_created", "Created project: "+project.Name+" ("+project.Code+")", &pid, userID, userName, "", nil)
+	}
 	middleware.WriteJSON(w, http.StatusCreated, project.MaskSecrets())
 }
 
@@ -240,7 +295,6 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.bus.Publish(events.Event{Type: "project.updated", ProjectID: project.ID.Hex()})
 	middleware.WriteJSON(w, http.StatusOK, project.MaskSecrets())
 }
 
@@ -255,6 +309,13 @@ func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "id")
 
+	// Look up project name for logging before deleting.
+	proj, _ := h.projectService.GetByID(r.Context(), id)
+	projName := id
+	if proj != nil {
+		projName = proj.Name + " (" + proj.Code + ")"
+	}
+
 	// Cascade: delete all issues for this project first.
 	if err := h.issueService.DeleteAllByProject(r.Context(), id); err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "DELETE_ISSUES_FAILED")
@@ -265,7 +326,9 @@ func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusNotFound, err.Error(), "DELETE_PROJECT_FAILED")
 		return
 	}
-	h.bus.Publish(events.Event{Type: "project.deleted", ProjectID: id})
+	if h.activityLogService != nil {
+		h.activityLogService.LogAsyncWithUser("project_deleted", "Permanently deleted project: "+projName, nil, &user.ID, user.DisplayName, "", nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -357,4 +420,235 @@ func (h *ProjectHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	middleware.WriteJSON(w, http.StatusOK, summary)
+}
+
+// ── Multi-module unit handlers ───────────────────────────────────────────────
+
+// ListUnits returns all units for a multi-module project.
+func (h *ProjectHandler) ListUnits(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid project ID", "INVALID_ID")
+		return
+	}
+	units, err := h.projectService.ListUnits(r.Context(), oid)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_UNITS_FAILED")
+		return
+	}
+	middleware.WriteJSON(w, http.StatusOK, maskProjects(units))
+}
+
+// AddUnit creates a new unit under a multi-module project.
+func (h *ProjectHandler) AddUnit(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid project ID", "INVALID_ID")
+		return
+	}
+	var unit models.UnitDefinition
+	if err := json.NewDecoder(r.Body).Decode(&unit); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid request body", "INVALID_BODY")
+		return
+	}
+	project, err := h.projectService.AddUnit(r.Context(), oid, unit)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, err.Error(), "ADD_UNIT_FAILED")
+		return
+	}
+	middleware.WriteJSON(w, http.StatusCreated, project.MaskSecrets())
+}
+
+// DetachUnit removes the parent relationship, making the unit an independent project.
+func (h *ProjectHandler) DetachUnit(w http.ResponseWriter, r *http.Request) {
+	parentId := chi.URLParam(r, "id")
+	unitId := chi.URLParam(r, "unitId")
+	oid, err := bson.ObjectIDFromHex(unitId)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid unit ID", "INVALID_ID")
+		return
+	}
+	if err := h.projectService.DetachUnit(r.Context(), oid); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, err.Error(), "DETACH_UNIT_FAILED")
+		return
+	}
+	// Regenerate CLAUDE.md in background
+	go h.regenClaudeMdsForParent(parentId)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AttachUnit attaches an existing project as a unit of a multi-module project.
+func (h *ProjectHandler) AttachUnit(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	parentOID, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid project ID", "INVALID_ID")
+		return
+	}
+	var req struct {
+		ProjectID string `json:"projectId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid request body", "INVALID_BODY")
+		return
+	}
+	unitOID, err := bson.ObjectIDFromHex(req.ProjectID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid project ID", "INVALID_ID")
+		return
+	}
+	project, err := h.projectService.AttachUnit(r.Context(), parentOID, unitOID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, err.Error(), "ATTACH_UNIT_FAILED")
+		return
+	}
+	// Regenerate CLAUDE.md in background
+	go h.regenClaudeMdsForParent(id)
+	middleware.WriteJSON(w, http.StatusOK, project.MaskSecrets())
+}
+
+// regenClaudeMdsForParent fetches the parent project and its units, then rewrites all CLAUDE.md files.
+func (h *ProjectHandler) regenClaudeMdsForParent(parentID string) {
+	ctx := context.Background()
+	parent, err := h.projectService.GetByID(ctx, parentID)
+	if err != nil || parent == nil {
+		return
+	}
+	units, err := h.projectService.ListUnits(ctx, parent.ID)
+	if err != nil {
+		return
+	}
+	regenerateClaudeMds(parent, units)
+}
+
+// scaffoldMultiModule creates directories and CLAUDE.md files for a new multi-module project.
+func scaffoldMultiModule(parent *models.Project, units []models.Project) {
+	rootPath := parent.Links.LocalPath
+
+	// Create root directory.
+	if err := os.MkdirAll(rootPath, 0o755); err != nil {
+		slog.Error("scaffold: create root dir", "path", rootPath, "error", err)
+		return
+	}
+
+	// Create unit directories.
+	for _, u := range units {
+		if u.UnitPath != "" {
+			unitDir := filepath.Join(rootPath, u.UnitPath)
+			if err := os.MkdirAll(unitDir, 0o755); err != nil {
+				slog.Error("scaffold: create unit dir", "path", unitDir, "error", err)
+			}
+		}
+	}
+
+	// Generate orchestrator CLAUDE.md.
+	orchMd := fmt.Sprintf("# %s — Orchestrator\n\n", parent.Name)
+	orchMd += "You are the orchestrator for this multi-module project. Your job is to:\n"
+	orchMd += "- Coordinate work across units and ensure coherence\n"
+	orchMd += "- Prevent duplication and identify canonical implementations\n"
+	orchMd += "- Resolve conflicts between modules\n"
+	orchMd += "- Delegate tasks to the appropriate unit agent\n\n"
+	orchMd += "## Units\n\n"
+	orchMd += "| Unit | Code | Path | Description |\n"
+	orchMd += "|------|------|------|-------------|\n"
+	for _, u := range units {
+		desc := u.Description
+		if desc == "" {
+			desc = "—"
+		}
+		orchMd += fmt.Sprintf("| %s | %s | `%s` | %s |\n", u.UnitName, u.Code, u.UnitPath, desc)
+	}
+	orchMd += "\nEach unit has its own CLAUDE.md with detailed context for that module.\n"
+
+	if err := os.WriteFile(filepath.Join(rootPath, "CLAUDE.md"), []byte(orchMd), 0o644); err != nil {
+		slog.Error("scaffold: write orchestrator CLAUDE.md", "error", err)
+	}
+
+	// Generate per-unit CLAUDE.md.
+	for _, u := range units {
+		if u.UnitPath == "" {
+			continue
+		}
+		unitMd := fmt.Sprintf("# %s\n\n", u.UnitName)
+		if u.Description != "" {
+			unitMd += u.Description + "\n\n"
+		}
+		unitMd += fmt.Sprintf("This is a unit of the **%s** project.\n\n", parent.Name)
+		unitMd += "## Sibling Units\n\n"
+		for _, sibling := range units {
+			if sibling.Code == u.Code {
+				continue
+			}
+			unitMd += fmt.Sprintf("- **%s** (`%s`) — %s\n", sibling.UnitName, sibling.UnitPath, sibling.Description)
+		}
+		unitMd += fmt.Sprintf("\nThe orchestrator CLAUDE.md at the project root (`%s/CLAUDE.md`) coordinates cross-unit concerns.\n", rootPath)
+
+		unitDir := filepath.Join(rootPath, u.UnitPath)
+		if err := os.WriteFile(filepath.Join(unitDir, "CLAUDE.md"), []byte(unitMd), 0o644); err != nil {
+			slog.Error("scaffold: write unit CLAUDE.md", "unit", u.Code, "error", err)
+		}
+	}
+
+	slog.Info("scaffolded multi-module project", "path", rootPath, "units", len(units))
+}
+
+// regenerateClaudeMds rewrites CLAUDE.md files for a multi-module project after unit changes.
+func regenerateClaudeMds(parent *models.Project, units []models.Project) {
+	rootPath := parent.Links.LocalPath
+	if rootPath == "" {
+		return
+	}
+
+	// Rewrite orchestrator CLAUDE.md
+	orchMd := fmt.Sprintf("# %s — Orchestrator\n\n", parent.Name)
+	orchMd += "You are the orchestrator for this multi-module project. Your job is to:\n"
+	orchMd += "- Coordinate work across units and ensure coherence\n"
+	orchMd += "- Prevent duplication and identify canonical implementations\n"
+	orchMd += "- Resolve conflicts between modules\n"
+	orchMd += "- Delegate tasks to the appropriate unit agent\n\n"
+	orchMd += "## Units\n\n"
+	orchMd += "| Unit | Code | Path | Description |\n"
+	orchMd += "|------|------|------|-------------|\n"
+	for _, u := range units {
+		desc := u.Description
+		if desc == "" {
+			desc = "—"
+		}
+		orchMd += fmt.Sprintf("| %s | %s | `%s` | %s |\n", u.UnitName, u.Code, u.UnitPath, desc)
+	}
+	orchMd += "\nEach unit has its own CLAUDE.md with detailed context for that module.\n"
+
+	if err := os.WriteFile(filepath.Join(rootPath, "CLAUDE.md"), []byte(orchMd), 0o644); err != nil {
+		slog.Error("regen: write orchestrator CLAUDE.md", "error", err)
+	}
+
+	// Rewrite per-unit CLAUDE.md
+	for _, u := range units {
+		if u.UnitPath == "" {
+			continue
+		}
+		unitDir := filepath.Join(rootPath, u.UnitPath)
+		os.MkdirAll(unitDir, 0o755)
+
+		unitMd := fmt.Sprintf("# %s\n\n", u.UnitName)
+		if u.Description != "" {
+			unitMd += u.Description + "\n\n"
+		}
+		unitMd += fmt.Sprintf("This is a unit of the **%s** project.\n\n", parent.Name)
+		unitMd += "## Sibling Units\n\n"
+		for _, sibling := range units {
+			if sibling.Code == u.Code {
+				continue
+			}
+			unitMd += fmt.Sprintf("- **%s** (`%s`) — %s\n", sibling.UnitName, sibling.UnitPath, sibling.Description)
+		}
+		unitMd += fmt.Sprintf("\nThe orchestrator CLAUDE.md at the project root (`%s/CLAUDE.md`) coordinates cross-unit concerns.\n", rootPath)
+
+		if err := os.WriteFile(filepath.Join(unitDir, "CLAUDE.md"), []byte(unitMd), 0o644); err != nil {
+			slog.Error("regen: write unit CLAUDE.md", "unit", u.Code, "error", err)
+		}
+	}
+	slog.Info("regenerated CLAUDE.md files", "path", rootPath, "units", len(units))
 }

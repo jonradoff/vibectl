@@ -30,6 +30,7 @@ function keysForEvent(e: ServerEvent): unknown[][] {
         ['projects'],
         ['archivedProjects'],
         ['globalDashboard'],
+        ['universeData'],
         ...(pid ? [['project', pid]] : []),
       ];
     case 'feedback.created':

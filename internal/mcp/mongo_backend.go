@@ -218,3 +218,21 @@ func (b *MongoBackend) CreateIssueFromFeedback(ctx context.Context, item *models
 func (b *MongoBackend) LinkFeedbackToIssue(ctx context.Context, feedbackID, issueKey string) error {
 	return b.feedback.LinkToIssue(ctx, feedbackID, issueKey)
 }
+
+// ── Multi-module methods ─────────────────────────────────────────────────────
+
+func (b *MongoBackend) CreateMultiModuleProject(ctx context.Context, req *models.CreateProjectRequest) (*models.Project, []models.Project, error) {
+	return b.projects.CreateMultiModule(ctx, req)
+}
+
+func (b *MongoBackend) ListUnits(ctx context.Context, parentID bson.ObjectID) ([]models.Project, error) {
+	return b.projects.ListUnits(ctx, parentID)
+}
+
+func (b *MongoBackend) AddUnit(ctx context.Context, parentID bson.ObjectID, unit models.UnitDefinition) (*models.Project, error) {
+	return b.projects.AddUnit(ctx, parentID, unit)
+}
+
+func (b *MongoBackend) GetProjectByID(ctx context.Context, id string) (*models.Project, error) {
+	return b.projects.GetByID(ctx, id)
+}

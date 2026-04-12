@@ -111,6 +111,26 @@ type Project struct {
 	VibectlMdGeneratedAt  *time.Time         `json:"vibectlMdGeneratedAt,omitempty" bson:"vibectlMdGeneratedAt,omitempty"`
 	CreatedAt             time.Time          `json:"createdAt" bson:"createdAt"`
 	UpdatedAt             time.Time          `json:"updatedAt" bson:"updatedAt"`
+
+	// Multi-module fields
+	ProjectType string         `json:"projectType,omitempty" bson:"projectType,omitempty"` // "" or "simple" (default), "multi"
+	ParentID    *bson.ObjectID `json:"parentId,omitempty" bson:"parentId,omitempty"`       // set on unit projects only
+	UnitName    string         `json:"unitName,omitempty" bson:"unitName,omitempty"`       // e.g. "diplomacy", "combat"
+	UnitPath    string         `json:"unitPath,omitempty" bson:"unitPath,omitempty"`       // relative path from parent, e.g. "units/diplomacy"
+}
+
+// IsMultiModule returns true if this is a multi-module orchestrator project.
+func (p *Project) IsMultiModule() bool { return p.ProjectType == "multi" }
+
+// IsUnit returns true if this project is a unit within a multi-module project.
+func (p *Project) IsUnit() bool { return p.ParentID != nil }
+
+// UnitDefinition describes a unit to create within a multi-module project.
+type UnitDefinition struct {
+	Name        string `json:"name"`
+	Code        string `json:"code"`
+	Path        string `json:"path"`
+	Description string `json:"description"`
 }
 
 // MaskSecrets returns a copy of the project with webhook secrets replaced by empty strings.
@@ -139,6 +159,10 @@ type CreateProjectRequest struct {
 	Description string       `json:"description"`
 	Links       ProjectLinks `json:"links"`
 	Goals       []string     `json:"goals"`
+
+	// Multi-module creation
+	ProjectType string           `json:"projectType,omitempty"` // "multi" to create a multi-module project
+	Units       []UnitDefinition `json:"units,omitempty"`       // initial units (only when projectType="multi")
 }
 
 type UpdateProjectRequest struct {

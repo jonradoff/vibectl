@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"github.com/jonradoff/vibectl/internal/events"
 	"github.com/jonradoff/vibectl/internal/models"
 )
 
@@ -18,27 +19,42 @@ var codePattern = regexp.MustCompile(`^[A-Z]{3,5}$`)
 type ProjectService struct {
 	db         *mongo.Database
 	collection *mongo.Collection
+	bus        *events.Bus
 }
 
-func NewProjectService(db *mongo.Database) *ProjectService {
+func NewProjectService(db *mongo.Database, bus *events.Bus) *ProjectService {
 	return &ProjectService{
 		db:         db,
 		collection: db.Collection("projects"),
+		bus:        bus,
 	}
 }
 
-// EnsureIndexes creates a unique index on the code field.
+func (s *ProjectService) publish(eventType, projectID string) {
+	if s.bus != nil {
+		s.bus.Publish(events.Event{Type: eventType, ProjectID: projectID})
+	}
+}
+
+// EnsureIndexes creates indexes for the projects collection.
 func (s *ProjectService) EnsureIndexes(ctx context.Context) error {
-	_, err := s.collection.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "code", Value: 1}},
-		Options: options.Index().SetUnique(true),
+	_, err := s.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "code", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys: bson.D{{Key: "parentId", Value: 1}},
+		},
 	})
 	return err
 }
 
-// List returns all non-archived projects, ordered by creation time descending.
+// List returns all non-archived projects (including units), ordered by creation time descending.
 func (s *ProjectService) List(ctx context.Context) ([]models.Project, error) {
-	filter := bson.D{{Key: "archived", Value: bson.D{{Key: "$ne", Value: true}}}}
+	filter := bson.D{
+		{Key: "archived", Value: bson.D{{Key: "$ne", Value: true}}},
+	}
 	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
 	cursor, err := s.collection.Find(ctx, filter, opts)
 	if err != nil {
@@ -76,15 +92,16 @@ func (s *ProjectService) ListArchived(ctx context.Context) ([]models.Project, er
 	return projects, nil
 }
 
-// Archive sets a project's archived flag to true.
+// Archive sets a project's archived flag to true. For multi-module projects, cascades to all units.
 func (s *ProjectService) Archive(ctx context.Context, id string) error {
 	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {
 		return fmt.Errorf("invalid project ID: %w", err)
 	}
+	now := time.Now().UTC()
 	update := bson.D{{Key: "$set", Value: bson.D{
 		{Key: "archived", Value: true},
-		{Key: "updatedAt", Value: time.Now().UTC()},
+		{Key: "updatedAt", Value: now},
 	}}}
 	result, err := s.collection.UpdateByID(ctx, oid, update)
 	if err != nil {
@@ -93,6 +110,9 @@ func (s *ProjectService) Archive(ctx context.Context, id string) error {
 	if result.MatchedCount == 0 {
 		return fmt.Errorf("project not found")
 	}
+	// Cascade archive to units if this is a multi-module project.
+	s.collection.UpdateMany(ctx, bson.D{{Key: "parentId", Value: oid}}, update)
+	s.publish("project.updated", id)
 	return nil
 }
 
@@ -113,10 +133,12 @@ func (s *ProjectService) Unarchive(ctx context.Context, id string) error {
 	if result.MatchedCount == 0 {
 		return fmt.Errorf("project not found")
 	}
+	s.publish("project.updated", id)
 	return nil
 }
 
 // Create validates the request and inserts a new project.
+// For multi-module projects (projectType="multi" with units), use CreateMultiModule instead.
 func (s *ProjectService) Create(ctx context.Context, req *models.CreateProjectRequest) (*models.Project, error) {
 	if req.Name == "" {
 		return nil, fmt.Errorf("project name is required")
@@ -149,6 +171,7 @@ func (s *ProjectService) Create(ctx context.Context, req *models.CreateProjectRe
 		Description:  req.Description,
 		Links:        req.Links,
 		Goals:        goals,
+		ProjectType:  req.ProjectType,
 		IssueCounter: 0,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -160,6 +183,7 @@ func (s *ProjectService) Create(ctx context.Context, req *models.CreateProjectRe
 	}
 
 	project.ID = result.InsertedID.(bson.ObjectID)
+	s.publish("project.created", project.ID.Hex())
 	return &project, nil
 }
 
@@ -237,6 +261,7 @@ func (s *ProjectService) Update(ctx context.Context, id string, req *models.Upda
 		}
 		return nil, fmt.Errorf("update project: %w", err)
 	}
+	s.publish("project.updated", id)
 	return &project, nil
 }
 
@@ -254,6 +279,7 @@ func (s *ProjectService) Delete(ctx context.Context, id string) error {
 	if result.DeletedCount == 0 {
 		return fmt.Errorf("project not found")
 	}
+	s.publish("project.deleted", id)
 	return nil
 }
 
@@ -334,4 +360,229 @@ func (s *ProjectService) IncrementCounter(ctx context.Context, projectID bson.Ob
 		return 0, fmt.Errorf("increment counter: %w", err)
 	}
 	return project.IssueCounter, nil
+}
+
+// ── Multi-module methods ─────────────────────────────────────────────────────
+
+// CreateMultiModule creates a multi-module orchestrator project and its initial units.
+// Returns the parent project and the created unit projects.
+func (s *ProjectService) CreateMultiModule(ctx context.Context, req *models.CreateProjectRequest) (*models.Project, []models.Project, error) {
+	if len(req.Units) == 0 {
+		return nil, nil, fmt.Errorf("multi-module project requires at least one unit")
+	}
+
+	// Validate all codes (parent + units) upfront.
+	allCodes := []string{req.Code}
+	for _, u := range req.Units {
+		if u.Name == "" {
+			return nil, nil, fmt.Errorf("unit name is required")
+		}
+		if u.Code == "" {
+			return nil, nil, fmt.Errorf("unit code is required for %q", u.Name)
+		}
+		if !codePattern.MatchString(u.Code) {
+			return nil, nil, fmt.Errorf("unit code %q must be 3-5 uppercase letters", u.Code)
+		}
+		if u.Path == "" {
+			return nil, nil, fmt.Errorf("unit path is required for %q", u.Name)
+		}
+		allCodes = append(allCodes, u.Code)
+	}
+
+	// Check uniqueness of all codes in one query.
+	count, err := s.collection.CountDocuments(ctx, bson.D{
+		{Key: "code", Value: bson.D{{Key: "$in", Value: allCodes}}},
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("check code uniqueness: %w", err)
+	}
+	if count > 0 {
+		return nil, nil, fmt.Errorf("one or more project codes already exist")
+	}
+
+	// Create parent project.
+	req.ProjectType = "multi"
+	parent, err := s.Create(ctx, req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create parent project: %w", err)
+	}
+
+	// Create unit projects.
+	now := time.Now().UTC()
+	units := make([]models.Project, 0, len(req.Units))
+	for _, u := range req.Units {
+		unitLocalPath := ""
+		if parent.Links.LocalPath != "" {
+			unitLocalPath = parent.Links.LocalPath + "/" + u.Path
+		}
+		unit := models.Project{
+			Name:        u.Name,
+			Code:        u.Code,
+			Description: u.Description,
+			Links: models.ProjectLinks{
+				LocalPath: unitLocalPath,
+			},
+			Goals:        []string{},
+			ProjectType:  "",
+			ParentID:     &parent.ID,
+			UnitName:     u.Name,
+			UnitPath:     u.Path,
+			IssueCounter: 0,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		result, insertErr := s.collection.InsertOne(ctx, unit)
+		if insertErr != nil {
+			return parent, units, fmt.Errorf("create unit %q: %w", u.Code, insertErr)
+		}
+		unit.ID = result.InsertedID.(bson.ObjectID)
+		units = append(units, unit)
+	}
+
+	return parent, units, nil
+}
+
+// ListUnits returns all non-archived units for a multi-module project.
+func (s *ProjectService) ListUnits(ctx context.Context, parentID bson.ObjectID) ([]models.Project, error) {
+	filter := bson.D{
+		{Key: "parentId", Value: parentID},
+		{Key: "archived", Value: bson.D{{Key: "$ne", Value: true}}},
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "unitName", Value: 1}})
+	cursor, err := s.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("find units: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var units []models.Project
+	if err := cursor.All(ctx, &units); err != nil {
+		return nil, fmt.Errorf("decode units: %w", err)
+	}
+	if units == nil {
+		units = []models.Project{}
+	}
+	return units, nil
+}
+
+// AddUnit creates a new unit under an existing multi-module project.
+func (s *ProjectService) AddUnit(ctx context.Context, parentID bson.ObjectID, unit models.UnitDefinition) (*models.Project, error) {
+	// Validate the unit definition.
+	if unit.Name == "" {
+		return nil, fmt.Errorf("unit name is required")
+	}
+	if unit.Code == "" {
+		return nil, fmt.Errorf("unit code is required")
+	}
+	if !codePattern.MatchString(unit.Code) {
+		return nil, fmt.Errorf("unit code must be 3-5 uppercase letters")
+	}
+	if unit.Path == "" {
+		return nil, fmt.Errorf("unit path is required")
+	}
+
+	// Check code uniqueness.
+	count, err := s.collection.CountDocuments(ctx, bson.D{{Key: "code", Value: unit.Code}})
+	if err != nil {
+		return nil, fmt.Errorf("check code uniqueness: %w", err)
+	}
+	if count > 0 {
+		return nil, fmt.Errorf("project with code %q already exists", unit.Code)
+	}
+
+	// Get parent to derive local path.
+	var parent models.Project
+	if err := s.collection.FindOne(ctx, bson.D{{Key: "_id", Value: parentID}}).Decode(&parent); err != nil {
+		return nil, fmt.Errorf("parent project not found")
+	}
+	if parent.ProjectType != "multi" {
+		return nil, fmt.Errorf("parent project is not a multi-module project")
+	}
+
+	unitLocalPath := ""
+	if parent.Links.LocalPath != "" {
+		unitLocalPath = parent.Links.LocalPath + "/" + unit.Path
+	}
+
+	now := time.Now().UTC()
+	project := models.Project{
+		Name:         unit.Name,
+		Code:         unit.Code,
+		Description:  unit.Description,
+		Links:        models.ProjectLinks{LocalPath: unitLocalPath},
+		Goals:        []string{},
+		ParentID:     &parentID,
+		UnitName:     unit.Name,
+		UnitPath:     unit.Path,
+		IssueCounter: 0,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	result, err := s.collection.InsertOne(ctx, project)
+	if err != nil {
+		return nil, fmt.Errorf("insert unit: %w", err)
+	}
+	project.ID = result.InsertedID.(bson.ObjectID)
+	s.publish("project.created", project.ID.Hex())
+	return &project, nil
+}
+
+// DetachUnit removes the parent relationship from a unit, making it an independent project.
+func (s *ProjectService) DetachUnit(ctx context.Context, unitID bson.ObjectID) error {
+	update := bson.D{{Key: "$unset", Value: bson.D{
+		{Key: "parentId", Value: ""},
+		{Key: "unitName", Value: ""},
+		{Key: "unitPath", Value: ""},
+	}}, {Key: "$set", Value: bson.D{
+		{Key: "updatedAt", Value: time.Now().UTC()},
+	}}}
+	result, err := s.collection.UpdateByID(ctx, unitID, update)
+	if err != nil {
+		return fmt.Errorf("detach unit: %w", err)
+	}
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("unit not found")
+	}
+	s.publish("project.updated", unitID.Hex())
+	return nil
+}
+
+// AttachUnit sets parentId on an existing project, making it a unit of a multi-module project.
+func (s *ProjectService) AttachUnit(ctx context.Context, parentID, unitProjectID bson.ObjectID) (*models.Project, error) {
+	var parent models.Project
+	if err := s.collection.FindOne(ctx, bson.D{{Key: "_id", Value: parentID}}).Decode(&parent); err != nil {
+		return nil, fmt.Errorf("parent project not found")
+	}
+	if parent.ProjectType != "multi" {
+		return nil, fmt.Errorf("parent project is not a multi-module project")
+	}
+
+	var target models.Project
+	if err := s.collection.FindOne(ctx, bson.D{{Key: "_id", Value: unitProjectID}}).Decode(&target); err != nil {
+		return nil, fmt.Errorf("target project not found")
+	}
+	if target.ParentID != nil {
+		return nil, fmt.Errorf("project is already part of a multi-module project")
+	}
+	if target.ProjectType == "multi" {
+		return nil, fmt.Errorf("cannot attach an orchestrator project as a unit")
+	}
+
+	unitPath := "units/" + target.Code
+	update := bson.D{{Key: "$set", Value: bson.D{
+		{Key: "parentId", Value: parentID},
+		{Key: "unitName", Value: target.Name},
+		{Key: "unitPath", Value: unitPath},
+		{Key: "updatedAt", Value: time.Now().UTC()},
+	}}}
+
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
+	var updated models.Project
+	err := s.collection.FindOneAndUpdate(ctx, bson.D{{Key: "_id", Value: unitProjectID}}, update, opts).Decode(&updated)
+	if err != nil {
+		return nil, fmt.Errorf("attach unit: %w", err)
+	}
+	s.publish("project.updated", unitProjectID.Hex())
+	return &updated, nil
 }

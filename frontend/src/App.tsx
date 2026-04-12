@@ -15,13 +15,14 @@ import PMReviewPage from './pages/PMReviewPage'
 import ArchivedPage from './pages/ArchivedPage'
 import PromptsPage from './pages/PromptsPage'
 import ActivityLogPage from './pages/ActivityLogPage'
+import PlansPage from './pages/PlansPage'
 import MCPDocsPage from './pages/docs/MCPDocsPage'
 import APIDocsPage from './pages/docs/APIDocsPage'
 import CLIDocsPage from './pages/docs/CLIDocsPage'
 import SettingsPage from './pages/SettingsPage'
 import UsersPage from './pages/UsersPage'
-import APIKeysPage from './pages/APIKeysPage'
 import ProfilePage from './pages/ProfilePage'
+// WorkspacePage moved to dashboard grid card
 
 function App() {
   return (
@@ -47,8 +48,8 @@ function App() {
                   <Route path="/review" element={<ReviewPage />} />
                   <Route path="/prompts" element={<PromptsPage />} />
                   <Route path="/activity-log" element={<ActivityLogPage />} />
+                  <Route path="/plans" element={<PlansPage />} />
                   <Route path="/users" element={<UsersPage />} />
-                  <Route path="/api-keys" element={<APIKeysPage />} />
                   <Route path="/profile" element={<ProfilePage />} />
                   <Route path="/docs/mcp" element={<MCPDocsPage />} />
                   <Route path="/docs/api" element={<APIDocsPage />} />

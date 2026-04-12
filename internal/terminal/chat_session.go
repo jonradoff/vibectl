@@ -7,8 +7,16 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +44,7 @@ type ChatSession struct {
 	ProjectID   string
 	LocalPath   string
 	SessionID   string // Claude session ID from init event
+	TokenHash   string // SHA256 of OAuth token used — stable identity per login
 	StartedAt   time.Time
 	Cmd         *exec.Cmd
 	stdin       io.WriteCloser
@@ -44,9 +53,13 @@ type ChatSession struct {
 	messages    []json.RawMessage // buffered events for reconnection
 	dirty       bool              // true if messages changed since last persist
 	mu          sync.Mutex
+	lastModel   string   // model from most recent message_start (for usage tracking)
 	stderrMu    sync.Mutex
 	stderrBuf   []string // recent stderr lines, capped at 50
 }
+
+// UsageRecorderFunc is a callback invoked when Claude Code reports token usage.
+type UsageRecorderFunc func(tokenHash, projectID, sessionID, model string, inputTokens, outputTokens, cacheRead, cacheCreation int64)
 
 // SendMessage writes a user message to claude's stdin in stream-json format.
 func (s *ChatSession) SendMessage(text string) error {
@@ -75,6 +88,34 @@ func (s *ChatSession) SendMessage(text string) error {
 	data = append(data, '\n')
 	if _, err := s.stdin.Write(data); err != nil {
 		return fmt.Errorf("write to stdin: %w", err)
+	}
+
+	return nil
+}
+
+// SendControlResponse writes a control_response to claude's stdin (for permission approvals/denials).
+func (s *ChatSession) SendControlResponse(requestID string, response json.RawMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.stdin == nil {
+		return fmt.Errorf("session stdin closed")
+	}
+
+	msg := map[string]interface{}{
+		"type":       "control_response",
+		"request_id": requestID,
+		"response":   response,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal control response: %w", err)
+	}
+
+	data = append(data, '\n')
+	if _, err := s.stdin.Write(data); err != nil {
+		return fmt.Errorf("write control response to stdin: %w", err)
 	}
 
 	return nil
@@ -186,16 +227,19 @@ func (s *ChatSession) IsAlive() bool {
 // ChatManager manages chat sessions keyed by project ID.
 type ChatManager struct {
 	sessions            map[string]*ChatSession
+	projectTokens       map[string]string // per-project Claude OAuth tokens (for account switching)
 	mu                  sync.RWMutex
 	skipPermissions     bool
 	ChatSessionService  ChatSessionPersister
 	ChatHistoryService  ChatHistoryArchiver
+	UsageRecorder       UsageRecorderFunc // optional callback for token usage tracking
 }
 
 // NewChatManager creates a new chat session manager.
 func NewChatManager(chatSessionService ChatSessionPersister, chatHistoryService ChatHistoryArchiver) *ChatManager {
 	return &ChatManager{
 		sessions:            make(map[string]*ChatSession),
+		projectTokens:       make(map[string]string),
 		skipPermissions:     true, // default to accept-all
 		ChatSessionService:  chatSessionService,
 		ChatHistoryService:  chatHistoryService,
@@ -223,6 +267,40 @@ func (m *ChatManager) GetSession(projectID string) *ChatSession {
 	return m.sessions[projectID]
 }
 
+// SetProjectToken sets a per-project Claude OAuth token for account switching.
+// The token will be injected into the Claude process environment when the session starts.
+func (m *ChatManager) SetProjectToken(projectID, token string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if token == "" {
+		delete(m.projectTokens, projectID)
+	} else {
+		m.projectTokens[projectID] = token
+	}
+}
+
+// GetProjectToken returns the per-project token, if set.
+func (m *ChatManager) GetProjectToken(projectID string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.projectTokens[projectID]
+}
+
+// PreserveCurrentTokenForAllSessions snapshots the given token as the per-project
+// token for every active session that doesn't already have one. Call this before
+// `claude auth login` changes the global keychain credential, so existing sessions
+// keep using their original account.
+func (m *ChatManager) PreserveCurrentTokenForAllSessions(token string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for pid := range m.sessions {
+		if m.projectTokens[pid] == "" {
+			m.projectTokens[pid] = token
+			slog.Info("preserved token for existing session", "projectID", pid)
+		}
+	}
+}
+
 // startProcess is the shared logic for spawning a claude process.
 // extraArgs are appended after the standard flags (e.g. --resume <id>).
 func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...string) (*ChatSession, error) {
@@ -235,6 +313,14 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 	}
 	if m.skipPermissions {
 		args = append(args, "--dangerously-skip-permissions")
+	} else {
+		// In non-skip mode, use "acceptEdits" which auto-approves reads/edits
+		// but blocks dangerous operations (rm, etc). The default mode silently
+		// denies everything in non-interactive (-p) mode.
+		// Also allow plan mode tools — they're safe (just change Claude's output mode).
+		// Without this, acceptEdits silently denies them and plan mode gets stuck.
+		args = append(args, "--permission-mode", "acceptEdits",
+			"--allowedTools", "EnterPlanMode ExitPlanMode")
 	}
 	args = append(args, extraArgs...)
 
@@ -251,12 +337,19 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 		cmd.Dir = home
 	}
 	env := os.Environ()
-	// Inject Claude OAuth token from persistent storage if available
-	if tokenData, err := os.ReadFile("/data/.claude-oauth-token"); err == nil {
-		token := strings.TrimSpace(string(tokenData))
-		if token != "" {
-			env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+token)
-		}
+	// Per-project token takes priority (account switching via /login).
+	// Falls back to globally stored token file.
+	// Do NOT read from keychain here — let Claude Code handle its own auth
+	// natively (it manages token refresh). We only read keychain below for
+	// the usage tracking hash.
+	var oauthToken string
+	if token := m.projectTokens[projectID]; token != "" {
+		oauthToken = token
+	} else if token := getStoredClaudeToken(); token != "" {
+		oauthToken = token
+	}
+	if oauthToken != "" {
+		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+oauthToken)
 	}
 	cmd.Env = env
 
@@ -283,10 +376,26 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 		return nil, fmt.Errorf("start claude: %w", err)
 	}
 
+	// Compute stable hash of OAuth token for usage tracking identity.
+	// Use the env-var token if set, otherwise read from keychain (read-only, not passed to Claude).
+	tokenForHash := oauthToken
+	if tokenForHash == "" {
+		tokenForHash = readClaudeTokenFromKeychain()
+	}
+	var tokenHash string
+	if tokenForHash != "" {
+		h := sha256.Sum256([]byte(tokenForHash))
+		tokenHash = fmt.Sprintf("%x", h[:8]) // 16-char hex prefix — enough for identity
+		slog.Info("usage tracking enabled", "tokenHash", tokenHash, "projectID", projectID)
+	} else {
+		slog.Warn("no OAuth token found — usage tracking disabled", "projectID", projectID)
+	}
+
 	sess := &ChatSession{
 		ID:        uuid.New().String(),
 		ProjectID: projectID,
 		LocalPath: localPath,
+		TokenHash: tokenHash,
 		StartedAt: time.Now().UTC(),
 		Cmd:       cmd,
 		stdin:     stdinPipe,
@@ -370,6 +479,16 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 					}
 					sess.dirty = true
 					sess.mu.Unlock()
+				}
+
+				// Extract token usage from stream events for usage tracking.
+				// Also handle "result" type which some Claude Code versions emit at end of turn.
+				if m.UsageRecorder != nil && sess.TokenHash != "" {
+					if parsed.Type == "stream_event" {
+						m.extractStreamUsage(line, sess)
+					} else if parsed.Type == "result" {
+						m.extractResultUsage(line, sess)
+					}
 				}
 
 				dataCopy := make([]byte, len(line))
@@ -624,4 +743,268 @@ func (m *ChatManager) ShutdownAll() {
 			"claudeSessionID", sess.SessionID,
 		)
 	}
+}
+
+// extractStreamUsage parses stream_event lines for usage data.
+// Claude Code stream-json emits:
+//   - message_start: contains model name + initial usage
+//   - message_delta: contains final cumulative usage (input_tokens, output_tokens, cache tokens)
+//
+// We capture the model from message_start (stored on the session) and record
+// usage from message_delta.
+func (m *ChatManager) extractStreamUsage(line []byte, sess *ChatSession) {
+	var envelope struct {
+		Event json.RawMessage `json:"event"`
+	}
+	if err := json.Unmarshal(line, &envelope); err != nil || len(envelope.Event) == 0 {
+		return
+	}
+
+	var eventType struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(envelope.Event, &eventType); err != nil {
+		return
+	}
+
+	switch eventType.Type {
+	case "message_start":
+		// Capture model name for this turn.
+		var msgStart struct {
+			Message struct {
+				Model string `json:"model"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal(envelope.Event, &msgStart); err == nil && msgStart.Message.Model != "" {
+			sess.mu.Lock()
+			sess.lastModel = msgStart.Message.Model
+			sess.mu.Unlock()
+		}
+
+	case "message_delta":
+		// Final cumulative usage for this turn.
+		var msgDelta struct {
+			Usage struct {
+				InputTokens         int64 `json:"input_tokens"`
+				OutputTokens        int64 `json:"output_tokens"`
+				CacheReadTokens     int64 `json:"cache_read_input_tokens"`
+				CacheCreationTokens int64 `json:"cache_creation_input_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal(envelope.Event, &msgDelta); err != nil {
+			return
+		}
+		u := msgDelta.Usage
+		if u.InputTokens == 0 && u.OutputTokens == 0 {
+			return
+		}
+
+		sess.mu.Lock()
+		model := sess.lastModel
+		sess.mu.Unlock()
+
+		slog.Info("claude usage recorded",
+			"projectID", sess.ProjectID,
+			"model", model,
+			"inputTokens", u.InputTokens,
+			"outputTokens", u.OutputTokens,
+			"cacheRead", u.CacheReadTokens,
+			"cacheCreation", u.CacheCreationTokens,
+		)
+
+		m.UsageRecorder(
+			sess.TokenHash,
+			sess.ProjectID,
+			sess.SessionID,
+			model,
+			u.InputTokens,
+			u.OutputTokens,
+			u.CacheReadTokens,
+			u.CacheCreationTokens,
+		)
+	}
+}
+
+// extractResultUsage handles "result" type events (some Claude Code versions).
+func (m *ChatManager) extractResultUsage(line []byte, sess *ChatSession) {
+	var resultEvent struct {
+		Result struct {
+			Model string `json:"model"`
+			Usage struct {
+				InputTokens         int64 `json:"input_tokens"`
+				OutputTokens        int64 `json:"output_tokens"`
+				CacheReadTokens     int64 `json:"cache_read_input_tokens"`
+				CacheCreationTokens int64 `json:"cache_creation_input_tokens"`
+			} `json:"usage"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(line, &resultEvent); err != nil {
+		return
+	}
+	u := resultEvent.Result.Usage
+	if u.InputTokens == 0 && u.OutputTokens == 0 {
+		return
+	}
+	model := resultEvent.Result.Model
+	if model == "" {
+		sess.mu.Lock()
+		model = sess.lastModel
+		sess.mu.Unlock()
+	}
+	slog.Info("claude usage recorded (result)",
+		"projectID", sess.ProjectID,
+		"model", model,
+		"inputTokens", u.InputTokens,
+		"outputTokens", u.OutputTokens,
+	)
+	m.UsageRecorder(
+		sess.TokenHash, sess.ProjectID, sess.SessionID, model,
+		u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheCreationTokens,
+	)
+}
+
+// getStoredClaudeToken reads the Claude OAuth token from persistent storage.
+// Uses /data (Fly volume) when available, otherwise ~/.vibectl/.claude-oauth-token.
+// Returns empty string if no token is stored.
+func getStoredClaudeToken() string {
+	tokenPath := "/data/.claude-oauth-token"
+	if _, err := os.Stat("/data"); err != nil {
+		home, _ := os.UserHomeDir()
+		tokenPath = filepath.Join(home, ".vibectl", ".claude-oauth-token")
+	}
+	data, err := os.ReadFile(tokenPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// ReadClaudeTokenFromKeychain is the exported version of readClaudeTokenFromKeychain.
+func ReadClaudeTokenFromKeychain() string {
+	return readClaudeTokenFromKeychain()
+}
+
+// readClaudeTokenFromKeychain reads the Claude Code OAuth token from the macOS keychain.
+// Claude Code stores credentials in the keychain under service "Claude Code-credentials".
+// Returns empty string on non-macOS or if the token can't be read.
+func readClaudeTokenFromKeychain() string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	// Determine the keychain account name (macOS username)
+	acct := ""
+	if u, err := user.Current(); err == nil {
+		acct = u.Username
+	}
+	if acct == "" {
+		return ""
+	}
+
+	out, err := exec.Command("security", "find-generic-password",
+		"-s", "Claude Code-credentials",
+		"-a", acct,
+		"-w",
+	).Output()
+	if err != nil {
+		slog.Debug("could not read Claude token from keychain", "error", err)
+		return ""
+	}
+
+	// The keychain value is JSON: {"claudeAiOauth":{"accessToken":"sk-ant-oat01-...",...}}
+	var creds struct {
+		ClaudeAiOauth struct {
+			AccessToken string `json:"accessToken"`
+		} `json:"claudeAiOauth"`
+	}
+	if err := json.Unmarshal(out, &creds); err != nil {
+		slog.Warn("could not parse Claude keychain credentials", "error", err)
+		return ""
+	}
+	return creds.ClaudeAiOauth.AccessToken
+}
+
+// PKCELoginParams holds the parameters for a PKCE OAuth login flow.
+type PKCELoginParams struct {
+	AuthURL      string
+	CodeVerifier string
+	ClientID     string
+	RedirectURI  string
+	State        string
+}
+
+// generatePKCELogin creates PKCE parameters and an auth URL for Claude OAuth.
+// Does NOT modify the keychain — the token is managed per-project in memory.
+func generatePKCELogin() *PKCELoginParams {
+	verifierBytes := make([]byte, 32)
+	if _, err := rand.Read(verifierBytes); err != nil {
+		slog.Error("failed to generate PKCE verifier", "error", err)
+		return nil
+	}
+	codeVerifier := base64.RawURLEncoding.EncodeToString(verifierBytes)
+	challengeHash := sha256.Sum256([]byte(codeVerifier))
+	codeChallenge := base64.RawURLEncoding.EncodeToString(challengeHash[:])
+
+	stateBytes := make([]byte, 32)
+	rand.Read(stateBytes)
+	state := base64.RawURLEncoding.EncodeToString(stateBytes)
+
+	clientID := "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+	redirectURI := "https://platform.claude.com/oauth/code/callback"
+	scopes := "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+
+	authURL := fmt.Sprintf(
+		"https://claude.ai/oauth/authorize?code=true&client_id=%s&response_type=code&redirect_uri=%s&scope=%s&code_challenge=%s&code_challenge_method=S256&state=%s",
+		clientID,
+		url.QueryEscape(redirectURI),
+		url.QueryEscape(scopes),
+		codeChallenge,
+		state,
+	)
+
+	return &PKCELoginParams{
+		AuthURL:      authURL,
+		CodeVerifier: codeVerifier,
+		ClientID:     clientID,
+		RedirectURI:  redirectURI,
+		State:        state,
+	}
+}
+
+// exchangeCodeForToken exchanges an OAuth authorization code for an access token.
+func exchangeCodeForToken(code, codeVerifier, clientID, redirectURI string) (string, error) {
+	payload, _ := json.Marshal(map[string]string{
+		"grant_type":    "authorization_code",
+		"code":          code,
+		"redirect_uri":  redirectURI,
+		"client_id":     clientID,
+		"code_verifier": codeVerifier,
+	})
+
+	req, _ := http.NewRequest("POST", "https://platform.claude.com/v1/oauth/token", strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "claude-code/1.0.0")
+	req.Header.Set("anthropic-client-name", "claude-code")
+	req.Header.Set("anthropic-client-version", "1.0.0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("token exchange request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		Error       string `json:"error"`
+		ErrorDesc   string `json:"error_description"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return "", fmt.Errorf("failed to parse token response: %w", err)
+	}
+	if tokenResp.Error != "" {
+		return "", fmt.Errorf("%s: %s", tokenResp.Error, tokenResp.ErrorDesc)
+	}
+	if tokenResp.AccessToken == "" {
+		return "", fmt.Errorf("no access_token in response (HTTP %d)", resp.StatusCode)
+	}
+	return tokenResp.AccessToken, nil
 }

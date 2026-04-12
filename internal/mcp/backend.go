@@ -52,4 +52,10 @@ type Backend interface {
 	// VibectlMd
 	GenerateVibectlMd(ctx context.Context, projectID string) (string, error)
 	WriteVibectlMdToProject(ctx context.Context, projectID string) error
+
+	// Multi-module
+	CreateMultiModuleProject(ctx context.Context, req *models.CreateProjectRequest) (*models.Project, []models.Project, error)
+	ListUnits(ctx context.Context, parentID bson.ObjectID) ([]models.Project, error)
+	AddUnit(ctx context.Context, parentID bson.ObjectID, unit models.UnitDefinition) (*models.Project, error)
+	GetProjectByID(ctx context.Context, id string) (*models.Project, error)
 }

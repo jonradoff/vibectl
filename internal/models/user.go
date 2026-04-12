@@ -64,6 +64,8 @@ type User struct {
 	GitName               string         `json:"gitName,omitempty" bson:"gitName,omitempty"`
 	GitEmail              string         `json:"gitEmail,omitempty" bson:"gitEmail,omitempty"`
 	Disabled              bool           `json:"disabled" bson:"disabled"`
+	WorkspaceDir          string         `json:"workspaceDir,omitempty" bson:"workspaceDir,omitempty"`
+	ClaudeCodeFontSize    int            `json:"claudeCodeFontSize,omitempty" bson:"claudeCodeFontSize,omitempty"` // 0 = default (14px)
 	LastLoginAt           *time.Time     `json:"lastLoginAt,omitempty" bson:"lastLoginAt,omitempty"`
 	CreatedBy             *bson.ObjectID `json:"createdBy,omitempty" bson:"createdBy,omitempty"`
 	CreatedAt             time.Time      `json:"createdAt" bson:"createdAt"`
@@ -79,4 +81,6 @@ type UpdateUserRequest struct {
 	GlobalRole     *GlobalRole `json:"globalRole,omitempty"`
 	GitHubUsername *string     `json:"githubUsername,omitempty"`
 	Disabled       *bool       `json:"disabled,omitempty"`
+	WorkspaceDir       *string `json:"workspaceDir,omitempty"`
+	ClaudeCodeFontSize *int    `json:"claudeCodeFontSize,omitempty"`
 }

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -127,8 +128,17 @@ func (h *AdminHandler) SelfInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// claudeOAuthTokenPath is where we persist the Claude OAuth token on the data volume.
-const claudeOAuthTokenPath = "/data/.claude-oauth-token"
+// claudeOAuthTokenPath returns the path for persisting the Claude OAuth token.
+// Uses /data (Fly volume) when available, otherwise falls back to ~/.vibectl/.claude-oauth-token.
+func claudeOAuthTokenPath() string {
+	if _, err := os.Stat("/data"); err == nil {
+		return "/data/.claude-oauth-token"
+	}
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".vibectl")
+	os.MkdirAll(dir, 0700)
+	return filepath.Join(dir, ".claude-oauth-token")
+}
 
 // ClaudeLogin handles GET /api/v1/admin/claude-login.
 // Returns PKCE OAuth parameters. Uses platform.claude.com for both authorize and token exchange
@@ -256,7 +266,7 @@ func (h *AdminHandler) ClaudeLoginCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store the token
-	if err := os.WriteFile(claudeOAuthTokenPath, []byte(tokenResp.AccessToken), 0600); err != nil {
+	if err := os.WriteFile(claudeOAuthTokenPath(), []byte(tokenResp.AccessToken), 0600); err != nil {
 		slog.Error("failed to write claude oauth token", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "failed to store token", "STORE_FAILED")
 		return
@@ -282,21 +292,39 @@ func (h *AdminHandler) ClaudeTokenDirect(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Verify it works
+	// Basic format check: Claude OAuth tokens start with "sk-ant-oat" or similar prefix.
+	// Authorization codes (from OAuth callback) are shorter random strings and won't work here.
+	if !strings.HasPrefix(token, "sk-ant-") {
+		middleware.WriteError(w, http.StatusBadRequest,
+			"This looks like an authorization code, not an OAuth token. "+
+				"Run 'claude auth status --json' and copy the oauthToken value (starts with sk-ant-oat01-...).",
+			"INVALID_TOKEN_FORMAT")
+		return
+	}
+
+	// Verify the token actually works
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "claude", "auth", "status")
 	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+token)
-	out, _ := cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		slog.Warn("claude auth status failed during token validation", "error", err, "output", string(out))
+		middleware.WriteError(w, http.StatusBadRequest, "token validation failed — claude auth status returned an error", "INVALID_TOKEN")
+		return
+	}
 	var status map[string]interface{}
-	if json.Unmarshal(out, &status) == nil {
-		if loggedIn, ok := status["loggedIn"].(bool); ok && !loggedIn {
-			middleware.WriteError(w, http.StatusBadRequest, "token is not valid — claude auth status reports not logged in", "INVALID_TOKEN")
-			return
-		}
+	if jsonErr := json.Unmarshal(out, &status); jsonErr != nil {
+		slog.Warn("claude auth status returned non-JSON", "output", string(out))
+		middleware.WriteError(w, http.StatusBadRequest, "token validation failed — unexpected response from claude auth status", "INVALID_TOKEN")
+		return
+	}
+	if loggedIn, ok := status["loggedIn"].(bool); ok && !loggedIn {
+		middleware.WriteError(w, http.StatusBadRequest, "token is not valid — claude auth status reports not logged in", "INVALID_TOKEN")
+		return
 	}
 
-	if err := os.WriteFile(claudeOAuthTokenPath, []byte(token), 0600); err != nil {
+	if err := os.WriteFile(claudeOAuthTokenPath(), []byte(token), 0600); err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, "failed to store token", "STORE_FAILED")
 		return
 	}
@@ -344,9 +372,243 @@ func sha256Base64URL(s string) string {
 // GetClaudeOAuthToken reads the stored OAuth token from the persistent volume.
 // Returns empty string if no token is stored.
 func GetClaudeOAuthToken() string {
-	data, err := os.ReadFile(claudeOAuthTokenPath)
+	data, err := os.ReadFile(claudeOAuthTokenPath())
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// MCPServerInfo represents a configured MCP server for display purposes.
+type MCPServerInfo struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"`                // "stdio", "http", "sse"
+	Command   string `json:"command,omitempty"`    // for stdio
+	URL       string `json:"url,omitempty"`        // for http/sse
+	Source    string `json:"source"`               // "user", "project", "project-file"
+	ArgsCount int    `json:"argsCount,omitempty"`
+}
+
+// ListMCPServers handles GET /api/v1/admin/mcp-servers?projectPath=...
+func (h *AdminHandler) ListMCPServers(w http.ResponseWriter, r *http.Request) {
+	projectPath := r.URL.Query().Get("projectPath")
+	var servers []MCPServerInfo
+
+	// 1. Read user-scope servers from ~/.claude.json
+	home, _ := os.UserHomeDir()
+	claudeJSON := filepath.Join(home, ".claude.json")
+	if data, err := os.ReadFile(claudeJSON); err == nil {
+		var cfg struct {
+			MCPServers map[string]json.RawMessage `json:"mcpServers"`
+			Projects   map[string]struct {
+				MCPServers map[string]json.RawMessage `json:"mcpServers"`
+			} `json:"projects"`
+		}
+		if json.Unmarshal(data, &cfg) == nil {
+			// User-scope servers
+			for name, raw := range cfg.MCPServers {
+				servers = append(servers, parseMCPEntry(name, raw, "user"))
+			}
+			// Project-specific servers from ~/.claude.json projects section
+			if projectPath != "" {
+				if proj, ok := cfg.Projects[projectPath]; ok {
+					for name, raw := range proj.MCPServers {
+						servers = append(servers, parseMCPEntry(name, raw, "project"))
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Read project-scope .mcp.json
+	if projectPath != "" {
+		mcpJSON := filepath.Join(projectPath, ".mcp.json")
+		if data, err := os.ReadFile(mcpJSON); err == nil {
+			var cfg struct {
+				MCPServers map[string]json.RawMessage `json:"mcpServers"`
+			}
+			if json.Unmarshal(data, &cfg) == nil {
+				for name, raw := range cfg.MCPServers {
+					servers = append(servers, parseMCPEntry(name, raw, "project-file"))
+				}
+			}
+		}
+	}
+
+	if servers == nil {
+		servers = []MCPServerInfo{}
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"servers": servers,
+	})
+}
+
+// SubscriptionUsage represents the Claude subscription usage response.
+type SubscriptionUsage struct {
+	FiveHour      *UsageBucket `json:"fiveHour"`
+	SevenDay      *UsageBucket `json:"sevenDay"`
+	SevenDaySonnet *UsageBucket `json:"sevenDaySonnet,omitempty"`
+	SevenDayOpus  *UsageBucket `json:"sevenDayOpus,omitempty"`
+	ExtraUsage    *ExtraUsage  `json:"extraUsage,omitempty"`
+	SubscriptionType string    `json:"subscriptionType"`
+}
+
+type UsageBucket struct {
+	Utilization float64 `json:"utilization"`
+	ResetsAt    string  `json:"resetsAt"`
+}
+
+type ExtraUsage struct {
+	IsEnabled    bool     `json:"isEnabled"`
+	MonthlyLimit *float64 `json:"monthlyLimit"`
+	UsedCredits  float64  `json:"usedCredits"`
+}
+
+// GetSubscriptionUsage handles GET /api/v1/admin/subscription-usage.
+// Fetches the current Claude subscription usage from the OAuth API.
+func (h *AdminHandler) GetSubscriptionUsage(w http.ResponseWriter, r *http.Request) {
+	// Get OAuth token — try stored file first, then keychain
+	token := GetClaudeOAuthToken()
+	if token == "" {
+		token = terminal.ReadClaudeTokenFromKeychain()
+	}
+	if token == "" {
+		middleware.WriteError(w, http.StatusServiceUnavailable, "no Claude OAuth token available", "NO_TOKEN")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.anthropic.com/api/oauth/usage", nil)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "failed to create request", "REQUEST_ERROR")
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadGateway, "failed to reach Anthropic API", "FETCH_ERROR")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 429 {
+		middleware.WriteError(w, http.StatusTooManyRequests, "rate limited by Anthropic API", "RATE_LIMITED")
+		return
+	}
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		middleware.WriteError(w, http.StatusBadGateway, fmt.Sprintf("Anthropic API error (%d): %s", resp.StatusCode, string(body[:min(200, len(body))]), ), "API_ERROR")
+		return
+	}
+
+	var raw struct {
+		FiveHour      *struct { Utilization float64 `json:"utilization"`; ResetsAt string `json:"resets_at"` } `json:"five_hour"`
+		SevenDay      *struct { Utilization float64 `json:"utilization"`; ResetsAt string `json:"resets_at"` } `json:"seven_day"`
+		SevenDaySonnet *struct { Utilization float64 `json:"utilization"`; ResetsAt string `json:"resets_at"` } `json:"seven_day_sonnet"`
+		SevenDayOpus  *struct { Utilization float64 `json:"utilization"`; ResetsAt string `json:"resets_at"` } `json:"seven_day_opus"`
+		ExtraUsage    *struct {
+			IsEnabled    bool     `json:"is_enabled"`
+			MonthlyLimit *float64 `json:"monthly_limit"`
+			UsedCredits  float64  `json:"used_credits"`
+		} `json:"extra_usage"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "failed to parse usage response", "PARSE_ERROR")
+		return
+	}
+
+	// Read subscription type from keychain credentials
+	subType := "unknown"
+	keychainToken := terminal.ReadClaudeTokenFromKeychain()
+	if keychainToken != "" {
+		// Re-read full keychain data to get subscription type
+		if u, uErr := os.UserHomeDir(); uErr == nil {
+			_ = u // subscription type is in keychain JSON, already parsed in terminal pkg
+		}
+	}
+	// Parse keychain for subscription info
+	if subInfo := readSubscriptionType(); subInfo != "" {
+		subType = subInfo
+	}
+
+	result := SubscriptionUsage{
+		SubscriptionType: subType,
+	}
+	if raw.FiveHour != nil {
+		result.FiveHour = &UsageBucket{Utilization: raw.FiveHour.Utilization, ResetsAt: raw.FiveHour.ResetsAt}
+	}
+	if raw.SevenDay != nil {
+		result.SevenDay = &UsageBucket{Utilization: raw.SevenDay.Utilization, ResetsAt: raw.SevenDay.ResetsAt}
+	}
+	if raw.SevenDaySonnet != nil {
+		result.SevenDaySonnet = &UsageBucket{Utilization: raw.SevenDaySonnet.Utilization, ResetsAt: raw.SevenDaySonnet.ResetsAt}
+	}
+	if raw.SevenDayOpus != nil {
+		result.SevenDayOpus = &UsageBucket{Utilization: raw.SevenDayOpus.Utilization, ResetsAt: raw.SevenDayOpus.ResetsAt}
+	}
+	if raw.ExtraUsage != nil {
+		result.ExtraUsage = &ExtraUsage{
+			IsEnabled:    raw.ExtraUsage.IsEnabled,
+			MonthlyLimit: raw.ExtraUsage.MonthlyLimit,
+			UsedCredits:  raw.ExtraUsage.UsedCredits,
+		}
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, result)
+}
+
+func readSubscriptionType() string {
+	if out, err := exec.Command("security", "find-generic-password",
+		"-s", "Claude Code-credentials",
+		"-a", os.Getenv("USER"),
+		"-w",
+	).Output(); err == nil {
+		var creds struct {
+			ClaudeAiOauth struct {
+				SubscriptionType string `json:"subscriptionType"`
+			} `json:"claudeAiOauth"`
+		}
+		if json.Unmarshal(out, &creds) == nil {
+			return creds.ClaudeAiOauth.SubscriptionType
+		}
+	}
+	return ""
+}
+
+func parseMCPEntry(name string, raw json.RawMessage, source string) MCPServerInfo {
+	var entry struct {
+		Type    string   `json:"type"`
+		Command string   `json:"command"`
+		URL     string   `json:"url"`
+		Args    []string `json:"args"`
+	}
+	json.Unmarshal(raw, &entry)
+
+	info := MCPServerInfo{
+		Name:   name,
+		Type:   entry.Type,
+		Source: source,
+	}
+	if info.Type == "" {
+		if entry.Command != "" {
+			info.Type = "stdio"
+		} else if entry.URL != "" {
+			info.Type = "http"
+		}
+	}
+	if entry.Command != "" {
+		// Show just the binary name, not the full path
+		info.Command = filepath.Base(entry.Command)
+	}
+	if entry.URL != "" {
+		info.URL = entry.URL
+	}
+	info.ArgsCount = len(entry.Args)
+	return info
 }

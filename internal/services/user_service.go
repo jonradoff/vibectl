@@ -279,6 +279,12 @@ func (s *UserService) Update(ctx context.Context, id bson.ObjectID, req *models.
 	if req.Disabled != nil {
 		set = append(set, bson.E{Key: "disabled", Value: *req.Disabled})
 	}
+	if req.WorkspaceDir != nil {
+		set = append(set, bson.E{Key: "workspaceDir", Value: *req.WorkspaceDir})
+	}
+	if req.ClaudeCodeFontSize != nil {
+		set = append(set, bson.E{Key: "claudeCodeFontSize", Value: *req.ClaudeCodeFontSize})
+	}
 	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
 	var updated models.User
 	err := s.col.FindOneAndUpdate(ctx,

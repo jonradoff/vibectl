@@ -125,9 +125,20 @@ func (h *DashboardHandler) GlobalDashboard(w http.ResponseWriter, r *http.Reques
 }
 
 // Universe returns per-project time-series data for the Universe panel visualization.
-// GET /api/v1/dashboard/universe
+// GET /api/v1/dashboard/universe?days=30
 func (h *DashboardHandler) Universe(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	// Parse optional days param (default 90, max 365)
+	activityDays := 90
+	if d := r.URL.Query().Get("days"); d != "" {
+		if n, err := fmt.Sscanf(d, "%d", &activityDays); n != 1 || err != nil || activityDays < 1 {
+			activityDays = 90
+		}
+		if activityDays > 365 {
+			activityDays = 365
+		}
+	}
 
 	projects, err := h.projectService.List(ctx)
 	if err != nil {
@@ -146,14 +157,21 @@ func (h *DashboardHandler) Universe(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			parentID := ""
+			if proj.ParentID != nil {
+				parentID = proj.ParentID.Hex()
+			}
 			data := models.ProjectUniverseData{
 				ProjectID:   proj.ID.Hex(),
 				ProjectName: proj.Name,
 				ProjectCode: proj.Code,
+				ProjectType: proj.ProjectType,
+				ParentID:    parentID,
+				UnitName:    proj.UnitName,
 			}
 
-			// Activity sparkline: 90 days
-			actByDay, err := h.activityLogService.DailyActivityCounts(ctx, proj.ID, 90)
+			// Activity sparkline: requested days
+			actByDay, err := h.activityLogService.DailyActivityCounts(ctx, proj.ID, activityDays)
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -164,8 +182,8 @@ func (h *DashboardHandler) Universe(w http.ResponseWriter, r *http.Request) {
 			}
 			data.ActivityByDay = actByDay
 
-			// Health sparkline: 7 days
-			healthByDay, err := h.healthRecordService.DailyHealthStatus(ctx, proj.ID, 7)
+			// Health sparkline: 1 day (24h)
+			healthByDay, err := h.healthRecordService.DailyHealthStatus(ctx, proj.ID, 1)
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -200,9 +218,16 @@ func (h *DashboardHandler) Universe(w http.ResponseWriter, r *http.Request) {
 			pendingFeedback, _ := h.feedbackService.CountPendingByProject(ctx, proj.ID)
 			data.PendingFeedbackCount = pendingFeedback
 
-			// Deploy count: last 30 days
-			deploys, _ := h.activityLogService.DeployCountSince(ctx, proj.ID, 30)
-			data.DeployCount = deploys
+			// Prompt count: prompt_sent activity log entries within the requested window
+			prompts, _ := h.activityLogService.PromptCountSince(ctx, proj.ID, activityDays)
+			data.PromptCount = prompts
+
+			// Last prompt timestamp
+			lastPromptAt, _ := h.activityLogService.LastPromptAt(ctx, proj.ID)
+			if lastPromptAt != nil {
+				s := lastPromptAt.UTC().Format(time.RFC3339)
+				data.LastPromptAt = &s
+			}
 
 			// Last activity timestamp
 			lastAt, _ := h.activityLogService.LastActivityAt(ctx, proj.ID)

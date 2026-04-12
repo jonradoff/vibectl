@@ -400,3 +400,40 @@ func (b *APIBackend) CreateIssueFromFeedback(ctx context.Context, item *models.F
 func (b *APIBackend) LinkFeedbackToIssue(_ context.Context, _, _ string) error {
 	return nil
 }
+
+// ── Multi-module methods ─────────────────────────────────────────────────────
+
+func (b *APIBackend) CreateMultiModuleProject(ctx context.Context, req *models.CreateProjectRequest) (*models.Project, []models.Project, error) {
+	var result struct {
+		Parent models.Project   `json:"parent"`
+		Units  []models.Project `json:"units"`
+	}
+	if err := b.doPost(ctx, "/api/v1/projects", req, &result); err != nil {
+		return nil, nil, err
+	}
+	return &result.Parent, result.Units, nil
+}
+
+func (b *APIBackend) ListUnits(ctx context.Context, parentID bson.ObjectID) ([]models.Project, error) {
+	var units []models.Project
+	if err := b.doGet(ctx, "/api/v1/projects/"+parentID.Hex()+"/units", &units); err != nil {
+		return nil, err
+	}
+	return units, nil
+}
+
+func (b *APIBackend) AddUnit(ctx context.Context, parentID bson.ObjectID, unit models.UnitDefinition) (*models.Project, error) {
+	var project models.Project
+	if err := b.doPost(ctx, "/api/v1/projects/"+parentID.Hex()+"/units", unit, &project); err != nil {
+		return nil, err
+	}
+	return &project, nil
+}
+
+func (b *APIBackend) GetProjectByID(ctx context.Context, id string) (*models.Project, error) {
+	var project models.Project
+	if err := b.doGet(ctx, "/api/v1/projects/"+url.PathEscape(id), &project); err != nil {
+		return nil, err
+	}
+	return &project, nil
+}

@@ -378,3 +378,49 @@ If a `secret` is configured, the `X-Vibectl-Signature` header is set to `sha256=
 signature = HMAC-SHA256(secret, body)
 header == "sha256=" + hex(signature)
 ```
+
+---
+
+## Claude Usage Monitoring
+
+Token usage from Claude Code sessions is tracked per-login (identified by a hash of the OAuth token). Data is stored in MongoDB with a 90-day TTL.
+
+### `GET /api/v1/claude-usage/summary`
+
+Returns usage summaries for all known Claude logins for the current week.
+
+```json
+[
+  {
+    "tokenHash": "a1b2c3d4e5f6a7b8",
+    "loginLabel": "Jon's Max",
+    "weeklyTokenLimit": 50000000,
+    "alertThreshold": 70,
+    "totalInputTokens": 12000000,
+    "totalOutputTokens": 5000000,
+    "totalCacheRead": 8000000,
+    "totalCacheCreation": 2000000,
+    "totalTokens": 17000000,
+    "usagePercent": 34.0,
+    "weekStartedAt": "2026-04-07T00:00:00Z",
+    "weekResetsAt": "2026-04-14T00:00:00Z",
+    "byProject": [{ "projectId": "...", "inputTokens": 8000000, "outputTokens": 3000000, "totalTokens": 11000000 }],
+    "byModel": [{ "model": "claude-opus-4-6", "inputTokens": 12000000, "outputTokens": 5000000, "totalTokens": 17000000 }],
+    "dailyUsage": [{ "date": "2026-04-07", "inputTokens": 2000000, "outputTokens": 1000000, "totalTokens": 3000000 }]
+  }
+]
+```
+
+### `PUT /api/v1/claude-usage/config`
+
+Create or update usage configuration for a login identity.
+
+**Request body:**
+```json
+{
+  "tokenHash": "a1b2c3d4e5f6a7b8",
+  "loginLabel": "Jon's Max",
+  "weeklyTokenLimit": 50000000,
+  "alertThreshold": 70
+}
+```

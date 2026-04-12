@@ -89,6 +89,19 @@ export interface Project {
   vibectlMdGeneratedAt?: string;
   createdAt: string;
   updatedAt: string;
+
+  // Multi-module fields
+  projectType?: 'simple' | 'multi';
+  parentId?: string;
+  unitName?: string;
+  unitPath?: string;
+}
+
+export interface UnitDefinition {
+  name: string;
+  code: string;
+  path: string;
+  description: string;
 }
 
 export interface AppSettings {
@@ -204,7 +217,11 @@ export interface ProjectUniverseData {
   currentHealth: string;     // "up"|"down"|"degraded"|"unknown"|"none"
   pendingFeedbackCount: number;
   lastActivityAt?: string;
-  deployCount: number;
+  promptCount: number;
+  lastPromptAt?: string;
+  projectType?: string;
+  parentId?: string;
+  unitName?: string;
 }
 
 export interface GoalAssessment {
@@ -321,6 +338,28 @@ export interface ActivityLogResponse {
   offset: number;
 }
 
+// ---- Plans ----
+
+export interface Plan {
+  id: string;
+  projectId?: string;
+  claudeSessionId?: string;
+  requestId: string;
+  planText: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'completed' | 'abandoned';
+  feedback?: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlanListResponse {
+  plans: Plan[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 // ---- Multi-user types ----
 
 export type GlobalRole = 'super_admin' | 'member';
@@ -340,6 +379,8 @@ export interface User {
   gitName?: string;
   gitEmail?: string;
   disabled: boolean;
+  workspaceDir?: string;
+  claudeCodeFontSize?: number;
   lastLoginAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -426,6 +467,54 @@ export interface ClientInstance {
   projectPaths?: ProjectPathEntry[];
   createdAt: string;
   updatedAt: string;
+}
+
+// ---- Claude Usage ----
+
+export interface ClaudeProjectUsage {
+  projectId: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface ClaudeModelUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface ClaudeDailyUsage {
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface ClaudeUsageSummary {
+  tokenHash: string;
+  loginLabel: string;
+  weeklyTokenLimit: number;
+  alertThreshold: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheRead: number;
+  totalCacheCreation: number;
+  totalTokens: number;
+  usagePercent: number;
+  weekStartedAt: string;
+  weekResetsAt: string;
+  byProject: ClaudeProjectUsage[];
+  byModel: ClaudeModelUsage[];
+  dailyUsage: ClaudeDailyUsage[];
+}
+
+export interface ClaudeUsageConfig {
+  tokenHash: string;
+  loginLabel: string;
+  weeklyTokenLimit: number;
+  alertThreshold: number;
 }
 
 // ---- Color maps

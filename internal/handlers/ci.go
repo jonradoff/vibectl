@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os/exec"
+	"syscall"
 	"strings"
 	"time"
 
@@ -80,6 +81,7 @@ func (h *CIHandler) runCmdStream(ctx context.Context, cmd, dir string, timeout t
 	// Prepend a cd so the command always runs in the project directory
 	fullCmd := fmt.Sprintf("cd %q && %s", dir, cmd)
 	execCmd := exec.CommandContext(ctx, "sh", "-c", fullCmd)
+	execCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	execCmd.Stdout = w
 	execCmd.Stderr = w
 	return execCmd.Run()
@@ -514,11 +516,18 @@ func (h *CIHandler) RestartProd(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMinRole(w, r, project.ID, models.ProjectRoleDevOps) {
 		return
 	}
-	if project.Deployment == nil || project.Deployment.RestartProd == "" {
+	cmd := ""
+	if project.Deployment != nil {
+		cmd = project.Deployment.RestartProd
+		if cmd == "" && project.Deployment.FlyApp != "" {
+			cmd = "fly apps restart " + project.Deployment.FlyApp
+		}
+	}
+	if cmd == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "no restartProd command configured for this project", "NO_RESTART_PROD_CMD")
 		return
 	}
-	output, err := h.runCmd(r.Context(), project.Deployment.RestartProd, project.Links.LocalPath, 5*time.Minute)
+	output, err := h.runCmd(r.Context(), cmd, project.Links.LocalPath, 5*time.Minute)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, "restart prod failed: "+output, "RESTART_PROD_FAILED")
 		return
@@ -621,11 +630,18 @@ func (h *CIHandler) StartProd(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMinRole(w, r, project.ID, models.ProjectRoleDevOps) {
 		return
 	}
-	if project.Deployment == nil || project.Deployment.StartProd == "" {
+	cmd := ""
+	if project.Deployment != nil {
+		cmd = project.Deployment.StartProd
+		if cmd == "" && project.Deployment.FlyApp != "" {
+			cmd = "fly apps start " + project.Deployment.FlyApp
+		}
+	}
+	if cmd == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "no startProd command configured for this project", "NO_START_PROD_CMD")
 		return
 	}
-	output, err := h.runCmd(r.Context(), project.Deployment.StartProd, project.Links.LocalPath, 5*time.Minute)
+	output, err := h.runCmd(r.Context(), cmd, project.Links.LocalPath, 5*time.Minute)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, "start prod failed: "+output, "START_PROD_FAILED")
 		return
@@ -717,6 +733,7 @@ func (h *CIHandler) runCmd(ctx context.Context, cmd, dir string, timeout time.Du
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	execCmd := exec.CommandContext(ctx, "sh", "-c", cmd)
+	execCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if dir != "" {
 		execCmd.Dir = dir
 	}

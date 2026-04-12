@@ -79,10 +79,11 @@ func (s *ChatSessionService) MarkDead(ctx context.Context, projectID string) err
 }
 
 // GetResumable returns the resumable session for a project, or nil if none exists.
+// Matches both "resumable" (graceful shutdown) and "active" (server killed ungracefully).
 func (s *ChatSessionService) GetResumable(ctx context.Context, projectID string) (*models.ChatSessionState, error) {
 	filter := bson.D{
 		{Key: "projectId", Value: projectID},
-		{Key: "status", Value: "resumable"},
+		{Key: "status", Value: bson.D{{Key: "$in", Value: bson.A{"resumable", "active"}}}},
 	}
 	var state models.ChatSessionState
 	err := s.collection.FindOne(ctx, filter).Decode(&state)
@@ -99,7 +100,7 @@ func (s *ChatSessionService) GetResumable(ctx context.Context, projectID string)
 func (s *ChatSessionService) CleanupStale(ctx context.Context, maxAge time.Duration) (int64, error) {
 	cutoff := time.Now().UTC().Add(-maxAge)
 	filter := bson.D{
-		{Key: "status", Value: "resumable"},
+		{Key: "status", Value: bson.D{{Key: "$in", Value: bson.A{"resumable", "active"}}}},
 		{Key: "updatedAt", Value: bson.D{{Key: "$lt", Value: cutoff}}},
 	}
 	update := bson.D{{Key: "$set", Value: bson.D{

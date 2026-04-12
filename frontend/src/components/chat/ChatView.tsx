@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { listProjectPrompts, ensureDir, getClaudeAuthStatus, getStoredToken, submitClaudeLoginCode, submitClaudeTokenDirect } from '../../api/client'
+import { listProjectPrompts, ensureDir, getClaudeAuthStatus, getStoredToken, submitClaudeLoginCode, submitClaudeTokenDirect, listMCPServers, getSubscriptionUsage } from '../../api/client'
+import { useAuth } from '../../contexts/AuthContext'
+import { useMode } from '../../contexts/ModeContext'
 import { notifyServerRestarting } from '../shared/RebuildOverlay'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -76,7 +78,29 @@ interface ToolResultMessage {
   isError: boolean
 }
 
-type ChatMessage = UserMessage | AssistantMessage | ToolResultMessage
+interface ControlRequestMessage {
+  role: 'control_request'
+  requestId: string
+  subtype: string
+  toolName: string
+  toolInput: Record<string, unknown>
+  resolved?: 'allowed' | 'denied'
+}
+
+interface PlanModeMessage {
+  role: 'plan_mode'
+  requestId: string
+  planText: string
+  resolved?: 'accepted' | 'rejected'
+  feedback?: string
+}
+
+interface LoginCodePromptMessage {
+  role: 'login_code_prompt'
+  text: string
+}
+
+type ChatMessage = UserMessage | AssistantMessage | ToolResultMessage | ControlRequestMessage | PlanModeMessage | LoginCodePromptMessage
 
 interface TextBlock {
   type: 'text'
@@ -101,10 +125,20 @@ export default function ChatView({
   onSessionSnapshot,
   onWaitingChange,
 }: ChatViewProps) {
+  const { currentUser } = useAuth()
+  const { mode: modeInfo } = useMode()
+  const chatFontSize = currentUser?.claudeCodeFontSize || 14
+
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streamingText, setStreamingText] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
-  const [inputText, setInputText] = useState('')
+  const [inputText, setInputTextRaw] = useState(() => {
+    try { return sessionStorage.getItem(`vibectl-draft-${projectId}`) || '' } catch { return '' }
+  })
+  const setInputText = (v: string) => {
+    setInputTextRaw(v)
+    try { if (v) sessionStorage.setItem(`vibectl-draft-${projectId}`, v); else sessionStorage.removeItem(`vibectl-draft-${projectId}`) } catch { /* ignore */ }
+  }
   const [status, setStatusState] = useState<string>('disconnected')
   const statusRef = useRef('disconnected')
   const setStatus = useCallback((s: string) => {
@@ -113,12 +147,41 @@ export default function ChatView({
   }, [])
   const [contextPct, setContextPct] = useState<number | null>(null)
   const [costUsd, setCostUsd] = useState<number | null>(null)
-  const [permissionMode, setPermissionMode] = useState<'accept-all' | 'approve'>('accept-all')
-  const [showSlashCommands, setShowSlashCommands] = useState(false)
+  const [permissionMode, setPermissionModeRaw] = useState<'accept-all' | 'approve'>(() => {
+    try {
+      const saved = localStorage.getItem(`vibectl-perm-mode-${projectId}`)
+      if (saved === 'accept-all' || saved === 'approve') return saved
+    } catch { /* ignore */ }
+    return 'accept-all'
+  })
+  const setPermissionMode = (mode: 'accept-all' | 'approve') => {
+    setPermissionModeRaw(mode)
+    try { localStorage.setItem(`vibectl-perm-mode-${projectId}`, mode) } catch { /* ignore */ }
+  }
+  const [slashHighlight, setSlashHighlight] = useState(0)
+  const slashDismissedRef = useRef(false) // user pressed Escape to dismiss autocomplete
   const [showPromptPicker, setShowPromptPicker] = useState(false)
   const [isReconnecting, setIsReconnecting] = useState(false)
+  const [compactingLabel, setCompactingLabel] = useState<string | null>(null)
+  const compactingRef = useRef(false)
   const [exitError, setExitError] = useState<{ exitCode: number; stderr: string[] } | null>(null)
   const [showLoginModal, setShowLoginModal] = useState(false)
+
+  // Inline slash command autocomplete — show when input starts with / and matches commands
+  const slashMatches = useMemo(() => {
+    const text = inputText.trim()
+    if (!text.startsWith('/') || text.includes(' ') || slashDismissedRef.current) return []
+    return SLASH_COMMANDS.filter(c => c.name.startsWith(text.toLowerCase()))
+  }, [inputText])
+
+  // Reset highlight when matches change, and clear dismissed flag when input changes away from /
+  useEffect(() => {
+    setSlashHighlight(0)
+  }, [slashMatches.length])
+
+  useEffect(() => {
+    if (!inputText.startsWith('/')) slashDismissedRef.current = false
+  }, [inputText])
 
   // Proactively check Claude Code auth status on mount
   useEffect(() => {
@@ -149,13 +212,17 @@ export default function ChatView({
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const loginPkceRef = useRef<{ authUrl: string; codeVerifier: string; clientId: string; redirectUri: string; state: string } | null>(null)
   const activityTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const isActiveRef = useRef(false)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const isReplayingRef = useRef(false)
 
-  // Input history (shell-style up/down arrow navigation)
-  const inputHistoryRef = useRef<string[]>([])
+  // Input history (shell-style up/down arrow navigation), persisted to localStorage
+  const historyKey = `vibectl-input-history-${projectId}`
+  const inputHistoryRef = useRef<string[]>(
+    (() => { try { return JSON.parse(localStorage.getItem(historyKey) || '[]') } catch { return [] } })()
+  )
   const historyIndexRef = useRef(-1) // -1 means "not browsing history"
   const savedInputRef = useRef('') // stash current input when entering history
   const sessionStartedAtRef = useRef(new Date().toISOString())
@@ -194,11 +261,13 @@ export default function ChatView({
     userScrolledUpRef.current = !atBottom
   }, [])
 
+  const [replayDone, setReplayDone] = useState(0) // incremented when replay finishes to trigger scroll
+
   useEffect(() => {
     if (!isReplayingRef.current && !userScrolledUpRef.current) {
       scrollToBottom()
     }
-  }, [messages, streamingText, scrollToBottom])
+  }, [messages, streamingText, replayDone, scrollToBottom])
 
   // Report current session snapshot for the History tab
   useEffect(() => {
@@ -300,11 +369,14 @@ export default function ChatView({
         setStatus(s)
         onStatusChange?.(s)
         if (s === 'reconnected' || s === 'started' || s === 'restarted') {
-          // Replay is done — jump to end instantly
+          // Replay is done — trigger scroll after React renders
           isReplayingRef.current = false
+          userScrolledUpRef.current = false
           setIsReconnecting(false)
+          setCompactingLabel(null)
+          compactingRef.current = false
           setExitError(null)
-          setTimeout(() => scrollToBottom(true), 0)
+          setReplayDone(n => n + 1)
         }
         if (s === 'exited') {
           onActivityChange?.(false)
@@ -314,10 +386,42 @@ export default function ChatView({
         break
       }
 
+      case 'login_params': {
+        // PKCE params received — store them and show inline code prompt
+        const lp = data.data as { authUrl: string; codeVerifier: string; clientId: string; redirectUri: string; state: string }
+        loginPkceRef.current = lp
+        setMessages((prev) => [...prev, {
+          role: 'login_code_prompt',
+          text: 'Complete authentication in the browser, then paste the code here.',
+        }])
+        break
+      }
+
+      case 'login_status': {
+        const ls = data.data as { status: string; message: string }
+        if (ls.status === 'success') {
+          loginPkceRef.current = null
+          setMessages((prev) => prev.filter(m => m.role !== 'login_code_prompt'))
+          setMessages((prev) => [...prev, {
+            role: 'assistant',
+            content: [{ type: 'text', text: `**${ls.message}** — session restarting with new account.` }],
+          }])
+        } else if (ls.status === 'error') {
+          loginPkceRef.current = null
+          setMessages((prev) => prev.filter(m => m.role !== 'login_code_prompt'))
+          setMessages((prev) => [...prev, {
+            role: 'assistant',
+            content: [{ type: 'text', text: `**Login failed:** ${ls.message}` }],
+          }])
+        }
+        break
+      }
+
       case 'system': {
         // Init event — session started
         isReplayingRef.current = false
-        setTimeout(() => scrollToBottom(true), 0)
+        userScrolledUpRef.current = false
+        setReplayDone(n => n + 1)
         if (data.subtype === 'init') {
           setStatus('connected')
           onStatusChange?.('connected')
@@ -331,6 +435,49 @@ export default function ChatView({
           setStatus('claude_error')
           onStatusChange?.('claude_error')
           onActivityChange?.(false)
+        }
+        break
+      }
+
+      case 'control_request': {
+        // Permission prompt from Claude Code (tool approval, user question, etc.)
+        const request = data.request as { subtype?: string; tool_name?: string; input?: Record<string, unknown> } | undefined
+        const requestId = data.request_id as string
+        if (requestId && request) {
+          // Log all control_request events for debugging
+          console.log('[vibectl] control_request:', JSON.stringify({ requestId, subtype: request.subtype, tool_name: request.tool_name, inputKeys: request.input ? Object.keys(request.input) : [] }, null, 2))
+
+          // Detect plan mode events — match on subtype or tool name
+          const isPlanMode = request.subtype === 'plan_mode_respond' ||
+            request.subtype === 'plan_mode' ||
+            request.tool_name === 'EnterPlanMode' ||
+            request.tool_name === 'ExitPlanMode' ||
+            (request.input && typeof request.input === 'object' && 'plan' in request.input)
+          if (isPlanMode) {
+            // Extract plan text from whichever field Claude uses
+            const input = request.input || {}
+            const planText = (input.plan as string) ||
+              (input.prompt as string) ||
+              (input.content as string) ||
+              (input.text as string) ||
+              (input.message as string) ||
+              (typeof input.description === 'string' ? input.description : '') ||
+              JSON.stringify(input, null, 2)
+            setMessages((prev) => [...prev, {
+              role: 'plan_mode' as const,
+              requestId,
+              planText,
+            }])
+          } else {
+            setMessages((prev) => [...prev, {
+              role: 'control_request',
+              requestId,
+              subtype: request.subtype || 'can_use_tool',
+              toolName: request.tool_name || 'Unknown',
+              toolInput: request.input || {},
+            }])
+          }
+          setIsStreaming(false)
         }
         break
       }
@@ -460,22 +607,14 @@ export default function ChatView({
             resultMsg.includes('authentication_error') ||
             resultMsg.includes('401')
           )
-          if (isNotLoggedInResult) {
-            setExitError({ exitCode: 1, stderr: [resultMsg || 'Not logged in'] })
+          if (isNotLoggedInResult || isAuthError) {
+            // Show login UI — auto-restart loops with bad credentials
+            setExitError({ exitCode: 1, stderr: [resultMsg || 'Authentication failed'] })
             setIsStreaming(false)
             setAwaitingResult(false)
             setStatus('claude_error')
             onStatusChange?.('claude_error')
             onActivityChange?.(false)
-          } else if (isAuthError) {
-            setIsReconnecting(true)
-            setMessages((prev) => [...prev, {
-              role: 'assistant',
-              content: [{ type: 'text', text: `**Authentication expired.** Reconnecting and resuming session...` }],
-            }])
-            setTimeout(() => {
-              sendWsMessage('restart', { skipPermissions: permissionMode === 'accept-all' })
-            }, 1500)
           } else if (resultMsg) {
             setMessages((prev) => [...prev, {
               role: 'assistant',
@@ -518,26 +657,15 @@ export default function ChatView({
         const lowerMsg = errorMessage.toLowerCase()
         const isNotLoggedInError = lowerMsg.includes('not logged in') || lowerMsg.includes('please run /login') || lowerMsg.includes('run claude login')
 
-        if (isNotLoggedInError) {
-          // Show the login button UI
+        if (isNotLoggedInError || isAuthError) {
+          // Show the login button UI — both "not logged in" and auth failures
+          // need user action (auto-restart loops with bad credentials)
           setExitError({ exitCode: 1, stderr: [errorMessage] })
           setIsStreaming(false)
           setAwaitingResult(false)
           setStatus('claude_error')
           onStatusChange?.('claude_error')
           onActivityChange?.(false)
-        } else if (isAuthError) {
-          setIsReconnecting(true)
-          setIsStreaming(false)
-          setAwaitingResult(false)
-          setMessages((prev) => [...prev, {
-            role: 'assistant',
-            content: [{ type: 'text', text: `**Authentication expired.** Reconnecting and resuming session...` }],
-          }])
-          // Auto-restart — claude will refresh token on next launch
-          setTimeout(() => {
-            sendWsMessage('restart', { skipPermissions: permissionMode === 'accept-all' })
-          }, 1500)
         } else {
           const dirMatch = errorMessage.match(/DIR_NOT_FOUND:\s*(.+)/)
           if (dirMatch) {
@@ -573,9 +701,10 @@ export default function ChatView({
 
   const pendingMessagesRef = useRef<string[]>([])
 
-  // Flush any queued messages when we reconnect
+  // Flush any queued messages when we reconnect (but not while compacting — wait for restarted)
   useEffect(() => {
-    const connected = ['connecting', 'started', 'connected', 'reconnected', 'restarted'].includes(status)
+    if (compactingRef.current) return
+    const connected = ['started', 'connected', 'reconnected', 'restarted'].includes(status)
     if (connected && pendingMessagesRef.current.length > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
       for (const text of pendingMessagesRef.current) {
         wsRef.current.send(JSON.stringify({
@@ -587,12 +716,132 @@ export default function ChatView({
     }
   }, [status])
 
+  const sendWsMessage = useCallback((type: string, data?: Record<string, unknown>) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    wsRef.current.send(JSON.stringify({ type, data }))
+  }, [])
+
+  const executeSlashCommand = useCallback((cmdName: string) => {
+    setInputText('')
+    if (cmdName === '/login') {
+      if (modeInfo?.mode === 'standalone') {
+        // Standalone dev: PKCE OAuth flow via WS — no keychain mutation
+        setIsReconnecting(false)
+        setExitError(null)
+        sendWsMessage('login_start', { projectId: projectId, localPath: localPath })
+      } else {
+        // Remote/client mode: use the token paste modal
+        setShowLoginModal(true)
+      }
+    } else if (cmdName === '/compact' || cmdName === '/reload') {
+      setCompactingLabel(cmdName === '/compact' ? 'Compacting context and resuming session...' : 'Reloading MCPs and resuming session...')
+      compactingRef.current = true
+      sendWsMessage('restart', { skipPermissions: permissionMode === 'accept-all' })
+    } else if (cmdName === '/fresh') {
+      setCompactingLabel('Starting fresh session...')
+      compactingRef.current = true
+      sendWsMessage('fresh_start', { skipPermissions: permissionMode === 'accept-all' })
+    } else if (cmdName === '/usage') {
+      getSubscriptionUsage().then((usage) => {
+        const formatReset = (iso: string) => {
+          const d = new Date(iso)
+          const now = new Date()
+          const diffMs = d.getTime() - now.getTime()
+          const diffHrs = Math.floor(diffMs / 3600000)
+          const diffMin = Math.floor((diffMs % 3600000) / 60000)
+          if (diffHrs > 24) return `${Math.floor(diffHrs / 24)}d ${diffHrs % 24}h`
+          if (diffHrs > 0) return `${diffHrs}h ${diffMin}m`
+          return `${diffMin}m`
+        }
+        const bar = (pct: number) => {
+          const filled = Math.round(pct / 5)
+          return '`' + '\u2588'.repeat(filled) + '\u2591'.repeat(20 - filled) + '`'
+        }
+        const lines: string[] = []
+        lines.push(`**Claude Subscription** _(${usage.subscriptionType})_\n`)
+        if (usage.fiveHour) {
+          lines.push(`**Session (5h):** ${usage.fiveHour.utilization}% ${bar(usage.fiveHour.utilization)} resets in ${formatReset(usage.fiveHour.resetsAt)}`)
+        }
+        if (usage.sevenDay) {
+          lines.push(`**Weekly (7d):** ${usage.sevenDay.utilization}% ${bar(usage.sevenDay.utilization)} resets in ${formatReset(usage.sevenDay.resetsAt)}`)
+        }
+        if (usage.sevenDaySonnet) {
+          lines.push(`**Sonnet (7d):** ${usage.sevenDaySonnet.utilization}% ${bar(usage.sevenDaySonnet.utilization)} resets in ${formatReset(usage.sevenDaySonnet.resetsAt)}`)
+        }
+        if (usage.sevenDayOpus) {
+          lines.push(`**Opus (7d):** ${usage.sevenDayOpus.utilization}% ${bar(usage.sevenDayOpus.utilization)} resets in ${formatReset(usage.sevenDayOpus.resetsAt)}`)
+        }
+        if (usage.extraUsage?.isEnabled) {
+          lines.push(`\n_Extra usage enabled_ — $${usage.extraUsage.usedCredits.toFixed(2)} used${usage.extraUsage.monthlyLimit ? ` / $${usage.extraUsage.monthlyLimit} limit` : ''}`)
+        }
+        setMessages((prev) => [...prev, {
+          role: 'assistant',
+          content: [{ type: 'text' as const, text: lines.join('\n') }],
+        }])
+      }).catch((err: Error) => {
+        setMessages((prev) => [...prev, {
+          role: 'assistant',
+          content: [{ type: 'text' as const, text: `Failed to fetch usage: ${err.message}` }],
+        }])
+      })
+    } else if (cmdName === '/mcp') {
+      // List configured MCP servers inline
+      listMCPServers(localPath).then((data: { servers: Array<{ name: string; type: string; command?: string; url?: string; source: string }> }) => {
+        if (data.servers.length === 0) {
+          setMessages((prev) => [...prev, {
+            role: 'assistant',
+            content: [{ type: 'text' as const, text: 'No MCP servers configured.' }],
+          }])
+        } else {
+          const lines = data.servers.map((s: { name: string; type: string; command?: string; url?: string; source: string }) => {
+            const typeTag = s.type === 'stdio' ? `\`stdio\` ${s.command || ''}` : `\`${s.type}\` ${s.url || ''}`
+            const sourceTag = s.source === 'user' ? 'user' : s.source === 'project' ? 'project' : '.mcp.json'
+            return `- **${s.name}** — ${typeTag} _(${sourceTag})_`
+          }).join('\n')
+          setMessages((prev) => [...prev, {
+            role: 'assistant',
+            content: [{ type: 'text' as const, text: `**MCP Servers (${data.servers.length})**\n\n${lines}\n\n_Use \`/reload\` to restart session and pick up MCP config changes._` }],
+          }])
+        }
+      }).catch((err: Error) => {
+        setMessages((prev) => [...prev, {
+          role: 'assistant',
+          content: [{ type: 'text' as const, text: `Failed to list MCP servers: ${err.message}` }],
+        }])
+      })
+    } else if (cmdName === '/permissions auto') {
+      setPermissionMode('accept-all')
+      sendWsMessage('restart', { skipPermissions: true })
+    } else if (cmdName === '/permissions approve') {
+      setPermissionMode('approve')
+      sendWsMessage('restart', { skipPermissions: false })
+    } else {
+      // Other slash commands — send as user message text (keep the / so Claude Code recognizes them)
+      setMessages((prev) => [...prev, { role: 'user', text: cmdName }])
+      setAwaitingResult(true)
+      markActive()
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'user_message', data: { text: cmdName } }))
+      }
+    }
+  }, [sendWsMessage, permissionMode, modeInfo, projectId, localPath])
+
   const sendMessage = useCallback(() => {
     const text = inputText.trim()
     if (!text) return
 
-    // Push to history
+    // Intercept exact slash commands typed manually (when autocomplete wasn't used)
+    const exactCmd = SLASH_COMMANDS.find(c => c.name === text)
+    if (exactCmd) {
+      executeSlashCommand(exactCmd.name)
+      return
+    }
+
+    // Push to history and persist
     inputHistoryRef.current.push(text)
+    // Keep last 200 entries to avoid unbounded growth
+    if (inputHistoryRef.current.length > 200) inputHistoryRef.current = inputHistoryRef.current.slice(-200)
+    try { localStorage.setItem(historyKey, JSON.stringify(inputHistoryRef.current)) } catch { /* ignore */ }
     historyIndexRef.current = -1
     savedInputRef.current = ''
 
@@ -604,8 +853,10 @@ export default function ChatView({
     setAwaitingResult(true)
     markActive()
 
-    // Send or queue
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+    // Send or queue (queue during compaction since there's no active Claude session)
+    if (compactingRef.current) {
+      pendingMessagesRef.current.push(text)
+    } else if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'user_message',
         data: { text },
@@ -616,12 +867,47 @@ export default function ChatView({
 
     // Focus input
     inputRef.current?.focus()
-  }, [inputText])
+  }, [inputText, executeSlashCommand])
 
-  const sendWsMessage = useCallback((type: string, data?: Record<string, unknown>) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
-    wsRef.current.send(JSON.stringify({ type, data }))
-  }, [])
+  // Listen for external "send to this project" events (from Modules tab post-op)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { projectId: string; text: string }
+      if (detail.projectId !== projectId) return
+      // Inject as a user message
+      setMessages((prev) => [...prev, { role: 'user', text: detail.text }])
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'user_message', data: { text: detail.text } }))
+      }
+    }
+    window.addEventListener('vibectl:send-to-project', handler)
+    return () => window.removeEventListener('vibectl:send-to-project', handler)
+  }, [projectId])
+
+  const handlePlanResponse = useCallback((requestId: string, accept: boolean, feedback?: string) => {
+    const response = accept
+      ? { subtype: 'success', behavior: 'allow' }
+      : { subtype: 'success', behavior: 'deny', message: feedback || 'Plan rejected' }
+    sendWsMessage('control_response', { requestId, response })
+    setMessages((prev) => prev.map((m) =>
+      m.role === 'plan_mode' && m.requestId === requestId
+        ? { ...m, resolved: accept ? 'accepted' as const : 'rejected' as const, feedback: feedback || '' }
+        : m
+    ))
+  }, [sendWsMessage])
+
+  const handleControlResponse = useCallback((requestId: string, behavior: 'allow' | 'deny', message?: string) => {
+    const response = behavior === 'allow'
+      ? { subtype: 'success', behavior: 'allow' }
+      : { subtype: 'success', behavior: 'deny', message: message || 'Denied by user' }
+    sendWsMessage('control_response', { requestId, response })
+    // Mark the control_request as resolved
+    setMessages((prev) => prev.map((m) =>
+      m.role === 'control_request' && m.requestId === requestId
+        ? { ...m, resolved: behavior === 'allow' ? 'allowed' as const : 'denied' as const }
+        : m
+    ))
+  }, [sendWsMessage])
 
   const handleSetPermissionMode = useCallback((mode: 'accept-all' | 'approve') => {
     setPermissionMode(mode)
@@ -635,6 +921,37 @@ export default function ChatView({
   }, [sendWsMessage, permissionMode])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // Slash autocomplete navigation
+    if (slashMatches.length > 0) {
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashHighlight(i => (i - 1 + slashMatches.length) % slashMatches.length)
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashHighlight(i => (i + 1) % slashMatches.length)
+        return
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        executeSlashCommand(slashMatches[slashHighlight].name)
+        return
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        // Tab-complete the command name into the input
+        setInputText(slashMatches[slashHighlight].name)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        slashDismissedRef.current = true
+        setSlashHighlight(0)
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       sendMessage()
@@ -674,7 +991,7 @@ export default function ChatView({
         setInputText(savedInputRef.current)
       }
     }
-  }, [sendMessage, inputText])
+  }, [sendMessage, inputText, slashMatches, slashHighlight, executeSlashCommand])
 
   const handleCreateDir = async () => {
     if (!missingDir) return
@@ -745,7 +1062,7 @@ export default function ChatView({
                   ? 'bg-green-600/30 text-green-400'
                   : 'text-gray-500 hover:text-gray-300'
               }`}
-              title="Accept all tool calls automatically"
+              title="Skip all permission checks (full autonomy)"
             >
               Auto
             </button>
@@ -756,7 +1073,7 @@ export default function ChatView({
                   ? 'bg-amber-600/30 text-amber-400'
                   : 'text-gray-500 hover:text-gray-300'
               }`}
-              title="Ask for approval before tool calls"
+              title="Auto-approve reads and edits, block dangerous operations"
             >
               Approve
             </button>
@@ -770,28 +1087,34 @@ export default function ChatView({
           >
             Compact
           </button>
-          {/* Slash command helper */}
-          <button
-            onClick={() => setShowSlashCommands(true)}
-            className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-800 border border-gray-700/50 text-gray-500 hover:text-gray-300 transition-colors font-mono"
-            title="Slash commands"
-          >
-            /cmd
-          </button>
         </div>
       </div>
 
       {/* Messages area */}
-      <div ref={messagesContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-3 py-2 space-y-3 min-h-0">
+      <div ref={messagesContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-3 py-2 space-y-3 min-h-0" style={chatFontSize !== 14 ? { zoom: chatFontSize / 14 } : undefined}>
         {messages.length === 0 && !isStreaming && !exitError && (
           <div className="flex items-center justify-center h-full text-gray-600 text-sm">
             {isConnected ? 'Send a message to start' : status === 'exited' ? 'Session ended' : 'Connecting...'}
           </div>
         )}
 
-        {messages.map((msg, i) => (
-          <MessageRenderer key={i} message={msg} compact={compact} />
-        ))}
+        {messages.map((msg, i) => {
+          if (msg.role === 'login_code_prompt') {
+            return <LoginCodePrompt key={i} onSubmit={(code) => {
+              const pkce = loginPkceRef.current
+              if (!pkce) return
+              sendWsMessage('login_exchange', {
+                code,
+                codeVerifier: pkce.codeVerifier,
+                clientId: pkce.clientId,
+                redirectUri: pkce.redirectUri,
+                projectId: projectId,
+                localPath: localPath,
+              })
+            }} />
+          }
+          return <MessageRenderer key={i} message={msg} compact={compact} onControlResponse={handleControlResponse} onPlanResponse={handlePlanResponse} />
+        })}
 
         {isStreaming && streamingText && (
           <div className="chat-assistant">
@@ -816,7 +1139,7 @@ export default function ChatView({
         {/* Exit error panel — shown when claude process exited with error */}
         {exitError && (() => {
           const allText = exitError.stderr.join(' ').toLowerCase()
-          const isNotLoggedIn = allText.includes('not logged in') || allText.includes('please run /login') || allText.includes('run claude login')
+          const isNotLoggedIn = allText.includes('not logged in') || allText.includes('please run /login') || allText.includes('run claude login') || allText.includes('authentication_error') || allText.includes('invalid authentication')
           return (
             <div className="rounded-lg bg-red-950/60 border border-red-800/60 p-3 space-y-2 shrink-0">
               <div className="flex items-start justify-between gap-2">
@@ -855,7 +1178,18 @@ export default function ChatView({
             </div>
           )
         })()}
-        {showLoginModal && <ClaudeLoginModal onClose={() => setShowLoginModal(false)} />}
+        {showLoginModal && (
+          <ClaudeLoginModal
+            onClose={() => setShowLoginModal(false)}
+            onToken={(token) => {
+              // Set per-project token and restart session with new account
+              setIsReconnecting(false)
+              setExitError(null)
+              sendWsMessage('set_project_token', { token, projectId: projectId, localPath: localPath })
+            }}
+            isStandalone={modeInfo?.mode === 'standalone'}
+          />
+        )}
 
         {isReconnecting && (
           <div className="flex items-center gap-2 text-amber-400 text-xs px-2 py-1.5 rounded bg-amber-900/20 border border-amber-700/30">
@@ -868,18 +1202,51 @@ export default function ChatView({
           </div>
         )}
 
+        {compactingLabel && (
+          <div className="flex items-center gap-2 text-cyan-400 text-xs px-2 py-1.5 rounded bg-cyan-900/20 border border-cyan-700/30">
+            <svg className="w-3.5 h-3.5 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <span>{compactingLabel}</span>
+            {pendingMessagesRef.current.length > 0 && (
+              <span className="text-cyan-500/70 ml-1">({pendingMessagesRef.current.length} message{pendingMessagesRef.current.length > 1 ? 's' : ''} queued)</span>
+            )}
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
       {/* Input area — never disabled so messages can be queued */}
       <div className="shrink-0 border-t border-gray-700/50 p-2 bg-gray-900/80">
-        <div className="flex gap-2">
+        <div className="relative flex gap-2">
+          {/* Slash command autocomplete dropdown */}
+          {slashMatches.length > 0 && (
+            <div className="absolute bottom-full left-0 mb-1 w-80 max-h-56 overflow-y-auto bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50">
+              {slashMatches.map((cmd, i) => (
+                <button
+                  key={cmd.name}
+                  onMouseDown={(e) => { e.preventDefault(); executeSlashCommand(cmd.name) }}
+                  className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors ${
+                    i === slashHighlight ? 'bg-indigo-600/30' : 'hover:bg-gray-700/50'
+                  }`}
+                >
+                  <code className="text-xs font-mono text-indigo-400 shrink-0">{cmd.name}</code>
+                  <span className="text-[11px] text-gray-500 truncate">{cmd.description}</span>
+                </button>
+              ))}
+              <div className="px-3 py-1 border-t border-gray-700/50 text-[10px] text-gray-600">
+                <kbd className="text-gray-500">↑↓</kbd> navigate · <kbd className="text-gray-500">Enter</kbd> execute · <kbd className="text-gray-500">Tab</kbd> complete · <kbd className="text-gray-500">Esc</kbd> dismiss
+              </div>
+            </div>
+          )}
           <textarea
             ref={inputRef}
             value={inputText}
             onChange={(e) => { setInputText(e.target.value); if (showPromptPicker) setShowPromptPicker(false) }}
             onKeyDown={handleKeyDown}
-            placeholder={isConnected ? 'Message Claude...' : 'Connecting... (messages will be queued)'}
+            placeholder={isConnected ? 'Message Claude... (type / for commands)' : 'Connecting... (messages will be queued)'}
             rows={compact ? 1 : 2}
             className="flex-1 resize-none rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:border-indigo-500 focus:outline-none"
           />
@@ -948,27 +1315,6 @@ export default function ChatView({
         </div>
       </div>
 
-      {/* Slash command modal */}
-      {showSlashCommands && (
-        <SlashCommandModal
-          onExecute={(cmd) => {
-            // Handle special commands via WS actions; others as user messages
-            if (cmd === '/compact') {
-              handleCompact()
-            } else if (cmd === '/permissions auto') {
-              handleSetPermissionMode('accept-all')
-            } else if (cmd === '/permissions approve') {
-              handleSetPermissionMode('approve')
-            } else {
-              // Send as a user message — Claude will interpret it as a natural language request
-              setInputText(cmd.replace(/^\//, ''))
-            }
-            setShowSlashCommands(false)
-          }}
-          onClose={() => setShowSlashCommands(false)}
-        />
-      )}
-
       {/* Missing directory prompt */}
       {missingDir && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
@@ -1000,190 +1346,239 @@ export default function ChatView({
   )
 }
 
-// --- Slash Command Modal ---
+// --- Inline Login Code Prompt ---
 
-interface SlashCommand {
-  name: string
-  description: string
-  params: { name: string; placeholder: string; required?: boolean }[]
-}
+function LoginCodePrompt({ onSubmit }: { onSubmit: (code: string) => void }) {
+  const [code, setCode] = useState('')
+  const [submitted, setSubmitted] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
 
-const SLASH_COMMANDS: SlashCommand[] = [
-  // Commands that work via WebSocket actions (native support)
-  { name: '/compact', description: 'Resume session to free context window (restarts Claude)', params: [] },
-  { name: '/permissions auto', description: 'Accept all tool calls automatically (restarts Claude)', params: [] },
-  { name: '/permissions approve', description: 'Require approval for tool calls (restarts Claude)', params: [] },
-  // Commands sent as natural language requests to Claude
-  { name: '/review', description: 'Ask Claude to review a pull request', params: [
-    { name: 'pr', placeholder: 'PR number or URL', required: false },
-  ]},
-  { name: '/init', description: 'Ask Claude to create a CLAUDE.md for this project', params: [] },
-  { name: '/memory', description: 'Ask Claude to review and edit project memory', params: [] },
-  { name: '/status', description: 'Ask Claude to report current session and project status', params: [] },
-  { name: '/pr-comments', description: 'Ask Claude to view and address PR review comments', params: [] },
-  { name: '/model', description: 'Ask Claude about available models', params: [
-    { name: 'model', placeholder: 'e.g. sonnet, opus, haiku', required: false },
-  ]},
-]
+  useEffect(() => { inputRef.current?.focus() }, [])
 
-function SlashCommandModal({ onExecute, onClose }: { onExecute: (cmd: string) => void; onClose: () => void }) {
-  const [selected, setSelected] = useState<SlashCommand | null>(null)
-  const [paramValues, setParamValues] = useState<Record<string, string>>({})
-  const [filter, setFilter] = useState('')
-
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (selected) {
-          setSelected(null)
-          setParamValues({})
-        } else {
-          onClose()
-        }
-      }
-    }
-    window.addEventListener('keydown', handleEscape)
-    return () => window.removeEventListener('keydown', handleEscape)
-  }, [onClose, selected])
-
-  const filteredCommands = filter
-    ? SLASH_COMMANDS.filter((c) =>
-        c.name.toLowerCase().includes(filter.toLowerCase()) ||
-        c.description.toLowerCase().includes(filter.toLowerCase())
-      )
-    : SLASH_COMMANDS
-
-  const handleSelect = (cmd: SlashCommand) => {
-    if (cmd.params.length === 0) {
-      // No params — show confirm
-      setSelected(cmd)
-      setParamValues({})
-    } else {
-      setSelected(cmd)
-      setParamValues({})
-    }
-  }
-
-  const handleExecute = () => {
-    if (!selected) return
-    let cmd = selected.name
-    for (const param of selected.params) {
-      const val = paramValues[param.name]?.trim()
-      if (val) cmd += ` ${val}`
-    }
-    onExecute(cmd)
+  const handleSubmit = () => {
+    if (!code.trim() || submitted) return
+    setSubmitted(true)
+    onSubmit(code.trim())
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70" onClick={onClose}>
-      <div
-        className="bg-gray-900 rounded-lg border border-gray-700 w-full max-w-lg mx-4 flex flex-col max-h-[70vh]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-white font-mono">/</span>
-            <span className="text-sm font-medium text-white">
-              {selected ? selected.name : 'Slash Commands'}
-            </span>
-          </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+    <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-3 space-y-2">
+      <p className="text-xs text-indigo-300 font-medium">Complete authentication in the browser, then paste the code below.</p>
+      <p className="text-[10px] text-indigo-200/60">The code is shown on the page after you sign in. It expires quickly — paste it right away.</p>
+      <div className="flex gap-2">
+        <input
+          ref={inputRef}
+          type="text"
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          onPaste={(e) => {
+            const pasted = e.clipboardData.getData('text').trim()
+            if (pasted) {
+              e.preventDefault()
+              setCode(pasted)
+              setSubmitted(true)
+              onSubmit(pasted)
+            }
+          }}
+          onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+          placeholder="Paste authorization code..."
+          disabled={submitted}
+          className="flex-1 bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-white text-xs font-mono placeholder-gray-500 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
+        />
+        <button
+          onClick={handleSubmit}
+          disabled={!code.trim() || submitted}
+          className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
+        >
+          {submitted ? 'Signing in...' : 'Submit'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// --- Slash Command Autocomplete ---
+
+const SLASH_COMMANDS = [
+  { name: '/compact', description: 'Free context window (resume with compacted context)' },
+  { name: '/fresh', description: 'Start a fresh session (clears all context)' },
+  { name: '/reload', description: 'Reload MCPs and resume session with context' },
+  { name: '/mcp', description: 'List configured MCP servers' },
+  { name: '/usage', description: 'Show Claude subscription usage and limits' },
+  { name: '/login', description: 'Log in or switch Claude Code account' },
+  { name: '/permissions auto', description: 'Accept all tool calls automatically' },
+  { name: '/permissions approve', description: 'Require approval for tool calls' },
+  { name: '/review', description: 'Review a pull request' },
+  { name: '/init', description: 'Create a CLAUDE.md for this project' },
+  { name: '/memory', description: 'Review and edit project memory' },
+  { name: '/status', description: 'Report current session and project status' },
+  { name: '/pr-comments', description: 'View and address PR review comments' },
+  { name: '/model', description: 'Switch model (e.g. /model sonnet)' },
+]
+
+// --- Sub-components ---
+
+function PlanModePrompt({ message, onRespond, compact }: {
+  message: PlanModeMessage
+  onRespond?: (requestId: string, accept: boolean, feedback?: string) => void
+  compact?: boolean
+}) {
+  const { requestId, planText, resolved, feedback: savedFeedback } = message
+  const [feedbackText, setFeedbackText] = useState('')
+  const [showFeedback, setShowFeedback] = useState(false)
+
+  if (resolved) {
+    return (
+      <div className={`rounded-lg border px-3 py-2 ${
+        resolved === 'accepted' ? 'border-emerald-700/50 bg-emerald-900/10' : 'border-orange-700/50 bg-orange-900/10'
+      }`}>
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-xs">&#x1f4cb;</span>
+          <span className={`text-[10px] font-semibold uppercase tracking-wider ${
+            resolved === 'accepted' ? 'text-emerald-400' : 'text-orange-400'
+          }`}>
+            Plan {resolved}
+          </span>
         </div>
+        <div className={`prose prose-invert max-w-none ${compact ? 'prose-xs' : 'prose-sm'} max-h-40 overflow-y-auto`}>
+          <MarkdownContent text={planText} />
+        </div>
+        {savedFeedback && (
+          <p className="text-[11px] text-orange-300/70 mt-1 italic">Feedback: {savedFeedback}</p>
+        )}
+      </div>
+    )
+  }
 
-        {selected ? (
-          /* Parameter form */
-          <div className="p-4 space-y-4">
-            <p className="text-sm text-gray-400">{selected.description}</p>
-
-            {selected.params.length > 0 && (
-              <div className="space-y-3">
-                {selected.params.map((param) => (
-                  <div key={param.name}>
-                    <label className="block text-xs font-medium text-gray-400 mb-1">
-                      {param.name}
-                      {param.required && <span className="text-red-400 ml-0.5">*</span>}
-                    </label>
-                    <input
-                      value={paramValues[param.name] || ''}
-                      onChange={(e) => setParamValues({ ...paramValues, [param.name]: e.target.value })}
-                      placeholder={param.placeholder}
-                      className="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-sm text-gray-200 focus:border-indigo-500 focus:outline-none font-mono"
-                      autoFocus
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="flex items-center gap-2 bg-gray-800 rounded-lg px-3 py-2 border border-gray-700/50">
-              <span className="text-[10px] text-gray-500 font-medium">Preview:</span>
-              <code className="text-xs text-indigo-400 font-mono">
-                {selected.name}
-                {selected.params.map((p) => paramValues[p.name]?.trim() ? ` ${paramValues[p.name].trim()}` : '').join('')}
-              </code>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                onClick={handleExecute}
-                disabled={selected.params.some((p) => p.required && !paramValues[p.name]?.trim())}
-                className="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
-              >
-                Execute
-              </button>
-              <button
-                onClick={() => { setSelected(null); setParamValues({}) }}
-                className="rounded bg-gray-700 px-4 py-2 text-sm font-medium text-gray-300 hover:bg-gray-600 transition-colors"
-              >
-                Back
-              </button>
-            </div>
-          </div>
+  return (
+    <div className="rounded-lg border border-cyan-600/50 bg-cyan-900/10 px-3 py-2.5">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+        <span className={`font-semibold text-cyan-300 ${compact ? 'text-xs' : 'text-sm'}`}>
+          Claude&apos;s Plan
+        </span>
+      </div>
+      <div className={`prose prose-invert max-w-none ${compact ? 'prose-xs' : 'prose-sm'} bg-gray-900/60 rounded p-3 mb-2 max-h-80 overflow-y-auto`}>
+        <MarkdownContent text={planText} />
+      </div>
+      {showFeedback && (
+        <textarea
+          value={feedbackText}
+          onChange={(e) => setFeedbackText(e.target.value)}
+          placeholder="Provide feedback on the plan..."
+          className="w-full bg-gray-900/80 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300 mb-2 resize-none"
+          rows={3}
+          autoFocus
+        />
+      )}
+      <div className="flex gap-2">
+        <button
+          onClick={() => onRespond?.(requestId, true)}
+          className="bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-medium px-3 py-1 rounded transition-colors"
+        >
+          Accept Plan
+        </button>
+        {showFeedback ? (
+          <button
+            onClick={() => {
+              onRespond?.(requestId, false, feedbackText || 'Plan rejected')
+              setShowFeedback(false)
+            }}
+            className="bg-orange-800/60 hover:bg-orange-700 text-orange-300 text-xs font-medium px-3 py-1 rounded border border-orange-700/50 transition-colors"
+          >
+            Send Feedback
+          </button>
         ) : (
-          /* Command list */
-          <>
-            <div className="px-4 pt-3 pb-2 shrink-0">
-              <input
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter commands..."
-                className="w-full rounded border border-gray-600 bg-gray-800 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
-                autoFocus
-              />
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              {filteredCommands.map((cmd) => (
-                <button
-                  key={cmd.name}
-                  onClick={() => handleSelect(cmd)}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-gray-800/80 transition-colors border-b border-gray-800/50"
-                >
-                  <code className="text-sm font-mono text-indigo-400 shrink-0 w-28">{cmd.name}</code>
-                  <span className="text-xs text-gray-500 truncate">{cmd.description}</span>
-                  {cmd.params.length > 0 && (
-                    <span className="text-[10px] text-gray-600 ml-auto shrink-0">{cmd.params.length} param{cmd.params.length > 1 ? 's' : ''}</span>
-                  )}
-                </button>
-              ))}
-              {filteredCommands.length === 0 && (
-                <div className="px-4 py-6 text-center text-sm text-gray-500">No matching commands</div>
-              )}
-            </div>
-          </>
+          <button
+            onClick={() => setShowFeedback(true)}
+            className="bg-gray-700/60 hover:bg-gray-600 text-gray-300 text-xs font-medium px-3 py-1 rounded border border-gray-600/50 transition-colors"
+          >
+            Give Feedback
+          </button>
         )}
       </div>
     </div>
   )
 }
 
-// --- Sub-components ---
+function PermissionPrompt({ message, onRespond, compact }: {
+  message: ControlRequestMessage
+  onRespond?: (requestId: string, behavior: 'allow' | 'deny', message?: string) => void
+  compact?: boolean
+}) {
+  const { requestId, toolName, toolInput, resolved, subtype } = message
+  const isQuestion = subtype === 'ask_user_question'
+  const inputSummary = (() => {
+    if (isQuestion) {
+      const questions = toolInput.questions as Array<{ question: string }> | undefined
+      return questions?.map(q => q.question).join('\n') || ''
+    }
+    // For tool calls, show a compact summary
+    if (toolInput.command) return String(toolInput.command)
+    if (toolInput.file_path) return String(toolInput.file_path)
+    if (toolInput.content) return `${String(toolInput.content).slice(0, 120)}...`
+    const keys = Object.keys(toolInput)
+    if (keys.length === 0) return ''
+    return JSON.stringify(toolInput, null, 2)
+  })()
 
-const MessageRenderer = memo(function MessageRenderer({ message, compact }: { message: ChatMessage; compact?: boolean }) {
+  if (resolved) {
+    return (
+      <div className={`rounded-lg border px-3 py-2 ${
+        resolved === 'allowed' ? 'border-green-700/50 bg-green-900/10' : 'border-red-700/50 bg-red-900/10'
+      }`}>
+        <div className="flex items-center gap-2">
+          <span className={`text-[10px] font-semibold uppercase tracking-wider ${
+            resolved === 'allowed' ? 'text-green-400' : 'text-red-400'
+          }`}>
+            {resolved === 'allowed' ? 'Approved' : 'Denied'}: {toolName}
+          </span>
+        </div>
+        {inputSummary && (
+          <pre className={`mt-1 text-gray-500 whitespace-pre-wrap break-all ${compact ? 'text-[10px]' : 'text-xs'}`}>
+            {inputSummary.slice(0, 200)}{inputSummary.length > 200 ? '...' : ''}
+          </pre>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-lg border border-purple-600/50 bg-purple-900/10 px-3 py-2.5">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+        <span className={`font-semibold text-purple-300 ${compact ? 'text-xs' : 'text-sm'}`}>
+          {isQuestion ? 'Question' : `Approve: ${toolName}`}
+        </span>
+      </div>
+      {inputSummary && (
+        <pre className={`mb-2 text-gray-300 bg-gray-900/60 rounded p-2 whitespace-pre-wrap break-all max-h-40 overflow-y-auto ${compact ? 'text-[10px]' : 'text-xs'}`}>
+          {inputSummary}
+        </pre>
+      )}
+      <div className="flex gap-2">
+        <button
+          onClick={() => onRespond?.(requestId, 'allow')}
+          className="bg-green-700 hover:bg-green-600 text-white text-xs font-medium px-3 py-1 rounded transition-colors"
+        >
+          Allow
+        </button>
+        <button
+          onClick={() => onRespond?.(requestId, 'deny')}
+          className="bg-red-800/60 hover:bg-red-700 text-red-300 text-xs font-medium px-3 py-1 rounded border border-red-700/50 transition-colors"
+        >
+          Deny
+        </button>
+      </div>
+    </div>
+  )
+}
+
+const MessageRenderer = memo(function MessageRenderer({ message, compact, onControlResponse, onPlanResponse }: {
+  message: ChatMessage; compact?: boolean
+  onControlResponse?: (requestId: string, behavior: 'allow' | 'deny', message?: string) => void
+  onPlanResponse?: (requestId: string, accept: boolean, feedback?: string) => void
+}) {
   if (message.role === 'user') {
     return (
       <div className="flex justify-end">
@@ -1200,10 +1595,23 @@ const MessageRenderer = memo(function MessageRenderer({ message, compact }: { me
     return <ToolResultCard message={message} compact={compact} />
   }
 
+  if (message.role === 'plan_mode') {
+    return <PlanModePrompt message={message} onRespond={onPlanResponse} compact={compact} />
+  }
+
+  if (message.role === 'control_request') {
+    return <PermissionPrompt message={message} onRespond={onControlResponse} compact={compact} />
+  }
+
+  // Login code prompt (handled elsewhere in the UI, but guard the type)
+  if (message.role === 'login_code_prompt') {
+    return null
+  }
+
   // Assistant message
   return (
     <div className="space-y-2">
-      {message.content.map((block, i) => {
+      {message.content.map((block: ContentBlock, i: number) => {
         if (block.type === 'text') {
           return (
             <div key={i} className={`prose prose-invert max-w-none ${compact ? 'prose-sm' : ''}`}>
@@ -1220,9 +1628,48 @@ const MessageRenderer = memo(function MessageRenderer({ message, compact }: { me
   )
 })
 
+const PLAN_TOOL_NAMES = new Set(['EnterPlanMode', 'ExitPlanMode', 'ExitPlan'])
+
+function extractPlanText(input: Record<string, unknown>): string {
+  // Claude Code plan tools put the plan in various fields — try them all
+  for (const key of ['plan', 'prompt', 'content', 'text', 'message', 'description', 'plan_text']) {
+    if (typeof input[key] === 'string' && (input[key] as string).length > 0) return input[key] as string
+  }
+  // Sometimes the plan is the only string value in the input
+  const vals = Object.values(input).filter(v => typeof v === 'string' && (v as string).length > 20)
+  if (vals.length === 1) return vals[0] as string
+  return JSON.stringify(input, null, 2)
+}
+
+const PlanToolCard = memo(function PlanToolCard({ block, compact }: { block: ToolUseBlock; compact?: boolean }) {
+  const planText = extractPlanText(block.input)
+  const isJson = planText.startsWith('{') || planText.startsWith('[')
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-1">
+        <span className="text-[10px] font-semibold text-cyan-400 uppercase tracking-wider">Plan</span>
+        <div className="flex-1 h-px bg-cyan-800/30" />
+      </div>
+      {isJson ? (
+        <pre className={`text-gray-400 whitespace-pre-wrap font-mono ${compact ? 'text-[10px]' : 'text-[11px]'}`}>{planText}</pre>
+      ) : (
+        <div className={`prose prose-invert max-w-none ${compact ? 'prose-sm' : ''}`}>
+          <MarkdownContent text={planText} />
+        </div>
+      )}
+    </div>
+  )
+})
+
 const ToolCallCard = memo(function ToolCallCard({ block, compact }: { block: ToolUseBlock; compact?: boolean }) {
   const [open, setOpen] = useState(false)
   const [showDiff, setShowDiff] = useState(false)
+
+  // Plan mode tools get a special renderer
+  if (PLAN_TOOL_NAMES.has(block.name)) {
+    return <PlanToolCard block={block} compact={compact} />
+  }
 
   const toolIcon = getToolIcon(block.name)
   const summary = getToolSummary(block.name, block.input)
@@ -1429,9 +1876,18 @@ function computeDiffLines(oldStr: string, newStr: string): DiffLine[] {
   return result
 }
 
+const PLAN_RESULT_PATTERNS = /exit plan mode|enter plan mode|plan mode/i
+
 const ToolResultCard = memo(function ToolResultCard({ message, compact }: { message: ToolResultMessage; compact?: boolean }) {
   const [open, setOpen] = useState(false)
   const isLong = message.content.length > 200
+  const isPlanResult = PLAN_RESULT_PATTERNS.test(message.content)
+
+  // Suppress plan mode "error" results — they're just Claude asking to exit plan mode,
+  // which is already handled by the plan card above
+  if (isPlanResult && message.isError) {
+    return null
+  }
 
   return (
     <div className={`rounded-lg border ${message.isError ? 'border-red-700/40 bg-red-900/10' : 'border-gray-700/40 bg-gray-800/30'} overflow-hidden ${compact ? 'text-xs' : 'text-sm'}`}>
@@ -1565,8 +2021,8 @@ function getToolSummary(name: string, input: Record<string, unknown>): string {
 
 const CODE_TTL_SECONDS = 55
 
-function ClaudeLoginModal({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<'oauth' | 'direct'>('oauth')
+function ClaudeLoginModal({ onClose, onToken, isStandalone }: { onClose: () => void; onToken?: (token: string) => void; isStandalone?: boolean }) {
+  const [tab, setTab] = useState<'oauth' | 'direct'>('direct')
   const [loading, setLoading] = useState(true)
   const [authUrl, setAuthUrl] = useState<string | null>(null)
   const [pkceParams, setPkceParams] = useState<{ codeVerifier: string; clientId: string; redirectUri: string; state: string } | null>(null)
@@ -1582,16 +2038,20 @@ function ClaudeLoginModal({ onClose }: { onClose: () => void }) {
     setLoading(true)
     setError('')
     fetch('/api/v1/admin/claude-login', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`Login endpoint returned ${r.status}`)
+        return r.json()
+      })
       .then((data: { authUrl: string; codeVerifier: string; clientId: string; redirectUri: string; state: string }) => {
+        if (!data.authUrl || !data.codeVerifier) throw new Error('Missing PKCE parameters from server')
         setAuthUrl(data.authUrl)
         setPkceParams({ codeVerifier: data.codeVerifier, clientId: data.clientId, redirectUri: data.redirectUri, state: data.state })
         setLoading(false)
         setCountdown(CODE_TTL_SECONDS)
         window.open(data.authUrl, '_blank')
       })
-      .catch(() => {
-        setError('Failed to start login flow')
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to start login flow')
         setLoading(false)
       })
   }
@@ -1633,14 +2093,16 @@ function ClaudeLoginModal({ onClose }: { onClose: () => void }) {
   }
 
   // Core exchange logic: try client-side first (no server round-trip), fall back to server-side.
+  // Authorization codes are single-use — if client-side gets a response (even an error),
+  // the code is consumed and server-side fallback would get invalid_grant.
   const submitCode = async (rawInput: string) => {
     if (!pkceParams) return
     const code = extractCode(rawInput)
+    console.log('[claude-login] submitCode called', { codeLen: code.length, codePreview: code.slice(0, 8) + '...' })
 
-    let stored = false
     try {
       // Attempt client-side token exchange directly with platform.claude.com.
-      // This avoids the server-to-server round-trip. Will fail silently if CORS blocks it.
+      // This avoids the server-to-server round-trip.
       const resp = await fetch('https://platform.claude.com/v1/oauth/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1656,15 +2118,20 @@ function ClaudeLoginModal({ onClose }: { onClose: () => void }) {
         const data = await resp.json()
         if (data.access_token) {
           await submitClaudeTokenDirect(data.access_token)
-          stored = true
+          onToken?.(data.access_token)
+          return // success
         }
       }
-    } catch {
-      // CORS block or network error — fall through to server-side
-    }
-
-    if (!stored) {
-      await submitClaudeLoginCode(code, pkceParams.codeVerifier, pkceParams.clientId, pkceParams.redirectUri, pkceParams.state)
+      // Got a response but not OK — code is consumed, surface the error
+      const errData = await resp.json().catch(() => ({ error_description: `HTTP ${resp.status}` }))
+      throw new Error(errData.error_description || `token exchange failed (${resp.status})`)
+    } catch (err) {
+      if (err instanceof TypeError) {
+        // TypeError = CORS block or network error — code was NOT consumed, safe to try server-side
+        await submitClaudeLoginCode(code, pkceParams.codeVerifier, pkceParams.clientId, pkceParams.redirectUri, pkceParams.state)
+      } else {
+        throw err // re-throw the error we created above
+      }
     }
   }
 
@@ -1706,6 +2173,7 @@ function ClaudeLoginModal({ onClose }: { onClose: () => void }) {
     setError('')
     try {
       await submitClaudeTokenDirect(directToken.trim())
+      onToken?.(directToken.trim())
       setDone(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to store token')
@@ -1802,11 +2270,12 @@ function ClaudeLoginModal({ onClose }: { onClose: () => void }) {
           ) : (
             <div className="space-y-3">
               <div className="rounded-lg border border-gray-600 bg-gray-700/40 p-3">
-                <p className="text-xs text-gray-300 font-medium mb-1">Paste your Claude OAuth token</p>
+                <p className="text-xs text-gray-300 font-medium mb-1">Paste a Claude OAuth token</p>
                 <p className="text-xs text-gray-400 mb-3">
-                  On a machine with Claude Code installed, run:<br />
+                  Open a terminal and run:<br />
                   <code className="text-indigo-300 font-mono">claude auth status --json</code><br />
-                  and copy the <code className="text-indigo-300 font-mono">oauthToken</code> value (<span className="font-mono">sk-ant-oat01-…</span>).
+                  Copy the <code className="text-indigo-300 font-mono">oauthToken</code> value — it starts with <span className="font-mono text-indigo-300">sk-ant-oat01-…</span><br />
+                  <span className="text-yellow-400/80 mt-1 block">Not the code from the browser OAuth page — that is an authorization code, not a token.</span>
                 </p>
                 <textarea
                   value={directToken}

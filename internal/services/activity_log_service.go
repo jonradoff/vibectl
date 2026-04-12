@@ -126,6 +126,38 @@ func (s *ActivityLogService) DeployCountSince(ctx context.Context, projectID bso
 	return int(n), err
 }
 
+// PromptCountSince returns the number of prompt_sent activity log entries
+// for a project in the last `days` days.
+func (s *ActivityLogService) PromptCountSince(ctx context.Context, projectID bson.ObjectID, days int) (int, error) {
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	filter := bson.D{
+		{Key: "projectId", Value: projectID},
+		{Key: "timestamp", Value: bson.D{{Key: "$gte", Value: since}}},
+		{Key: "type", Value: "prompt_sent"},
+	}
+	n, err := s.collection.CountDocuments(ctx, filter)
+	return int(n), err
+}
+
+// LastPromptAt returns the timestamp of the most recent prompt_sent entry for a project.
+func (s *ActivityLogService) LastPromptAt(ctx context.Context, projectID bson.ObjectID) (*time.Time, error) {
+	filter := bson.D{
+		{Key: "projectId", Value: projectID},
+		{Key: "type", Value: "prompt_sent"},
+	}
+	opts := options.FindOne().SetSort(bson.D{{Key: "timestamp", Value: -1}}).SetProjection(bson.D{{Key: "timestamp", Value: 1}})
+	var entry models.ActivityLog
+	err := s.collection.FindOne(ctx, filter, opts).Decode(&entry)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	t := entry.Timestamp
+	return &t, nil
+}
+
 // LastActivityAt returns the timestamp of the most recent log entry for a project.
 func (s *ActivityLogService) LastActivityAt(ctx context.Context, projectID bson.ObjectID) (*time.Time, error) {
 	filter := bson.D{{Key: "projectId", Value: projectID}}

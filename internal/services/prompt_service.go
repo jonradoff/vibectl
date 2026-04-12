@@ -135,6 +135,19 @@ func (s *PromptService) ListAll(ctx context.Context, userID *bson.ObjectID) ([]m
 	return results, nil
 }
 
+// CountByProject returns the total number of prompts for a given project (including global prompts scoped to it).
+func (s *PromptService) CountByProject(ctx context.Context, projectID bson.ObjectID) (int, error) {
+	filter := bson.D{{Key: "$or", Value: bson.A{
+		bson.D{{Key: "projectId", Value: projectID}},
+		bson.D{{Key: "global", Value: true}},
+	}}}
+	n, err := s.collection.CountDocuments(ctx, filter)
+	if err != nil {
+		return 0, fmt.Errorf("count prompts: %w", err)
+	}
+	return int(n), nil
+}
+
 func (s *PromptService) GetByID(ctx context.Context, id string) (*models.Prompt, error) {
 	oid, err := bson.ObjectIDFromHex(id)
 	if err != nil {

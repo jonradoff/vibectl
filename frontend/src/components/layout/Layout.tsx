@@ -1,30 +1,18 @@
 import { Outlet } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { listProjects } from '../../api/client';
-import type { Project } from '../../types';
-import Sidebar from './Sidebar';
 import { useEventStream } from '../../hooks/useEventStream';
+import TopNav from './TopNav';
+import AppFooter from './AppFooter';
 
 function Layout() {
   useEventStream();
 
-  const { data: projects } = useQuery<Project[]>({
-    queryKey: ['projects'],
-    queryFn: listProjects,
-  });
-
-  const sidebarProjects = (projects ?? []).map((p) => ({
-    id: p.id,
-    code: p.code,
-    name: p.name,
-  }));
-
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-300">
-      <Sidebar projects={sidebarProjects} />
-      <main className="ml-64 min-h-screen">
+    <div className="min-h-screen bg-gray-950 text-gray-300 flex flex-col">
+      <TopNav />
+      <main className="flex-1 pt-14">
         <Outlet />
       </main>
+      <AppFooter />
     </div>
   );
 }

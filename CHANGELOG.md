@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.11.0] - 2026-04-09
+
+### Added
+- **Claude Usage Monitor** — new dashboard card tracks Claude Code token consumption per login identity. Intercepts usage data from stream-json events in real-time and persists to MongoDB (90-day TTL).
+- **Usage detail modal** — click any login row to see weekly progress bar, token breakdown (input/output/cache), daily usage bars, per-model and per-project splits.
+- **Configurable limits** — set a weekly token cap and alert threshold per login via the modal's Configure panel. Percentage and color-coded warnings (green < 70%, amber 70-90%, red > 90%).
+- **`GET /api/v1/claude-usage/summary`** — returns current-week usage summaries for all Claude logins.
+- **`PUT /api/v1/claude-usage/config`** — upsert weekly limit, label, and alert threshold per login identity.
+- New MongoDB collections: `claude_usage_records` (indexed by tokenHash + recordedAt, 90-day TTL), `claude_usage_configs` (unique on tokenHash).
+
+---
+
 ## [0.10.0] - 2026-03-23
 
 ### Added
