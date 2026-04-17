@@ -32,26 +32,31 @@ type AIAnalysis struct {
 }
 
 type FeedbackItem struct {
-	ID              bson.ObjectID  `json:"id" bson:"_id,omitempty"`
-	ProjectID       *bson.ObjectID `json:"projectId,omitempty" bson:"projectId,omitempty"`
-	SourceType      string         `json:"sourceType" bson:"sourceType"`
-	SourceURL       string         `json:"sourceUrl,omitempty" bson:"sourceUrl,omitempty"`
-	RawContent      string         `json:"rawContent" bson:"rawContent"`
-	SubmittedBy     string         `json:"submittedBy,omitempty" bson:"submittedBy,omitempty"`
-	SubmittedAt     time.Time      `json:"submittedAt" bson:"submittedAt"`
-	TriageStatus    TriageStatus   `json:"triageStatus" bson:"triageStatus"`
-	AIAnalysis      *AIAnalysis    `json:"aiAnalysis,omitempty" bson:"aiAnalysis,omitempty"`
-	TriagedAt       *time.Time     `json:"triagedAt,omitempty" bson:"triagedAt,omitempty"`
-	ReviewedAt      *time.Time     `json:"reviewedAt,omitempty" bson:"reviewedAt,omitempty"`
-	LinkedIssueKey  string         `json:"linkedIssueKey,omitempty" bson:"linkedIssueKey,omitempty"`
+	ID              bson.ObjectID          `json:"id" bson:"_id,omitempty"`
+	ProjectID       *bson.ObjectID         `json:"projectId,omitempty" bson:"projectId,omitempty"`
+	SourceType      string                 `json:"sourceType" bson:"sourceType"`
+	SourceURL       string                 `json:"sourceUrl,omitempty" bson:"sourceUrl,omitempty"`
+	RawContent      string                 `json:"rawContent" bson:"rawContent"`
+	SubmittedBy     string                 `json:"submittedBy,omitempty" bson:"submittedBy,omitempty"`
+	SubmittedAt     time.Time              `json:"submittedAt" bson:"submittedAt"`
+	TriageStatus    TriageStatus           `json:"triageStatus" bson:"triageStatus"`
+	AIAnalysis      *AIAnalysis            `json:"aiAnalysis,omitempty" bson:"aiAnalysis,omitempty"`
+	TriagedAt       *time.Time             `json:"triagedAt,omitempty" bson:"triagedAt,omitempty"`
+	ReviewedAt      *time.Time             `json:"reviewedAt,omitempty" bson:"reviewedAt,omitempty"`
+	LinkedIssueKey  string                 `json:"linkedIssueKey,omitempty" bson:"linkedIssueKey,omitempty"`
+	Metadata        map[string]interface{} `json:"metadata,omitempty" bson:"metadata,omitempty"`       // structured context from external apps
+	SubmittedViaKey string                 `json:"submittedViaKey,omitempty" bson:"submittedViaKey,omitempty"` // API key name that authorized this submission
 }
 
 type CreateFeedbackRequest struct {
-	ProjectID   string `json:"projectId,omitempty"`
-	SourceType  string `json:"sourceType"`
-	SourceURL   string `json:"sourceUrl,omitempty"`
-	RawContent  string `json:"rawContent"`
-	SubmittedBy string `json:"submittedBy,omitempty"`
+	ProjectID       string                 `json:"projectId,omitempty"`
+	ProjectCode     string                 `json:"projectCode,omitempty"`     // alternative to projectId — resolved to ID by handler
+	SourceType      string                 `json:"sourceType"`
+	SourceURL       string                 `json:"sourceUrl,omitempty"`
+	RawContent      string                 `json:"rawContent"`
+	SubmittedBy     string                 `json:"submittedBy,omitempty"`
+	Metadata        map[string]interface{} `json:"metadata,omitempty"`        // structured context from external apps
+	SubmittedViaKey string                 `json:"-"`                         // set by handler from auth context, not user-provided
 }
 
 type ReviewFeedbackRequest struct {

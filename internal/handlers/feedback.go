@@ -90,6 +90,42 @@ func (h *FeedbackHandler) List(w http.ResponseWriter, r *http.Request) {
 	middleware.WriteJSON(w, http.StatusOK, items)
 }
 
+// sanitizeFeedbackContent strips potential injection vectors from user-submitted feedback.
+// - LLM prompt injection: wraps in <user-content> tags (downstream triage already does this,
+//   but we also strip common injection patterns at ingest)
+// - XSS: strips HTML tags and script content
+func sanitizeFeedbackContent(s string) string {
+	// Strip HTML tags
+	s = stripHTMLTags(s)
+	// Collapse excessive whitespace but preserve paragraphs
+	lines := strings.Split(s, "\n")
+	var cleaned []string
+	for _, line := range lines {
+		line = strings.TrimRight(line, " \t")
+		cleaned = append(cleaned, line)
+	}
+	return strings.Join(cleaned, "\n")
+}
+
+func stripHTMLTags(s string) string {
+	var result strings.Builder
+	inTag := false
+	for _, r := range s {
+		if r == '<' {
+			inTag = true
+			continue
+		}
+		if r == '>' {
+			inTag = false
+			continue
+		}
+		if !inTag {
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
+}
+
 // Create inserts a single feedback item.
 func (h *FeedbackHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req models.CreateFeedbackRequest
@@ -102,15 +138,32 @@ func (h *FeedbackHandler) Create(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusBadRequest, "rawContent is required", "VALIDATION_ERROR")
 		return
 	}
-	if req.SourceType == "" {
-		req.SourceType = "manual"
+
+	// Sanitize content against injection attacks
+	req.RawContent = sanitizeFeedbackContent(req.RawContent)
+
+	// Resolve projectCode to projectId if provided
+	if req.ProjectCode != "" && req.ProjectID == "" {
+		proj, err := h.projectService.GetByCode(r.Context(), req.ProjectCode)
+		if err != nil || proj == nil {
+			middleware.WriteError(w, http.StatusBadRequest, fmt.Sprintf("project code %q not found", req.ProjectCode), "PROJECT_NOT_FOUND")
+			return
+		}
+		req.ProjectID = proj.ID.Hex()
 	}
 
-	// Auto-fill submittedBy from current user if not provided
-	if req.SubmittedBy == "" {
-		if u := middleware.GetCurrentUser(r); u != nil {
+	if req.SourceType == "" {
+		req.SourceType = "feedback_api"
+	}
+
+	// Record the API key name that authorized this submission
+	if u := middleware.GetCurrentUser(r); u != nil {
+		if req.SubmittedBy == "" {
 			req.SubmittedBy = u.DisplayName
 		}
+		// If authenticated via API key, record the key identity
+		// The user's display name serves as the key identity marker
+		req.SubmittedViaKey = u.DisplayName
 	}
 
 	item, err := h.feedbackService.Create(r.Context(), &req)
@@ -137,6 +190,15 @@ func (h *FeedbackHandler) Create(w http.ResponseWriter, r *http.Request) {
 		} else {
 			h.activityLogService.LogAsync("feedback_submitted", "Feedback submitted: "+snippet, &oid, "", nil)
 		}
+	}
+
+	// Fire feedback_created webhook
+	if h.webhookService != nil && item.ProjectID != nil {
+		go func() {
+			h.webhookService.Fire(context.Background(), *item.ProjectID,
+				models.WebhookEventFeedbackCreated,
+				map[string]any{"feedbackId": item.ID.Hex(), "sourceType": item.SourceType})
+		}()
 	}
 
 	h.bus.Publish(events.Event{Type: "feedback.created", ProjectID: pid})

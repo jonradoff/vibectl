@@ -97,12 +97,14 @@ func (s *FeedbackService) Create(ctx context.Context, req *models.CreateFeedback
 	now := time.Now().UTC()
 
 	item := models.FeedbackItem{
-		SourceType:   req.SourceType,
-		SourceURL:    req.SourceURL,
-		RawContent:   req.RawContent,
-		SubmittedBy:  req.SubmittedBy,
-		SubmittedAt:  now,
-		TriageStatus: models.TriageStatusPending,
+		SourceType:      req.SourceType,
+		SourceURL:       req.SourceURL,
+		RawContent:      req.RawContent,
+		SubmittedBy:     req.SubmittedBy,
+		SubmittedAt:     now,
+		TriageStatus:    models.TriageStatusPending,
+		Metadata:        req.Metadata,
+		SubmittedViaKey: req.SubmittedViaKey,
 	}
 
 	if req.ProjectID != "" {

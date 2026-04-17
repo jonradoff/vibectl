@@ -179,6 +179,8 @@ export interface FeedbackItem {
   reviewedAt?: string;
   triagedAt?: string;
   linkedIssueKey?: string;
+  metadata?: Record<string, unknown>;
+  submittedViaKey?: string;
 }
 
 export interface SessionLog {

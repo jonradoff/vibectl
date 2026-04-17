@@ -79,6 +79,7 @@ const (
 	WebhookEventP0Created       WebhookEvent = "p0_issue_created"
 	WebhookEventHealthDown      WebhookEvent = "health_check_down"
 	WebhookEventHealthUp        WebhookEvent = "health_check_up"
+	WebhookEventFeedbackCreated WebhookEvent = "feedback_created"
 	WebhookEventFeedbackTriaged WebhookEvent = "feedback_triaged"
 )
 

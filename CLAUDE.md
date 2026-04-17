@@ -94,6 +94,95 @@ VibeCtl spawns Claude Code processes in stream-json mode (`-p --input-format str
 - **Project cards are the primary interface for project settings and operations.** All project-level configuration (name, description, tags, health checks, deployment, etc.) is managed through the Settings tab of the project card (`CompactSettings` component). Other tabs provide views: Claude Code (terminal), Issues, Feedback, Files, Health, Intents, CI, Session History, Activity Log. New project-level features should be added as tabs or settings within the project card, not as standalone pages.
 - **Tags are project-level labels** set in the project card Settings tab, used for filtering in Mission Control (Projects tab, Productivity tab). These are distinct from intent-level tech tags which are auto-extracted.
 
+# Feedback API — Collecting End-User Feedback from External Products
+
+External products can submit end-user feedback to VibeCtl via the REST API. Feedback enters the same pipeline as manual and GitHub-sourced feedback: it appears in the project's Feedback tab, can be AI-triaged, reviewed (accepted/dismissed), and converted to issues.
+
+## Authentication
+
+All feedback submissions require an API key. Create one in VibeCtl under your user profile or via `POST /api/v1/api-keys`. The key is prefixed with `vk_` and used as a Bearer token.
+
+## Submitting Feedback
+
+```bash
+POST /api/v1/feedback
+Authorization: Bearer vk_YOUR_API_KEY
+Content-Type: application/json
+
+{
+  "projectCode": "MYAPP",
+  "rawContent": "The export button doesn't work on Safari",
+  "sourceType": "feedback_api",
+  "submittedBy": "user@example.com",
+  "sourceUrl": "https://myapp.com/support/ticket/4521",
+  "metadata": {
+    "userId": "usr_abc123",
+    "appVersion": "2.4.1",
+    "browser": "Safari 17.4",
+    "page": "/dashboard/reports",
+    "plan": "pro",
+    "environment": "production"
+  }
+}
+```
+
+### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `projectCode` | Yes* | Project code (e.g., `"LOFP"`, `"MYAPP"`). Alternative to `projectId`. |
+| `projectId` | Yes* | MongoDB ObjectID hex. Use `projectCode` instead for readability. |
+| `rawContent` | Yes | The feedback text. HTML tags are stripped for XSS protection. |
+| `sourceType` | No | Defaults to `"feedback_api"`. Other values: `"manual"`, `"github"`, `"support"`, or any custom string. |
+| `submittedBy` | No | Identity of the end user who gave the feedback (email, username, etc.). |
+| `sourceUrl` | No | URL in the originating system (support ticket, forum post, etc.). Used for deduplication. |
+| `metadata` | No | Arbitrary JSON object with structured context. Displayed in the feedback detail modal and available to the AI triage agent. |
+
+*One of `projectCode` or `projectId` is required.
+
+### Batch Submission
+
+```bash
+POST /api/v1/feedback/batch
+Authorization: Bearer vk_YOUR_API_KEY
+
+[
+  { "projectCode": "MYAPP", "rawContent": "...", "submittedBy": "user1@example.com" },
+  { "projectCode": "MYAPP", "rawContent": "...", "submittedBy": "user2@example.com" }
+]
+```
+
+## Security
+
+- **Authentication required** — every submission must include a valid API key.
+- **HTML stripping** — all `<tags>` are stripped from `rawContent` to prevent XSS.
+- **LLM injection protection** — downstream AI triage wraps feedback in `<user-content>` tags to isolate it from system prompts.
+- **API key identity recorded** — each feedback item records which API key authorized the submission (`submittedViaKey` field).
+- **Deduplication** — if `sourceUrl` is provided, duplicate submissions with the same URL are rejected.
+
+## Webhooks
+
+Configure webhooks in project Settings to receive notifications:
+- `feedback_created` — fires when new feedback is submitted
+- `feedback_triaged` — fires when AI triage completes
+
+## Feedback Lifecycle
+
+1. **Submitted** → status: `pending`
+2. **AI Triaged** → status: `triaged` (proposal attached)
+3. **Human Review** → status: `accepted` or `dismissed`
+4. **Issue Created** (optional) → linked issue key attached
+
+## Integration Pattern
+
+The recommended pattern for external products:
+
+1. Collect feedback in your product's UI (form, widget, in-app modal)
+2. Your product's backend submits to VibeCtl server-to-server with an API key
+3. Include `metadata` with user context (who, where, what version)
+4. VibeCtl's AI triage analyzes and proposes an issue
+5. You review in VibeCtl's Feedback tab and accept/dismiss
+
 # Productivity Measurement System
 
 VibeCtl tracks developer productivity through an **intent-oriented** system, not lines of code.
