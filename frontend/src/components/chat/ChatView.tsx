@@ -1275,7 +1275,7 @@ export default function ChatView({
                   <button
                     key={p.id}
                     onClick={() => {
-                      setInputText(prev => prev ? prev + '\n' + p.body : p.body)
+                      setInputText(inputText ? inputText + '\n' + p.body : p.body)
                       setShowPromptPicker(false)
                       inputRef.current?.focus()
                     }}
@@ -2021,7 +2021,7 @@ function getToolSummary(name: string, input: Record<string, unknown>): string {
 
 const CODE_TTL_SECONDS = 55
 
-function ClaudeLoginModal({ onClose, onToken, isStandalone }: { onClose: () => void; onToken?: (token: string) => void; isStandalone?: boolean }) {
+function ClaudeLoginModal({ onClose, onToken, isStandalone: _isStandalone }: { onClose: () => void; onToken?: (token: string) => void; isStandalone?: boolean }) {
   const [tab, setTab] = useState<'oauth' | 'direct'>('direct')
   const [loading, setLoading] = useState(true)
   const [authUrl, setAuthUrl] = useState<string | null>(null)

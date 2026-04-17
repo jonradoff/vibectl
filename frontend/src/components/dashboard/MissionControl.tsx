@@ -4,8 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation } from 'react-router-dom'
 import React from 'react'
 import { getUniverseData, listArchivedProjects, unarchiveProject, deleteProject, listUnits, getClaudeUsageSummary, updateClaudeUsageConfig, getSubscriptionUsage, getProductivity, getIntentProductivity, getIntentInsights, backfillIntents, getBackfillCount, listAllTags } from '../../api/client'
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, AreaChart, Area, ResponsiveContainer, Legend } from 'recharts'
-import type { SubscriptionUsage, ProductivityEntry } from '../../api/client'
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, AreaChart, Area, ResponsiveContainer } from 'recharts'
+import type { ProductivityEntry } from '../../api/client'
 import type { ProjectUniverseData, Project, ClaudeUsageSummary, ClaudeUsageConfig } from '../../types'
 import { useActiveProject } from '../../contexts/ActiveProjectContext'
 
@@ -163,9 +163,6 @@ function ProjectsTab({ days, sortField, sortDir, onSort, tagFilter, onTagFilter,
   }
   const sortName = (p: ProjectUniverseData) =>
     p.parentId ? `${parentNames[p.parentId] ?? ''}\0${p.projectName}` : p.projectName
-
-  // Collect all unique tags for filter bar
-  const allTags = [...new Set(data.flatMap(p => p.tags ?? []))].sort()
 
   // Filter by tag and inactive
   const afterInactive = showInactive ? data : data.filter(p => !p.inactive)
@@ -602,7 +599,7 @@ function ProductivityTab({ tagFilter, onTagFilter, days }: { tagFilter: string; 
     refetchInterval: 30_000,
   })
 
-  const { data: insights } = useQuery({
+  const { data: _insights } = useQuery({
     queryKey: ['intentInsights', days],
     queryFn: () => getIntentInsights({ days }),
     refetchInterval: 60_000,
@@ -649,8 +646,6 @@ function ProductivityTab({ tagFilter, onTagFilter, days }: { tagFilter: string; 
 
   // Project tags for filtering (from the productivity stats which have project-level tags)
   type ProdStats = typeof stats[number]
-  const allProjectTags = [...new Set(stats.flatMap((s: ProdStats) => s.tags ?? []))].sort()
-
   const filtered = tagFilter
     ? stats.filter((s: ProdStats) => (s.tags ?? []).includes(tagFilter))
     : stats
@@ -808,7 +803,8 @@ function ProductivityTab({ tagFilter, onTagFilter, days }: { tagFilter: string; 
 
 // ─── Code Delta tab (raw data view) ─────────────────────────────────────────
 
-function CodeDeltaTab({ tagFilter, onTagFilter, days }: { tagFilter: string; onTagFilter: (tag: string) => void; days: number }) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function CodeDeltaTab({ tagFilter, onTagFilter: _onTagFilter, days }: { tagFilter: string; onTagFilter: (tag: string) => void; days: number }) {
   const { openProject, setActiveProjectId } = useActiveProject()
   const navigate = useNavigate()
   const location = useLocation()
@@ -821,8 +817,6 @@ function CodeDeltaTab({ tagFilter, onTagFilter, days }: { tagFilter: string; onT
 
   const [sortBy, setSortBy] = useState<'lines' | 'bytes' | 'files' | 'prompts' | 'name'>('lines')
   const [sortAsc, setSortAsc] = useState(false)
-
-  const allTags = [...new Set(entries.flatMap((e: ProductivityEntry) => e.tags ?? []))].sort()
 
   const filtered = tagFilter
     ? entries.filter((e: ProductivityEntry) => (e.tags ?? []).includes(tagFilter))
@@ -935,7 +929,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   test: '#34d399', docs: '#94a3b8', bugfix: '#f87171', refactor: '#fbbf24',
 }
 
-const TIME_RANGES = [
+export const TIME_RANGES = [
   { label: '24h', days: 1 },
   { label: '7d', days: 7 },
   { label: '30d', days: 30 },
@@ -978,7 +972,7 @@ function renderDonutLabel({ cx, cy, midAngle, outerRadius, name, value, percent 
 }
 
 function AnalyticsTab({ tagFilter, days: parentDays }: { tagFilter: string; days: number }) {
-  const [customFrom, setCustomFrom] = useState('')
+  const [customFrom, _setCustomFrom] = useState('')
   const useCustom = customFrom !== ''
 
   const queryParams = useCustom
@@ -1073,14 +1067,14 @@ function AnalyticsTab({ tagFilter, days: parentDays }: { tagFilter: string; days
             <ResponsiveContainer width="100%" height={220}>
               <PieChart>
                 <Pie data={catData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={2}
-                  label={(props) => renderDonutLabel({ ...props, percent: props.value / catData.reduce((s: number, d: { value: number }) => s + d.value, 0) })}
+                  label={((props: any) => renderDonutLabel({ ...props, percent: props.value / catData.reduce((s: number, d: { value: number }) => s + d.value, 0) })) as any}
                   labelLine={false}
                 >
                   {catData.map((entry) => (
                     <Cell key={entry.name} fill={CATEGORY_COLORS[entry.name] || '#94a3b8'} />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={donutTooltipStyle} formatter={(value: number, name: string) => [`${value} pts`, name]} />
+                <Tooltip contentStyle={donutTooltipStyle} formatter={((value: number, name: string) => [`${value} pts`, name]) as any} />
               </PieChart>
             </ResponsiveContainer>
           ) : <div className="h-[220px] flex items-center justify-center text-gray-600 text-xs">No data</div>}
@@ -1093,14 +1087,14 @@ function AnalyticsTab({ tagFilter, days: parentDays }: { tagFilter: string; days
             <ResponsiveContainer width="100%" height={220}>
               <PieChart>
                 <Pie data={projData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={2}
-                  label={(props) => renderDonutLabel({ ...props, percent: props.value / projData.reduce((s: number, d: { value: number }) => s + d.value, 0) })}
+                  label={((props: any) => renderDonutLabel({ ...props, percent: props.value / projData.reduce((s: number, d: { value: number }) => s + d.value, 0) })) as any}
                   labelLine={false}
                 >
                   {projData.map((_, i) => (
                     <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={donutTooltipStyle} formatter={(value: number, name: string) => [`${value} pts`, name]} />
+                <Tooltip contentStyle={donutTooltipStyle} formatter={((value: number, name: string) => [`${value} pts`, name]) as any} />
               </PieChart>
             </ResponsiveContainer>
           ) : <div className="h-[220px] flex items-center justify-center text-gray-600 text-xs">No data</div>}
@@ -1114,7 +1108,7 @@ function AnalyticsTab({ tagFilter, days: parentDays }: { tagFilter: string; days
               <BarChart data={effData} layout="vertical" margin={{ left: 50, right: 10, top: 5, bottom: 5 }}>
                 <XAxis type="number" tick={{ fontSize: 10, fill: '#6b7280' }} tickFormatter={formatTokens} />
                 <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#9ca3af' }} width={50} />
-                <Tooltip contentStyle={donutTooltipStyle} formatter={(value: number) => [formatTokens(value), 'tokens/pt']} />
+                <Tooltip contentStyle={donutTooltipStyle} formatter={((value: number) => [formatTokens(value), 'tokens/pt']) as any} />
                 <Bar dataKey="tokensPerPoint" radius={[0, 4, 4, 0]}>
                   {effData.map((entry) => (
                     <Cell key={entry.name} fill={CATEGORY_COLORS[entry.name] || '#94a3b8'} />

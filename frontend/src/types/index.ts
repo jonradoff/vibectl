@@ -221,6 +221,7 @@ export interface ProjectUniverseData {
   issuesByStatus: Record<string, number>;
   currentHealth: string;     // "up"|"down"|"degraded"|"unknown"|"none"
   pendingFeedbackCount: number;
+  deployCount?: number;
   lastActivityAt?: string;
   promptCount: number;
   lastPromptAt?: string;
