@@ -435,7 +435,7 @@ export default function UniversePanel() {
 
   const { data = [], isLoading } = useQuery({
     queryKey: ['universeData'],
-    queryFn: getUniverseData,
+    queryFn: () => getUniverseData(),
     staleTime: 60_000,
     refetchInterval: 120_000,
   })

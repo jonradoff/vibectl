@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listStaleProjects, setProjectInactive, getSettings, updateSettings } from '../../api/client'
+import { listStaleProjects, setProjectInactive } from '../../api/client'
 import type { Project } from '../../types'
 
 const STALE_CHECK_KEY = 'vibectl-stale-check-shown'

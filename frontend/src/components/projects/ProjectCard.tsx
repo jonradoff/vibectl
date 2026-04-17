@@ -1211,7 +1211,6 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
   const [goals, setGoals] = useState((project.goals ?? []).join('\n'))
   const [tags, setTags] = useState<string[]>(project.tags ?? [])
   const [tagInput, setTagInput] = useState('')
-  const [tagSuggestions, setTagSuggestions] = useState<string[]>([])
   const [allTags, setAllTags] = useState<string[]>([])
   const [tagHighlight, setTagHighlight] = useState(0)
 
@@ -1243,7 +1242,6 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
   const [flyDetecting, setFlyDetecting] = useState(false)
   const [flyDetected, setFlyDetected] = useState<{ appName: string; deployProd: string; startProd: string; restartProd: string; viewLogs: string } | null>(null)
   const [flyNotFound, setFlyNotFound] = useState(false)
-  const [flyApplied, setFlyApplied] = useState<{ appName: string; deployProd: string; startProd: string; restartProd: string; viewLogs: string } | null>(null)
   const [startShDetecting, setStartShDetecting] = useState(false)
   const [startShFound, setStartShFound] = useState<{ preview: string; command: string } | null>(null)
   const [startShNotFound, setStartShNotFound] = useState(false)
