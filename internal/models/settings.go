@@ -14,4 +14,11 @@ type Settings struct {
 	StaleProjectReminderDays int        `json:"staleProjectReminderDays" bson:"staleProjectReminderDays"` // default 7
 	StaleProjectSnoozeUntil  *time.Time `json:"staleProjectSnoozeUntil,omitempty" bson:"staleProjectSnoozeUntil,omitempty"`
 	ShowInactiveProjects     bool       `json:"showInactiveProjects" bson:"showInactiveProjects"`
+
+	// Delegation — proxy non-session routes to a remote vibectl server
+	DelegationEnabled  bool      `json:"delegationEnabled" bson:"delegationEnabled"`
+	DelegationURL      string    `json:"delegationUrl,omitempty" bson:"delegationUrl,omitempty"`
+	DelegationAPIKey   string    `json:"-" bson:"delegationApiKey,omitempty"`
+	DelegationUser     string    `json:"delegationUser,omitempty" bson:"delegationUser,omitempty"`
+	DelegationVerified time.Time `json:"delegationVerifiedAt,omitempty" bson:"delegationVerifiedAt,omitempty"`
 }

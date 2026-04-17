@@ -250,6 +250,41 @@ Each intent has:
 - Deleted projects are excluded from productivity aggregation (intents remain but are hidden)
 - Backfill processes 3 sessions per batch synchronously to avoid race conditions and API overload
 
+# Delegation Model
+
+VibeCtl instances can operate in two standalone modes:
+
+## Isolated (default)
+Everything runs locally against local MongoDB. No remote connection. Current behavior.
+
+## Delegated
+Claude Code sessions, chat history, code deltas, terminals stay local. Everything else (projects, issues, feedback, intents, prompts, members, decisions, health, activity log) is proxied to a remote vibectl server via API key.
+
+### How it works
+- A chi middleware (`ProxyMiddleware`) sits inside the protected route group
+- Routes are classified as "local" or "delegated" by path prefix (`delegation/router.go`)
+- Delegated routes are reverse-proxied to the remote, with the local auth header replaced by the stored API key
+- The remote enforces access controls — the API key's user determines permissions
+- WebSocket routes (`/ws/*`) are always local
+
+### Configuration
+- Only `super_admin` can enable/disable delegation (Settings page)
+- Stored in the `settings` MongoDB collection: `delegationEnabled`, `delegationUrl`, `delegationApiKey`, `delegationUser`
+- API key stored in MongoDB (never sent to frontend via `json:"-"`)
+- Survives server restarts (restored from settings on boot)
+
+### What stays local
+`/api/v1/auth/*`, `/api/v1/admin/*`, `/api/v1/delegation/*`, `/api/v1/settings`, `/api/v1/chat-session/*`, `/api/v1/chat-history/*`, `/api/v1/claude-usage/*`, `/api/v1/mode`, `/api/v1/api-keys`, file operations, all WebSocket endpoints
+
+### What gets delegated
+`/api/v1/projects/*` (except chat-session/chat-history/files sub-routes), `/api/v1/issues/*`, `/api/v1/feedback/*`, `/api/v1/intents/*`, `/api/v1/prompts/*`, `/api/v1/dashboard/*`, `/api/v1/plans/*`, `/api/v1/activity-log/*`, `/api/v1/sessions/*`, `/api/v1/health-check/*`
+
+### Edge cases
+- Remote down: 503 `DELEGATION_UNAVAILABLE` on delegated routes; local routes unaffected
+- API key revoked: 401 from remote transformed to 502 `DELEGATION_AUTH_FAILED`
+- No delegation chains: test connection rejects servers that are themselves delegated
+- Existing local data hidden (not deleted) while delegation active; reappears on disconnect
+
 # Tech Stack
 
 - Backend: Go with chi router, MongoDB
