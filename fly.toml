@@ -5,7 +5,7 @@ primary_region = "iad"
 
 [env]
   PORT = "4380"
-  DATABASE_NAME = "vibectl-skillz"
+  DATABASE_NAME = "vibectl"
 
 [http_service]
   internal_port = 4380
