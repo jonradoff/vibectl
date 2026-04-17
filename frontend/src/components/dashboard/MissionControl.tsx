@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { getUniverseData, listArchivedProjects, unarchiveProject, deleteProject, listUnits, getClaudeUsageSummary, updateClaudeUsageConfig, getSubscriptionUsage } from '../../api/client'
-import type { SubscriptionUsage } from '../../api/client'
+import React from 'react'
+import { getUniverseData, listArchivedProjects, unarchiveProject, deleteProject, listUnits, getClaudeUsageSummary, updateClaudeUsageConfig, getSubscriptionUsage, getProductivity, getIntentProductivity, getIntentInsights, backfillIntents, getBackfillCount, listAllTags } from '../../api/client'
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, AreaChart, Area, ResponsiveContainer, Legend } from 'recharts'
+import type { SubscriptionUsage, ProductivityEntry } from '../../api/client'
 import type { ProjectUniverseData, Project, ClaudeUsageSummary, ClaudeUsageConfig } from '../../types'
 import { useActiveProject } from '../../contexts/ActiveProjectContext'
 
@@ -11,7 +13,7 @@ import { useActiveProject } from '../../contexts/ActiveProjectContext'
 
 const STATE_KEY = 'vibectl-mission-control-v3'
 
-interface MCState { tab: string; days: number; sortField?: string; sortDir?: string }
+interface MCState { tab: string; days: number; sortField?: string; sortDir?: string; tagFilter?: string; productivityTag?: string; showInactive?: boolean }
 
 function loadState(): MCState {
   try {
@@ -113,8 +115,9 @@ function SortTh({
 
 const CONNECTED_STATUSES = new Set(['started', 'running', 'connecting', 'connected', 'reconnected', 'restarted'])
 
-function ProjectsTab({ days, sortField, sortDir, onSort }: {
+function ProjectsTab({ days, sortField, sortDir, onSort, tagFilter, onTagFilter, showInactive }: {
   days: number; sortField: SortField; sortDir: SortDir; onSort: (f: SortField) => void
+  tagFilter: string; onTagFilter: (tag: string) => void; showInactive: boolean
 }) {
   const { openProject, setActiveProjectId, projectStatuses } = useActiveProject()
   const navigate = useNavigate()
@@ -161,7 +164,16 @@ function ProjectsTab({ days, sortField, sortDir, onSort }: {
   const sortName = (p: ProjectUniverseData) =>
     p.parentId ? `${parentNames[p.parentId] ?? ''}\0${p.projectName}` : p.projectName
 
-  const sorted = [...data].sort((a, b) => {
+  // Collect all unique tags for filter bar
+  const allTags = [...new Set(data.flatMap(p => p.tags ?? []))].sort()
+
+  // Filter by tag and inactive
+  const afterInactive = showInactive ? data : data.filter(p => !p.inactive)
+  const filtered = tagFilter
+    ? afterInactive.filter(p => (p.tags ?? []).includes(tagFilter))
+    : afterInactive
+
+  const sorted = [...filtered].sort((a, b) => {
     let cmp = 0
     switch (sortField) {
       case 'name':
@@ -236,6 +248,17 @@ function ProjectsTab({ days, sortField, sortDir, onSort }: {
                   }
                   return null
                 })()}
+                {(p.tags ?? []).length > 0 && (
+                  <span className="ml-1.5 inline-flex gap-0.5">
+                    {(p.tags ?? []).map(tag => (
+                      <button
+                        key={tag}
+                        onClick={(e) => { e.stopPropagation(); onTagFilter(tagFilter === tag ? '' : tag) }}
+                        className={`rounded-full px-1.5 py-0 text-[9px] font-medium transition-colors ${tagFilter === tag ? 'bg-indigo-500/30 text-indigo-300' : 'bg-gray-700/50 text-gray-500 hover:text-gray-300'}`}
+                      >{tag}</button>
+                    ))}
+                  </span>
+                )}
               </td>
               <td className="px-2 py-2.5">
                 <span className={`inline-block w-2.5 h-2.5 rounded-full ${healthBg[p.currentHealth] ?? 'bg-gray-600'}`} />
@@ -568,6 +591,561 @@ function UsageDetailModal({ summary, onClose, onConfigSave }: {
   )
 }
 
+// ─── Productivity tab (Intent-oriented, high-level) ──────────────────────────
+
+function ProductivityTab({ tagFilter, onTagFilter, days }: { tagFilter: string; onTagFilter: (tag: string) => void; days: number }) {
+  const queryClient = useQueryClient()
+
+  const { data: stats = [], isLoading } = useQuery({
+    queryKey: ['intentProductivity', days],
+    queryFn: () => getIntentProductivity(days),
+    refetchInterval: 30_000,
+  })
+
+  const { data: insights } = useQuery({
+    queryKey: ['intentInsights', days],
+    queryFn: () => getIntentInsights({ days }),
+    refetchInterval: 60_000,
+  })
+
+  const [backfillStatus, setBackfillStatus] = useState<string | null>(null)
+  const backfillTotalRef = useRef(0)
+
+  const { data: backfillCountData } = useQuery({
+    queryKey: ['backfillCount'],
+    queryFn: getBackfillCount,
+    refetchInterval: 30_000,
+  })
+  const backfillRemaining = backfillCountData?.remaining ?? 0
+
+  const backfillMutation = useMutation({
+    mutationFn: backfillIntents,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['intentProductivity'] })
+      queryClient.invalidateQueries({ queryKey: ['intentInsights'] })
+      queryClient.invalidateQueries({ queryKey: ['backfillCount'] })
+      if (backfillTotalRef.current === 0) {
+        backfillTotalRef.current = data.processing + data.remaining
+      }
+      const done = backfillTotalRef.current - data.remaining
+      if (data.remaining > 0) {
+        setBackfillStatus(`Backfilling ${done} of ${backfillTotalRef.current}...`)
+        // Backend is synchronous — safe to continue immediately
+        setTimeout(() => backfillMutation.mutate(), 500)
+      } else {
+        setBackfillStatus(null)
+        backfillTotalRef.current = 0
+      }
+    },
+  })
+
+  type ProdSortField = 'project' | 'points' | 'intents' | 'tokens' | 'time'
+  const [prodSort, setProdSort] = useState<ProdSortField>('project')
+  const [prodSortAsc, setProdSortAsc] = useState(true)
+  const handleProdSort = (field: ProdSortField) => {
+    if (field === prodSort) setProdSortAsc(!prodSortAsc)
+    else { setProdSort(field); setProdSortAsc(field === 'project') }
+  }
+
+  // Project tags for filtering (from the productivity stats which have project-level tags)
+  type ProdStats = typeof stats[number]
+  const allProjectTags = [...new Set(stats.flatMap((s: ProdStats) => s.tags ?? []))].sort()
+
+  const filtered = tagFilter
+    ? stats.filter((s: ProdStats) => (s.tags ?? []).includes(tagFilter))
+    : stats
+
+  // Totals
+  const totalPoints = filtered.reduce((s: number, p: ProdStats) => s + p.pointsDelivered, 0)
+  const totalIntents = filtered.reduce((s: number, p: ProdStats) => s + p.intentCount, 0)
+  const totalTokens = filtered.reduce((s: number, p: ProdStats) => s + p.totalTokensIn + p.totalTokensOut, 0)
+  const totalWallClock = filtered.reduce((s: number, p: ProdStats) => s + p.totalWallClock, 0)
+  const avgCycleTime = totalIntents > 0 ? Math.round(totalWallClock / totalIntents) : 0
+
+  // Category breakdown across all filtered projects
+  const catTotals: Record<string, number> = {}
+  filtered.forEach((p: ProdStats) => { for (const [cat, n] of Object.entries(p.byCategory)) catTotals[cat] = (catTotals[cat] || 0) + n })
+
+  const formatDuration = (secs: number) => {
+    if (secs < 60) return `${secs}s`
+    if (secs < 3600) return `${Math.round(secs / 60)}m`
+    return `${(secs / 3600).toFixed(1)}h`
+  }
+  const formatTokens = (n: number) => n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n)
+
+  const categoryColors: Record<string, string> = {
+    UI: 'bg-purple-500/20 text-purple-300', API: 'bg-blue-500/20 text-blue-300',
+    infra: 'bg-orange-500/20 text-orange-300', data: 'bg-cyan-500/20 text-cyan-300',
+    test: 'bg-green-500/20 text-green-300', docs: 'bg-gray-500/20 text-gray-300',
+    bugfix: 'bg-red-500/20 text-red-300', refactor: 'bg-amber-500/20 text-amber-300',
+  }
+
+  if (isLoading) {
+    return <div className="px-4 py-4 space-y-2">{[...Array(4)].map((_, i) => <div key={i} className="h-8 animate-pulse rounded bg-gray-800" />)}</div>
+  }
+
+  return (
+    <div className="overflow-auto h-full">
+      {/* Summary cards */}
+      <div className="grid grid-cols-4 gap-2 px-4 py-3">
+        <div className="rounded-lg bg-gray-800/50 border border-gray-700/40 p-2 text-center">
+          <div className="text-lg font-bold text-indigo-400">{totalPoints}</div>
+          <div className="text-[9px] text-gray-500 uppercase">Points Delivered</div>
+        </div>
+        <div className="rounded-lg bg-gray-800/50 border border-gray-700/40 p-2 text-center">
+          <div className="text-lg font-bold text-emerald-400">{totalIntents}</div>
+          <div className="text-[9px] text-gray-500 uppercase">Total Intents</div>
+        </div>
+        <div className="rounded-lg bg-gray-800/50 border border-gray-700/40 p-2 text-center">
+          <div className="text-lg font-bold text-cyan-400">{formatDuration(avgCycleTime)}</div>
+          <div className="text-[9px] text-gray-500 uppercase">Avg Cycle Time</div>
+        </div>
+        <div className="rounded-lg bg-gray-800/50 border border-gray-700/40 p-2 text-center">
+          <div className="text-lg font-bold text-gray-400">{formatTokens(totalTokens)}</div>
+          <div className="text-[9px] text-gray-500 uppercase">Total Tokens</div>
+        </div>
+      </div>
+
+      {/* Category breakdown pills */}
+      {Object.keys(catTotals).length > 0 && (
+        <div className="flex items-center gap-1.5 px-4 py-1 flex-wrap">
+          {Object.entries(catTotals).sort(([,a],[,b]) => b - a).map(([cat, count]) => (
+            <span key={cat} className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${categoryColors[cat] || 'bg-gray-700/50 text-gray-400'}`}>
+              {cat} {count}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Controls */}
+      <div className="flex items-center gap-2 px-4 py-1.5 border-b border-gray-800/50 flex-wrap">
+        <div className="flex-1" />
+        {(backfillRemaining > 0 || backfillStatus) && (
+          <div className="ml-auto">
+            <button
+              onClick={() => { setBackfillStatus('Starting...'); backfillMutation.mutate() }}
+              disabled={backfillMutation.isPending}
+              className="text-[10px] text-indigo-400 hover:text-indigo-300 disabled:opacity-50"
+            >
+              {backfillStatus || `Backfill (${backfillRemaining})`}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="px-4 py-6 text-center">
+          <p className="text-sm text-gray-600">No productivity data yet.</p>
+          <p className="text-[10px] text-gray-700 mt-1">Intents are auto-extracted when chat sessions end. Click Backfill to analyze historical sessions.</p>
+        </div>
+      ) : (
+        <table className="w-full text-xs text-left" style={{ minWidth: '600px' }}>
+          <thead className="sticky top-0 bg-gray-900 text-gray-600 uppercase tracking-wider">
+            <tr className="border-b border-gray-800">
+              {([['project', 'Project', ''], ['points', 'Points', 'text-right'], ['intents', 'Intents', 'text-right'], ['', 'Categories', ''], ['tokens', 'Tokens', 'text-right'], ['time', 'Time', 'text-right']] as const).map(([field, label, align]) => (
+                <th
+                  key={label}
+                  onClick={field ? () => handleProdSort(field as ProdSortField) : undefined}
+                  className={`px-3 py-1.5 font-medium ${align} ${field ? 'cursor-pointer select-none hover:text-gray-300 transition-colors' : ''} ${prodSort === field ? 'text-gray-300' : ''}`}
+                >
+                  {label}
+                  {prodSort === field && <span className="ml-1 text-indigo-400">{prodSortAsc ? '\u25B2' : '\u25BC'}</span>}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {[...filtered].sort((a: ProdStats, b: ProdStats) => {
+              let cmp = 0
+              switch (prodSort) {
+                case 'project': cmp = (a.projectName || '').localeCompare(b.projectName || ''); break
+                case 'points': cmp = a.pointsDelivered - b.pointsDelivered; break
+                case 'intents': cmp = a.intentCount - b.intentCount; break
+                case 'tokens': cmp = (a.totalTokensIn + a.totalTokensOut) - (b.totalTokensIn + b.totalTokensOut); break
+                case 'time': cmp = a.totalWallClock - b.totalWallClock; break
+              }
+              return prodSortAsc ? cmp : -cmp
+            }).map((p: ProdStats) => (
+              <tr key={p.projectId} className="border-b border-gray-800/60 hover:bg-gray-800/40 transition-colors">
+                <td className="px-3 py-2">
+                  <span className="font-medium text-gray-300">{p.projectName || 'Unknown'}</span>
+                  {p.projectCode && <span className="ml-1.5 text-gray-500 font-mono">({p.projectCode})</span>}
+                  {(p.tags ?? []).map(tag => (
+                    <button key={tag} onClick={() => onTagFilter(tagFilter === tag ? '' : tag)}
+                      className={`ml-1 rounded-full px-1.5 py-0 text-[9px] font-medium ${tagFilter === tag ? 'bg-indigo-500/30 text-indigo-300' : 'bg-gray-700/50 text-gray-500 hover:text-gray-300'}`}
+                    >{tag}</button>
+                  ))}
+                </td>
+                <td className="px-3 py-2 text-right font-mono font-medium text-indigo-400">{p.pointsDelivered}</td>
+                <td className="px-3 py-2 text-right font-mono text-gray-400">{p.intentCount}</td>
+                <td className="px-3 py-2">
+                  <div className="flex gap-0.5 flex-wrap">
+                    {Object.entries(p.byCategory).sort(([,a],[,b]) => b - a).slice(0, 4).map(([cat, n]) => (
+                      <span key={cat} className={`rounded px-1 py-0 text-[9px] font-medium ${categoryColors[cat] || 'bg-gray-700/50 text-gray-400'}`}>{cat} {n}</span>
+                    ))}
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-gray-500">{formatTokens(p.totalTokensIn + p.totalTokensOut)}</td>
+                <td className="px-3 py-2 text-right font-mono text-gray-500">{formatDuration(p.totalWallClock)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot className="border-t border-gray-700">
+            <tr>
+              <td className="px-3 py-2 font-medium text-gray-400">Total ({filtered.length} projects)</td>
+              <td className="px-3 py-2 text-right font-mono font-medium text-indigo-400">{totalPoints}</td>
+              <td className="px-3 py-2 text-right font-mono text-gray-400">{totalIntents}</td>
+              <td className="px-3 py-2"></td>
+              <td className="px-3 py-2 text-right font-mono text-gray-500">{formatTokens(totalTokens)}</td>
+              <td className="px-3 py-2 text-right font-mono text-gray-500">{formatDuration(totalWallClock)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      )}
+    </div>
+  )
+}
+
+// ─── Code Delta tab (raw data view) ─────────────────────────────────────────
+
+function CodeDeltaTab({ tagFilter, onTagFilter, days }: { tagFilter: string; onTagFilter: (tag: string) => void; days: number }) {
+  const { openProject, setActiveProjectId } = useActiveProject()
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  const { data: entries = [], isLoading } = useQuery({
+    queryKey: ['productivity', days],
+    queryFn: () => getProductivity(days),
+    refetchInterval: 30_000,
+  })
+
+  const [sortBy, setSortBy] = useState<'lines' | 'bytes' | 'files' | 'prompts' | 'name'>('lines')
+  const [sortAsc, setSortAsc] = useState(false)
+
+  const allTags = [...new Set(entries.flatMap((e: ProductivityEntry) => e.tags ?? []))].sort()
+
+  const filtered = tagFilter
+    ? entries.filter((e: ProductivityEntry) => (e.tags ?? []).includes(tagFilter))
+    : entries
+
+  const sorted = [...filtered].sort((a: ProductivityEntry, b: ProductivityEntry) => {
+    let cmp = 0
+    switch (sortBy) {
+      case 'lines': cmp = (a.linesAdded + a.linesRemoved) - (b.linesAdded + b.linesRemoved); break
+      case 'bytes': cmp = Math.abs(a.bytesDelta) - Math.abs(b.bytesDelta); break
+      case 'files': cmp = a.filesChanged - b.filesChanged; break
+      case 'prompts': cmp = a.promptCount - b.promptCount; break
+      case 'name': cmp = a.projectName.localeCompare(b.projectName); break
+    }
+    return sortAsc ? cmp : -cmp
+  })
+
+  const handleSort = (field: typeof sortBy) => {
+    if (field === sortBy) setSortAsc(!sortAsc)
+    else { setSortBy(field); setSortAsc(false) }
+  }
+
+  const handleRowClick = (projectId: string) => {
+    openProject(projectId)
+    setActiveProjectId(projectId)
+    if (location.pathname !== '/') navigate('/')
+  }
+
+  const formatNum = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+  const formatBytes = (b: number) => {
+    const abs = Math.abs(b)
+    if (abs >= 1048576) return `${(b / 1048576).toFixed(1)} MB`
+    if (abs >= 1024) return `${(b / 1024).toFixed(1)} KB`
+    return `${b} B`
+  }
+
+  if (isLoading) {
+    return <div className="px-4 py-4 space-y-2">{[...Array(4)].map((_, i) => <div key={i} className="h-8 animate-pulse rounded bg-gray-800" />)}</div>
+  }
+
+  if (entries.length === 0) {
+    return (
+      <div className="px-4 py-6 text-center">
+        <p className="text-sm text-gray-600">No productivity data yet.</p>
+        <p className="text-[10px] text-gray-700 mt-1">Code deltas are captured after each prompt completion in projects with git repos.</p>
+      </div>
+    )
+  }
+
+  const thClass = 'px-3 py-1.5 font-medium cursor-pointer select-none whitespace-nowrap transition-colors hover:text-gray-300'
+
+  return (
+    <div className="overflow-auto h-full">
+      <table className="w-full text-xs text-left" style={{ minWidth: '500px' }}>
+        <thead className="sticky top-0 bg-gray-900 text-gray-600 uppercase tracking-wider">
+          <tr className="border-b border-gray-800">
+            <th onClick={() => handleSort('name')} className={thClass}>Project {sortBy === 'name' && <span className="text-indigo-400">{sortAsc ? '▲' : '▼'}</span>}</th>
+            <th onClick={() => handleSort('lines')} className={`${thClass} text-right`}>Lines {sortBy === 'lines' && <span className="text-indigo-400">{sortAsc ? '▲' : '▼'}</span>}</th>
+            <th onClick={() => handleSort('bytes')} className={`${thClass} text-right`}>Bytes {sortBy === 'bytes' && <span className="text-indigo-400">{sortAsc ? '▲' : '▼'}</span>}</th>
+            <th onClick={() => handleSort('files')} className={`${thClass} text-right`}>Files {sortBy === 'files' && <span className="text-indigo-400">{sortAsc ? '▲' : '▼'}</span>}</th>
+            <th onClick={() => handleSort('prompts')} className={`${thClass} text-right`}>Prompts {sortBy === 'prompts' && <span className="text-indigo-400">{sortAsc ? '▲' : '▼'}</span>}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((e: ProductivityEntry) => (
+            <tr key={e.projectId} onClick={() => handleRowClick(e.projectId)} className="border-b border-gray-800/60 hover:bg-gray-800/40 cursor-pointer transition-colors">
+              <td className="px-3 py-2 whitespace-nowrap">
+                <span className="font-medium text-gray-300">{e.projectName}</span>
+                <span className="ml-1.5 text-gray-500 font-mono">({e.projectCode})</span>
+                {(e.tags ?? []).map(tag => (
+                  <span key={tag} className={`ml-1 rounded-full px-1.5 py-0 text-[9px] font-medium ${tagFilter === tag ? 'bg-indigo-500/30 text-indigo-300' : 'bg-gray-700/50 text-gray-500'}`}>{tag}</span>
+                ))}
+              </td>
+              <td className="px-3 py-2 text-right font-mono">
+                <span className="text-green-400">+{formatNum(e.linesAdded)}</span>
+                <span className="text-gray-600 mx-0.5">/</span>
+                <span className="text-red-400">-{formatNum(e.linesRemoved)}</span>
+              </td>
+              <td className={`px-3 py-2 text-right font-mono ${e.bytesDelta >= 0 ? 'text-green-400/70' : 'text-red-400/70'}`}>
+                {e.bytesDelta >= 0 ? '+' : ''}{formatBytes(e.bytesDelta)}
+              </td>
+              <td className="px-3 py-2 text-right font-mono text-gray-500">{e.filesChanged}</td>
+              <td className="px-3 py-2 text-right font-mono text-gray-500">{e.promptCount}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot className="border-t border-gray-700">
+          <tr>
+            <td className="px-3 py-2 font-medium text-gray-400">Total ({sorted.length} projects)</td>
+            <td className="px-3 py-2 text-right font-mono">
+              <span className="text-green-400">+{formatNum(sorted.reduce((s: number, e: ProductivityEntry) => s + e.linesAdded, 0))}</span>
+              <span className="text-gray-600 mx-0.5">/</span>
+              <span className="text-red-400">-{formatNum(sorted.reduce((s: number, e: ProductivityEntry) => s + e.linesRemoved, 0))}</span>
+            </td>
+            <td className="px-3 py-2 text-right font-mono text-gray-500">{formatBytes(sorted.reduce((s: number, e: ProductivityEntry) => s + e.bytesDelta, 0))}</td>
+            <td className="px-3 py-2 text-right font-mono text-gray-500">{sorted.reduce((s: number, e: ProductivityEntry) => s + e.filesChanged, 0)}</td>
+            <td className="px-3 py-2 text-right font-mono text-gray-500">{sorted.reduce((s: number, e: ProductivityEntry) => s + e.promptCount, 0)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  )
+}
+
+// ─── Analytics tab ───────────────────────────────────────────────────────────
+
+const CHART_COLORS = ['#818cf8', '#34d399', '#f59e0b', '#f87171', '#22d3ee', '#a78bfa', '#fb923c', '#94a3b8']
+const CATEGORY_COLORS: Record<string, string> = {
+  UI: '#a78bfa', API: '#60a5fa', infra: '#fb923c', data: '#22d3ee',
+  test: '#34d399', docs: '#94a3b8', bugfix: '#f87171', refactor: '#fbbf24',
+}
+
+const TIME_RANGES = [
+  { label: '24h', days: 1 },
+  { label: '7d', days: 7 },
+  { label: '30d', days: 30 },
+  { label: '90d', days: 90 },
+  { label: 'All', days: 365 },
+]
+
+function groupSmallSlices(data: { name: string; value: number }[], threshold = 0.05) {
+  const total = data.reduce((s, d) => s + d.value, 0)
+  if (total === 0) return data
+  const big: typeof data = []
+  let otherValue = 0
+  for (const d of data) {
+    if (d.value / total >= threshold) big.push(d)
+    else otherValue += d.value
+  }
+  if (otherValue > 0) big.push({ name: 'Other', value: otherValue })
+  return big
+}
+
+const RADIAN = Math.PI / 180
+function renderDonutLabel({ cx, cy, midAngle, outerRadius, name, value, percent }: { cx: number; cy: number; midAngle: number; outerRadius: number; name: string; value: number; percent: number }) {
+  if (percent < 0.03) return null
+  const sin = Math.sin(-RADIAN * midAngle)
+  const cos = Math.cos(-RADIAN * midAngle)
+  const x1 = cx + (outerRadius + 6) * cos
+  const y1 = cy + (outerRadius + 6) * sin
+  const x2 = cx + (outerRadius + 22) * cos
+  const y2 = cy + (outerRadius + 22) * sin
+  const x3 = x2 + (cos >= 0 ? 6 : -6)
+  const anchor = cos >= 0 ? 'start' : 'end'
+  return (
+    <g>
+      <path d={`M${x1},${y1}L${x2},${y2}L${x3},${y2}`} stroke="#6b7280" fill="none" strokeWidth={1} />
+      <text x={x3 + (cos >= 0 ? 3 : -3)} y={y2} textAnchor={anchor} fill="#d1d5db" fontSize={10} dominantBaseline="central">
+        {name} ({value})
+      </text>
+    </g>
+  )
+}
+
+function AnalyticsTab({ tagFilter, days: parentDays }: { tagFilter: string; days: number }) {
+  const [customFrom, setCustomFrom] = useState('')
+  const useCustom = customFrom !== ''
+
+  const queryParams = useCustom
+    ? { since: customFrom, ...(tagFilter ? { tag: tagFilter } : {}) }
+    : { days: parentDays, ...(tagFilter ? { tag: tagFilter } : {}) }
+
+  const { data: insights, isLoading } = useQuery({
+    queryKey: ['intentInsights', queryParams],
+    queryFn: () => getIntentInsights(queryParams),
+    refetchInterval: 60_000,
+  })
+
+  if (isLoading || !insights) {
+    return <div className="px-4 py-4 space-y-2">{[...Array(3)].map((_, i) => <div key={i} className="h-24 animate-pulse rounded bg-gray-800" />)}</div>
+  }
+
+  const hasData = insights.totalIntents > 0
+  const formatTokens = (n: number) => n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n)
+
+  // 1. Points by category (donut with labels)
+  const catDataRaw = Object.entries(insights.tokensByCategory)
+    .map(([cat, d]) => ({ name: cat, value: d.totalPoints }))
+    .sort((a, b) => b.value - a.value)
+  const catData = groupSmallSlices(catDataRaw)
+
+  // 2. Points by project (donut with labels)
+  const projDataRaw = Object.entries(insights.byProject || {})
+    .filter(([, d]) => d.name && d.points > 0)
+    .map(([, d]) => ({ name: d.name || d.code, value: d.points }))
+    .sort((a, b) => b.value - a.value)
+  const projData = groupSmallSlices(projDataRaw)
+
+  // 3. Points over time by category (stacked area)
+  const dailyCat = insights.dailyByCategory || {}
+  const allCats = [...new Set(Object.values(dailyCat).flatMap(d => Object.keys(d.categories)))]
+  const timeData = Object.entries(dailyCat)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, d]) => {
+      const row: Record<string, string | number> = { date: date.slice(5) }
+      for (const cat of allCats) row[cat] = d.categories[cat] || 0
+      return row
+    })
+
+  // 4. Tokens per point by category
+  const effData = Object.entries(insights.tokensByCategory)
+    .filter(([, d]) => d.totalPoints > 0)
+    .map(([cat, d]) => ({ name: cat, tokensPerPoint: Math.round(d.totalTokens / d.totalPoints) }))
+    .sort((a, b) => b.tokensPerPoint - a.tokensPerPoint)
+
+  // 5. Delivery funnel
+  const funnel = insights.funnel || {}
+  const funnelTotal = Object.values(funnel).reduce((s, f) => s + f.points, 0)
+  const deliveredPts = funnel.delivered?.points || 0
+  const deliveryRate = funnelTotal > 0 ? Math.round((deliveredPts / funnelTotal) * 100) : 0
+
+  if (!hasData) {
+    return <div className="text-center py-12 text-gray-600 text-sm">No intent data for this time range{tagFilter ? ` and tag "${tagFilter}"` : ''}.</div>
+  }
+
+  const donutTooltipStyle = { background: '#1f2937', border: '1px solid #374151', borderRadius: '6px', fontSize: '11px' }
+
+  return (
+    <div className="overflow-auto h-full p-4 space-y-4">
+      {/* Funnel stats row */}
+      <div className="flex gap-3">
+        <div className="rounded-lg bg-gray-800/50 border border-gray-700/40 p-2.5 flex-1 text-center">
+          <div className="text-xl font-bold text-indigo-400">{deliveredPts}</div>
+          <div className="text-[9px] text-gray-500 uppercase">Points Delivered</div>
+        </div>
+        <div className="rounded-lg bg-gray-800/50 border border-gray-700/40 p-2.5 flex-1 text-center">
+          <div className="text-xl font-bold text-emerald-400">{deliveryRate}%</div>
+          <div className="text-[9px] text-gray-500 uppercase">Delivery Rate</div>
+        </div>
+        <div className="rounded-lg bg-gray-800/50 border border-gray-700/40 p-2.5 flex-1 text-center">
+          <div className="text-xl font-bold text-gray-400">{insights.totalIntents}</div>
+          <div className="text-[9px] text-gray-500 uppercase">Total Intents</div>
+        </div>
+        {Object.entries(funnel).filter(([s]) => s !== 'delivered').map(([status, data]) => (
+          <div key={status} className="rounded-lg bg-gray-800/50 border border-gray-700/40 p-2.5 flex-1 text-center">
+            <div className="text-xl font-bold text-amber-400">{data.count}</div>
+            <div className="text-[9px] text-gray-500 uppercase">{status}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Charts grid */}
+      <div className="grid grid-cols-2 gap-4">
+        {/* Points by category (donut with leader labels) */}
+        <div className="rounded-lg bg-gray-800/30 border border-gray-700/30 p-3">
+          <h3 className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Points by Category</h3>
+          {catData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie data={catData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={2}
+                  label={(props) => renderDonutLabel({ ...props, percent: props.value / catData.reduce((s: number, d: { value: number }) => s + d.value, 0) })}
+                  labelLine={false}
+                >
+                  {catData.map((entry) => (
+                    <Cell key={entry.name} fill={CATEGORY_COLORS[entry.name] || '#94a3b8'} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={donutTooltipStyle} formatter={(value: number, name: string) => [`${value} pts`, name]} />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : <div className="h-[220px] flex items-center justify-center text-gray-600 text-xs">No data</div>}
+        </div>
+
+        {/* Points by project (donut with leader labels) */}
+        <div className="rounded-lg bg-gray-800/30 border border-gray-700/30 p-3">
+          <h3 className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Investment by Project</h3>
+          {projData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie data={projData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={2}
+                  label={(props) => renderDonutLabel({ ...props, percent: props.value / projData.reduce((s: number, d: { value: number }) => s + d.value, 0) })}
+                  labelLine={false}
+                >
+                  {projData.map((_, i) => (
+                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={donutTooltipStyle} formatter={(value: number, name: string) => [`${value} pts`, name]} />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : <div className="h-[220px] flex items-center justify-center text-gray-600 text-xs">No data</div>}
+        </div>
+
+        {/* Tokens per point by category (efficiency) */}
+        <div className="rounded-lg bg-gray-800/30 border border-gray-700/30 p-3">
+          <h3 className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Tokens per Point by Category</h3>
+          {effData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={effData} layout="vertical" margin={{ left: 50, right: 10, top: 5, bottom: 5 }}>
+                <XAxis type="number" tick={{ fontSize: 10, fill: '#6b7280' }} tickFormatter={formatTokens} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#9ca3af' }} width={50} />
+                <Tooltip contentStyle={donutTooltipStyle} formatter={(value: number) => [formatTokens(value), 'tokens/pt']} />
+                <Bar dataKey="tokensPerPoint" radius={[0, 4, 4, 0]}>
+                  {effData.map((entry) => (
+                    <Cell key={entry.name} fill={CATEGORY_COLORS[entry.name] || '#94a3b8'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <div className="h-[180px] flex items-center justify-center text-gray-600 text-xs">No data</div>}
+        </div>
+
+        {/* Points over time (stacked area) */}
+        <div className="rounded-lg bg-gray-800/30 border border-gray-700/30 p-3">
+          <h3 className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Points Over Time</h3>
+          {timeData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={180}>
+              <AreaChart data={timeData} margin={{ left: 0, right: 10, top: 5, bottom: 5 }}>
+                <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#6b7280' }} />
+                <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} />
+                <Tooltip contentStyle={donutTooltipStyle} />
+                {allCats.map((cat, i) => (
+                  <Area key={cat} type="monotone" dataKey={cat} stackId="1" fill={CATEGORY_COLORS[cat] || CHART_COLORS[i % CHART_COLORS.length]} stroke={CATEGORY_COLORS[cat] || CHART_COLORS[i % CHART_COLORS.length]} fillOpacity={0.6} />
+                ))}
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : <div className="h-[180px] flex items-center justify-center text-gray-600 text-xs">No data</div>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Usage tab ───────────────────────────────────────────────────────────────
 
 function SubscriptionUsageCard() {
@@ -580,7 +1158,8 @@ function SubscriptionUsageCard() {
   })
 
   if (isLoading) return <div className="h-16 animate-pulse rounded bg-gray-800 mx-4 mt-3 mb-2" />
-  if (error || !usage) return null
+  if (error) return <div className="mx-4 mt-3 mb-2 text-[10px] text-red-400/60">Subscription usage unavailable: {(error as Error).message}</div>
+  if (!usage) return null
 
   const formatReset = (iso: string) => {
     const d = new Date(iso)
@@ -733,7 +1312,7 @@ function UsageTab() {
 
 // ─── Main component ────────────────────────────────────────────────────────────
 
-type Tab = 'projects' | 'archived' | 'usage'
+type Tab = 'projects' | 'archived' | 'usage' | 'productivity' | 'analytics'
 
 const PERIOD_OPTIONS: { label: string; days: number }[] = [
   { label: '7d', days: 7 },
@@ -745,6 +1324,13 @@ const PERIOD_OPTIONS: { label: string; days: number }[] = [
 
 export default function MissionControl() {
   const [state, setState] = useState(loadState)
+
+  // Global tag filter — shared across Projects, Productivity, and Analytics tabs
+  const { data: allProjectTags = [] } = useQuery({
+    queryKey: ['allProjectTags'],
+    queryFn: listAllTags,
+    refetchInterval: 30_000,
+  })
 
   // Subscription usage alert — badge on Usage tab when any bucket >= 75%
   const { data: subUsage } = useQuery({
@@ -786,6 +1372,8 @@ export default function MissionControl() {
 
   const tabs: { key: Tab; label: string }[] = [
     { key: 'projects', label: 'Projects' },
+    { key: 'productivity', label: 'Productivity' },
+    { key: 'analytics', label: 'Analytics' },
     { key: 'usage', label: 'Usage' },
     { key: 'archived', label: 'Archived' },
   ]
@@ -793,46 +1381,66 @@ export default function MissionControl() {
   return (
     <div className="bg-gray-900 border border-gray-700/60 rounded-lg overflow-hidden h-full flex flex-col">
       {/* Header — drag handle for grid repositioning */}
-      <div className="drag-handle flex items-center justify-between px-4 py-2 border-b border-gray-700/60 shrink-0 cursor-grab select-none">
-        <div className="flex items-center gap-1">
-          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider mr-3">Mission Control</span>
-          {tabs.map(t => (
+      <div className="drag-handle flex items-center gap-1 px-4 py-2 border-b border-gray-700/60 shrink-0 cursor-grab select-none flex-wrap">
+        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider mr-2">Mission Control</span>
+        {tabs.map(t => (
+          <button
+            key={t.key}
+            onMouseDown={e => e.stopPropagation()}
+            onClick={() => updateState({ tab: t.key })}
+            className={`px-2.5 py-0.5 rounded text-xs font-medium transition-colors cursor-pointer ${
+              state.tab === t.key ? 'bg-gray-700 text-gray-200' : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {t.label}
+            {t.key === 'usage' && usageAlertLevel > 0 && (
+              <span className={`ml-1 inline-block w-2 h-2 rounded-full ${usageAlertLevel >= 2 ? 'bg-red-500 animate-pulse' : 'bg-amber-500'}`} />
+            )}
+          </button>
+        ))}
+        <div className="flex items-center gap-1 ml-auto" onMouseDown={e => e.stopPropagation()}>
+          {allProjectTags.length > 0 && (
+            <>
+              <button
+                onClick={() => updateState({ tagFilter: '' })}
+                className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors cursor-pointer ${!state.tagFilter ? 'bg-indigo-600/30 text-indigo-300' : 'text-gray-500 hover:text-gray-300'}`}
+              >All</button>
+              {allProjectTags.map((tag: string) => (
+                <button
+                  key={tag}
+                  onClick={() => updateState({ tagFilter: state.tagFilter === tag ? '' : tag })}
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors cursor-pointer ${state.tagFilter === tag ? 'bg-indigo-600/30 text-indigo-300' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'}`}
+                >{tag}</button>
+              ))}
+              {['projects', 'productivity', 'analytics'].includes(state.tab) && (
+                <span className="text-gray-700 mx-0.5">|</span>
+              )}
+            </>
+          )}
+          <button
+            onClick={() => updateState({ showInactive: !state.showInactive })}
+            className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors cursor-pointer ${state.showInactive ? 'bg-gray-600/30 text-gray-300' : 'text-gray-600 hover:text-gray-400'}`}
+          >{state.showInactive ? 'Hiding inactive' : 'Show inactive'}</button>
+          <span className="text-gray-700 mx-0.5">|</span>
+          {['projects', 'productivity', 'analytics'].includes(state.tab) && PERIOD_OPTIONS.map(({ label, days }) => (
             <button
-              key={t.key}
-              onMouseDown={e => e.stopPropagation()} // prevent drag when clicking tabs
-              onClick={() => updateState({ tab: t.key })}
-              className={`px-2.5 py-0.5 rounded text-xs font-medium transition-colors cursor-pointer ${
-                state.tab === t.key ? 'bg-gray-700 text-gray-200' : 'text-gray-500 hover:text-gray-300'
+              key={days}
+              onClick={() => updateState({ days })}
+              className={`px-2 py-0.5 rounded text-xs font-mono transition-colors cursor-pointer ${
+                state.days === days ? 'bg-indigo-700/60 text-indigo-200' : 'text-gray-600 hover:text-gray-400'
               }`}
             >
-              {t.label}
-              {t.key === 'usage' && usageAlertLevel > 0 && (
-                <span className={`ml-1 inline-block w-2 h-2 rounded-full ${usageAlertLevel >= 2 ? 'bg-red-500 animate-pulse' : 'bg-amber-500'}`} />
-              )}
+              {label}
             </button>
           ))}
         </div>
-
-        {state.tab === 'projects' && (
-          <div className="flex items-center gap-0.5" onMouseDown={e => e.stopPropagation()}>
-            {PERIOD_OPTIONS.map(({ label, days }) => (
-              <button
-                key={days}
-                onClick={() => updateState({ days })}
-                className={`px-2 py-0.5 rounded text-xs font-mono transition-colors cursor-pointer ${
-                  state.days === days ? 'bg-indigo-700/60 text-indigo-200' : 'text-gray-600 hover:text-gray-400'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Tab content */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {state.tab === 'projects' && <ProjectsTab days={state.days} sortField={sortField} sortDir={sortDir} onSort={handleSort} />}
+        {state.tab === 'projects' && <ProjectsTab days={state.days} sortField={sortField} sortDir={sortDir} onSort={handleSort} tagFilter={state.tagFilter || ''} onTagFilter={(tag) => updateState({ tagFilter: tag })} showInactive={!!state.showInactive} />}
+        {state.tab === 'productivity' && <ProductivityTab tagFilter={state.tagFilter || ''} onTagFilter={(tag) => updateState({ tagFilter: tag })} days={state.days} />}
+        {state.tab === 'analytics' && <AnalyticsTab tagFilter={state.tagFilter || ''} days={state.days} />}
         {state.tab === 'usage' && <UsageTab />}
         {state.tab === 'archived' && <ArchivedTab />}
       </div>

@@ -3,6 +3,21 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.12.0 (2026-04-13) — Intent-Oriented Productivity
+
+### Added
+- **Intent extraction**: Chat sessions are automatically analyzed via Haiku when archived, extracting developer intents with title, category (UI/API/infra/data/test/docs/bugfix/refactor), size (S/M/L/XL with point values), delivery status, tech tags, and UX judgment level.
+- **Productivity tab (Intent view)**: Summary cards (points delivered, intents completed, avg cycle time, total tokens), sortable intent table with expand-to-detail, category badges, status icons, and a "Raw Deltas" sub-view for the old code delta metrics.
+- **Backfill endpoint**: `POST /api/v1/intents/backfill` analyzes historical chat sessions that haven't been processed yet.
+- **Insights API**: `GET /api/v1/intents/insights` returns tokens-per-point by category/tech-tag/UX-level and daily points trend.
+- **Project tags**: Arbitrary labels on projects via Settings tab with autocomplete from existing tags. Tags shown as clickable filter pills in Projects column and Productivity tab.
+- **File-level code deltas**: `CodeDelta` records now include per-file `FileChange` entries (path, lines added/removed) from git numstat, enabling tech stack inference.
+- **Plan mode support**: Claude Code plan mode renders inline as markdown, `EnterPlanMode`/`ExitPlanMode` auto-approved via `--allowedTools`.
+- **Subscription usage**: Real-time Claude subscription usage from OAuth API (session 5h, weekly 7d, per-model), displayed in Usage tab and via `/usage` slash command.
+- **Slash commands**: `/mcp` (list MCP servers), `/reload` (restart + reload MCPs), `/fresh` (new session), `/usage` (subscription usage). Compacting/reload shows spinner with queued message count.
+- **Auth error handling**: 401 errors now show login UI instead of auto-restart loop. Credentials read from `~/.claude/.credentials.json`, not macOS keychain.
+- **Plans page**: View captured plans with filtering, status tracking, expand/collapse.
+
 ---
 
 ## [0.11.0] - 2026-04-09

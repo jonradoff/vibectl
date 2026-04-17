@@ -9,4 +9,9 @@ type Settings struct {
 
 	// Experimental features — all off by default.
 	ExperimentalShell bool `json:"experimentalShell" bson:"experimentalShell"`
+
+	// Stale project detection
+	StaleProjectReminderDays int        `json:"staleProjectReminderDays" bson:"staleProjectReminderDays"` // default 7
+	StaleProjectSnoozeUntil  *time.Time `json:"staleProjectSnoozeUntil,omitempty" bson:"staleProjectSnoozeUntil,omitempty"`
+	ShowInactiveProjects     bool       `json:"showInactiveProjects" bson:"showInactiveProjects"`
 }

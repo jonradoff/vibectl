@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -192,6 +194,21 @@ func main() {
 	if err := planService.EnsureIndexes(idxCtx); err != nil {
 		slog.Error("failed to ensure plan indexes", "error", err)
 	}
+	codeDeltaService := services.NewCodeDeltaService(db)
+	if err := codeDeltaService.EnsureIndexes(idxCtx); err != nil {
+		slog.Error("failed to ensure code delta indexes", "error", err)
+	}
+	intentService := services.NewIntentService(db)
+	if err := intentService.EnsureIndexes(idxCtx); err != nil {
+		slog.Error("failed to ensure intent indexes", "error", err)
+	}
+
+	// Intent extractor (requires Anthropic key for Haiku analysis)
+	var intentExtractor *services.IntentExtractor
+	if cfg.AnthropicKey != "" {
+		aiClient := agents.NewAIClient(cfg.AnthropicKey)
+		intentExtractor = services.NewIntentExtractor(intentService, codeDeltaService, claudeUsageService, aiClient)
+	}
 
 	vibectlMdService := services.NewVibectlMdService(projectService, issueService, feedbackService, sessionService, decisionService, healthRecordService, config.Version)
 
@@ -240,6 +257,16 @@ func main() {
 			}
 		}()
 	}
+	// Wire VIBECTL.md context injection — queue updates for active sessions
+	vibectlMdService.OnWrite = func(projectID, content string) {
+		chatManager.InjectContextUpdate(projectID, content)
+	}
+
+	if intentExtractor != nil {
+		chatManager.IntentExtractor = func(entry *models.ChatHistoryEntry) {
+			intentExtractor.ExtractFromSessionAsync(entry)
+		}
+	}
 	chatWSHandler := terminal.NewChatWebSocketHandler(chatManager, func(projectID, text string) {
 		snippet := text
 		if len(snippet) > 120 {
@@ -287,9 +314,156 @@ func main() {
 			}
 		},
 	)
+	// Per-project baselines: snapshot git state before prompt, diff after.
+	// Persisted to MongoDB so baselines survive server restarts.
+	gitBaselineService := services.NewGitBaselineService(db)
+	if err := gitBaselineService.EnsureIndexes(idxCtx); err != nil {
+		slog.Error("failed to ensure git baseline indexes", "error", err)
+	}
+	if cleaned, err := gitBaselineService.CleanupStale(idxCtx, 24*time.Hour); err != nil {
+		slog.Error("failed to cleanup stale git baselines", "error", err)
+	} else if cleaned > 0 {
+		slog.Info("cleaned up stale git baselines", "count", cleaned)
+	}
+
+	gitNumstat := func(dir string) (string, error) {
+		cmd := exec.Command("git", "diff", "--numstat")
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+
+	gitHead := func(dir string) string {
+		cmd := exec.Command("git", "rev-parse", "HEAD")
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	parseNumstat := func(raw string) (added, removed int64, files int, fileChanges []models.FileChange) {
+		for _, line := range strings.Split(raw, "\n") {
+			if line == "" {
+				continue
+			}
+			parts := strings.Fields(line)
+			if len(parts) < 3 {
+				continue
+			}
+			filePath := parts[2]
+			if parts[0] == "-" {
+				// Binary file
+				fileChanges = append(fileChanges, models.FileChange{Path: filePath})
+				files++
+				continue
+			}
+			var a, r int64
+			fmt.Sscanf(parts[0], "%d", &a)
+			fmt.Sscanf(parts[1], "%d", &r)
+			added += a
+			removed += r
+			files++
+			fileChanges = append(fileChanges, models.FileChange{Path: filePath, LinesAdded: a, LinesRemoved: r})
+		}
+		return
+	}
+
+	chatWSHandler.SetCodeDeltaCallbacks(
+		// Snapshot: record baseline before prompt (persisted to MongoDB)
+		func(projectID, localPath string) {
+			head := gitHead(localPath)
+			numstat, _ := gitNumstat(localPath)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			gitBaselineService.Upsert(ctx, projectID, head, numstat)
+		},
+		// Record: diff from baseline after prompt completes
+		func(projectID, localPath, sessionID string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			bl, _ := gitBaselineService.Get(ctx, projectID)
+			gitBaselineService.Delete(ctx, projectID) // consume
+			cancel()
+
+			if bl == nil {
+				return
+			}
+
+			nowHead := gitHead(localPath)
+			nowNumstat, _ := gitNumstat(localPath)
+
+			var totalAdded, totalRemoved int64
+			var totalFiles int
+			var allFiles []models.FileChange
+
+			// Case 1: commits happened between snapshot and now
+			if nowHead != bl.CommitSHA && bl.CommitSHA != "" {
+				cmd := exec.Command("git", "diff", "--numstat", bl.CommitSHA, nowHead)
+				cmd.Dir = localPath
+				if out, err := cmd.Output(); err == nil {
+					a, r, f, fc := parseNumstat(strings.TrimSpace(string(out)))
+					totalAdded += a
+					totalRemoved += r
+					totalFiles += f
+					allFiles = append(allFiles, fc...)
+				}
+			}
+
+			// Case 2: uncommitted changes diff (new minus old)
+			oldAdded, oldRemoved, _, _ := parseNumstat(bl.Numstat)
+			nowA, nowR, nowF, nowFC := parseNumstat(nowNumstat)
+			uncommittedDeltaAdded := nowA - oldAdded
+			uncommittedDeltaRemoved := nowR - oldRemoved
+			if uncommittedDeltaAdded > 0 {
+				totalAdded += uncommittedDeltaAdded
+			}
+			if uncommittedDeltaRemoved > 0 {
+				totalRemoved += uncommittedDeltaRemoved
+			}
+			if nowHead == bl.CommitSHA && len(nowFC) > 0 {
+				allFiles = append(allFiles, nowFC...)
+				totalFiles = nowF
+			}
+
+			if totalAdded == 0 && totalRemoved == 0 {
+				return
+			}
+
+			// Deduplicate files by path
+			seen := map[string]int{}
+			var dedupFiles []models.FileChange
+			for _, fc := range allFiles {
+				if idx, ok := seen[fc.Path]; ok {
+					dedupFiles[idx].LinesAdded += fc.LinesAdded
+					dedupFiles[idx].LinesRemoved += fc.LinesRemoved
+				} else {
+					seen[fc.Path] = len(dedupFiles)
+					dedupFiles = append(dedupFiles, fc)
+				}
+			}
+
+			delta := &models.CodeDelta{
+				SessionID:    sessionID,
+				LinesAdded:   totalAdded,
+				LinesRemoved: totalRemoved,
+				BytesDelta:   (totalAdded - totalRemoved) * 40,
+				FilesChanged: totalFiles,
+				Files:        dedupFiles,
+			}
+			if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
+				delta.ProjectID = &oid
+			}
+			codeDeltaService.RecordAsync(delta)
+		},
+	)
 	chatHistoryHandler := handlers.NewChatHistoryHandler(chatHistoryService)
 	chatSessionHandler := handlers.NewChatSessionHandler(chatSessionService, chatHistoryService)
 	planHandler := handlers.NewPlanHandler(planService)
+	intentHandler := handlers.NewIntentHandler(intentService, intentExtractor, projectService)
 
 	// -------------------------------------------------------------------------
 	// Handlers
@@ -309,11 +483,13 @@ func main() {
 	feedbackHandler := handlers.NewFeedbackHandler(feedbackService, issueService, triageAgent, themesAgent, decisionService, vibectlMdService, projectService, activityLogService, webhookService, eventBus)
 	settingsHandler := handlers.NewSettingsHandler(settingsService, cfg.DatabaseName, parseMongoUser(cfg.MongoDBURI))
 	sessionHandler := handlers.NewSessionHandler(sessionService, eventBus)
-	dashboardHandler := handlers.NewDashboardHandler(projectService, issueService, sessionService, feedbackService, memberService, activityLogService, healthRecordService)
+	dashboardHandler := handlers.NewDashboardHandler(projectService, issueService, sessionService, feedbackService, memberService, activityLogService, healthRecordService, codeDeltaService)
 
 	var ghSweeper *ingestion.GitHubSweeper
+	var prSweeper *ingestion.PRSweeper
 	if cfg.GitHubToken != "" {
 		ghSweeper = ingestion.NewGitHubSweeper(projectService, feedbackService, cfg.GitHubToken)
+		prSweeper = ingestion.NewPRSweeper(intentService, cfg.GitHubToken)
 	}
 
 	claudeUsageHandler := handlers.NewClaudeUsageHandler(claudeUsageService)
@@ -412,6 +588,8 @@ func main() {
 
 			// Static project routes (before {id} wildcard)
 			r.Get("/projects/archived", projectHandler.ListArchived)
+			r.Get("/projects/tags", projectHandler.ListAllTags)
+			r.Get("/projects/stale", projectHandler.ListStale)
 			r.Mount("/projects/code", projectHandler.CodeRoutes())
 
 			r.Route("/projects", func(r chi.Router) {
@@ -423,6 +601,8 @@ func main() {
 					r.Delete("/", projectHandler.Delete)
 					r.Post("/archive", projectHandler.Archive)
 					r.Post("/unarchive", projectHandler.Unarchive)
+					r.Post("/set-inactive", projectHandler.SetInactive)
+					r.Post("/set-active", projectHandler.SetActive)
 					r.Get("/dashboard", projectHandler.Dashboard)
 					r.Get("/my-role", projectHandler.MyRole)
 					r.Post("/activity", activityLogHandler.PostActivity)
@@ -486,6 +666,7 @@ func main() {
 			r.Mount("/prompts", promptHandler.PromptRoutes())
 			r.Mount("/activity-log", activityLogHandler.Routes())
 			r.Mount("/plans", planHandler.Routes())
+			r.Mount("/intents", intentHandler.Routes())
 			r.Mount("/settings", settingsHandler.Routes())
 			r.Mount("/client-instances", clientInstanceHandler.Routes())
 			r.Get("/events/stream", eventsHandler.Stream)
@@ -551,6 +732,20 @@ func main() {
 			}
 		}()
 		slog.Info("GitHub comment sweeper enabled (15m interval)")
+	}
+
+	// PR state sweeper — checks open PRs on intents every 5 minutes
+	if prSweeper != nil {
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			time.Sleep(30 * time.Second) // stagger startup
+			prSweeper.Sweep(context.Background())
+			for range ticker.C {
+				prSweeper.Sweep(context.Background())
+			}
+		}()
+		slog.Info("PR state sweeper enabled (5m interval)")
 	}
 
 	// VIBECTL.md auto-regen

@@ -424,3 +424,50 @@ Create or update usage configuration for a login identity.
   "alertThreshold": 70
 }
 ```
+
+---
+
+## Intents
+
+### `GET /api/v1/intents`
+
+List developer intents extracted from chat sessions.
+
+**Query Parameters:**
+- `projectId` — filter by project
+- `status` — filter by status (`delivered`, `partial`, `abandoned`, `deferred`)
+- `category` — filter by category (`UI`, `API`, `infra`, `data`, `test`, `docs`, `bugfix`, `refactor`)
+- `days` — only intents from the last N days
+- `limit` — max results (default 100)
+
+### `GET /api/v1/intents/{id}`
+
+Get a single intent by ID.
+
+### `PATCH /api/v1/intents/{id}`
+
+Update an intent (manual override). Allowed fields: `title`, `size`, `sizePoints`, `status`, `category`, `description`.
+
+### `GET /api/v1/intents/productivity`
+
+Aggregated productivity metrics per project. Accepts `?days=` (default 7).
+
+Returns per-project: points delivered, intent count, breakdown by status and category, total tokens, total wall-clock time.
+
+### `GET /api/v1/intents/insights`
+
+Comparative analysis data for the insights panel. Accepts `?days=` (default 30).
+
+Returns: tokens per point by category, by tech tag, by UX judgment level, and daily points delivered.
+
+### `POST /api/v1/intents/backfill`
+
+Trigger background analysis of historical chat sessions that don't yet have linked intents. Requires `ANTHROPIC_API_KEY`. Processes up to 20 sessions sequentially with rate limiting.
+
+---
+
+## Tags
+
+### `GET /api/v1/projects/tags`
+
+Returns all unique tags across non-archived projects as a string array. Used for autocomplete.

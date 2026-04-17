@@ -101,6 +101,10 @@ func main() {
 		cmdSessions(args[1:])
 	case "prompts":
 		cmdPrompts(args[1:])
+	case "intents":
+		cmdIntents(args[1:])
+	case "activity":
+		cmdActivity(args[1:])
 	case "admin":
 		cmdAdmin(args[1:])
 	case "setup-client":
@@ -1121,6 +1125,144 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max-3] + "..."
+}
+
+func cmdIntents(args []string) {
+	if len(args) < 1 {
+		fatalf("usage: vibectl intents <list|get|update|productivity|backfill> [args]\n")
+	}
+	switch args[0] {
+	case "list":
+		fs := flag.NewFlagSet("intents-list", flag.ExitOnError)
+		projectCode := fs.String("project", "", "Project code to filter by")
+		status := fs.String("status", "", "Filter by status")
+		category := fs.String("category", "", "Filter by category")
+		days := fs.Int("days", 30, "Days to look back")
+		limit := fs.Int("limit", 50, "Max results")
+		fs.Parse(args[1:])
+
+		params := fmt.Sprintf("?days=%d&limit=%d", *days, *limit)
+		if *projectCode != "" {
+			pid, err := lookupProjectID(*projectCode)
+			if err != nil { fatalf("%v\n", err) }
+			params += "&projectId=" + pid
+		}
+		if *status != "" { params += "&status=" + *status }
+		if *category != "" { params += "&category=" + *category }
+
+		data, err := doGet("/api/v1/intents" + params)
+		if err != nil { fatalf("%v\n", err) }
+		if formatJSON { printRawJSON(data); return }
+
+		var intents []map[string]interface{}
+		json.Unmarshal(data, &intents)
+		if len(intents) == 0 { fmt.Println("No intents found."); return }
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "STATUS\tSIZE\tCATEGORY\tTITLE")
+		for _, i := range intents {
+			fmt.Fprintf(w, "%s\t%s (%spt)\t%s\t%s\n",
+				str(i, "status"), str(i, "size"), str(i, "sizePoints"),
+				str(i, "category"), truncate(str(i, "title"), 60))
+		}
+		w.Flush()
+
+	case "get":
+		if len(args) < 2 { fatalf("usage: vibectl intents get <id>\n") }
+		data, err := doGet("/api/v1/intents/" + args[1])
+		if err != nil { fatalf("%v\n", err) }
+		if formatJSON { printRawJSON(data); return }
+		var intent map[string]interface{}
+		json.Unmarshal(data, &intent)
+		fmt.Printf("Title:    %s\n", str(intent, "title"))
+		fmt.Printf("Status:   %s\n", str(intent, "status"))
+		fmt.Printf("Size:     %s (%s pts)\n", str(intent, "size"), str(intent, "sizePoints"))
+		fmt.Printf("Category: %s\n", str(intent, "category"))
+		fmt.Printf("Desc:     %s\n", str(intent, "description"))
+
+	case "update":
+		if len(args) < 2 { fatalf("usage: vibectl intents update <id> --status delivered\n") }
+		intentID := args[1]
+		fs := flag.NewFlagSet("intents-update", flag.ExitOnError)
+		status := fs.String("status", "", "New status")
+		title := fs.String("title", "", "New title")
+		size := fs.String("size", "", "New size")
+		category := fs.String("category", "", "New category")
+		fs.Parse(args[2:])
+
+		body := map[string]string{}
+		if *status != "" { body["status"] = *status }
+		if *title != "" { body["title"] = *title }
+		if *size != "" { body["size"] = *size }
+		if *category != "" { body["category"] = *category }
+		if len(body) == 0 { fatalf("no fields to update\n") }
+
+		_, err := doPatch("/api/v1/intents/"+intentID, body)
+		if err != nil { fatalf("%v\n", err) }
+		fmt.Println("Intent updated.")
+
+	case "productivity":
+		fs := flag.NewFlagSet("intents-productivity", flag.ExitOnError)
+		days := fs.Int("days", 7, "Days to look back")
+		fs.Parse(args[1:])
+
+		data, err := doGet(fmt.Sprintf("/api/v1/intents/productivity?days=%d", *days))
+		if err != nil { fatalf("%v\n", err) }
+		if formatJSON { printRawJSON(data); return }
+
+		var stats []map[string]interface{}
+		json.Unmarshal(data, &stats)
+		if len(stats) == 0 { fmt.Println("No productivity data."); return }
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "PROJECT\tPOINTS\tINTENTS")
+		for _, s := range stats {
+			fmt.Fprintf(w, "%s\t%s\t%s\n",
+				str(s, "projectName"), str(s, "pointsDelivered"), str(s, "intentCount"))
+		}
+		w.Flush()
+
+	case "backfill":
+		data, err := doPost("/api/v1/intents/backfill", nil)
+		if err != nil { fatalf("%v\n", err) }
+		var resp map[string]interface{}
+		json.Unmarshal(data, &resp)
+		fmt.Printf("Processing: %v sessions (%v remaining)\n", resp["processing"], resp["remaining"])
+
+	default:
+		fatalf("unknown intents sub-command: %s\n", args[0])
+	}
+}
+
+func cmdActivity(args []string) {
+	if len(args) < 1 {
+		fatalf("usage: vibectl activity CODE [--limit N]\n")
+	}
+	code := args[0]
+	fs := flag.NewFlagSet("activity", flag.ExitOnError)
+	limit := fs.Int("limit", 20, "Number of entries")
+	fs.Parse(args[1:])
+
+	projectID, err := lookupProjectID(code)
+	if err != nil { fatalf("%v\n", err) }
+
+	data, err := doGet(fmt.Sprintf("/api/v1/activity-log?projectId=%s&limit=%d", projectID, *limit))
+	if err != nil { fatalf("%v\n", err) }
+	if formatJSON { printRawJSON(data); return }
+
+	var resp map[string]interface{}
+	json.Unmarshal(data, &resp)
+	entries, _ := resp["entries"].([]interface{})
+	if len(entries) == 0 { fmt.Println("No activity logged."); return }
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TIME\tTYPE\tMESSAGE")
+	for _, e := range entries {
+		entry, _ := e.(map[string]interface{})
+		fmt.Fprintf(w, "%s\t%s\t%s\n",
+			formatTime(str(entry, "timestamp")), str(entry, "type"), truncate(str(entry, "message"), 60))
+	}
+	w.Flush()
 }
 
 func formatTime(s string) string {

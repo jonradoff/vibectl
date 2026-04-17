@@ -278,6 +278,49 @@ export const bulkRestartProd = (): Promise<{ results: { projectId: string; proje
 
 // ---- Projects ----
 export const listProjects = () => request<Project[]>('/projects');
+export const listAllTags = () => request<string[]>('/projects/tags');
+export const listStaleProjects = (days?: number) =>
+  request<Project[]>(`/projects/stale${days ? `?days=${days}` : ''}`);
+export const setProjectInactive = (id: string) =>
+  request<{ status: string }>(`/projects/${id}/set-inactive`, { method: 'POST' });
+export const setProjectActive = (id: string) =>
+  request<{ status: string }>(`/projects/${id}/set-active`, { method: 'POST' });
+
+export interface ProductivityEntry {
+  projectId: string;
+  projectName: string;
+  projectCode: string;
+  tags?: string[];
+  linesAdded: number;
+  linesRemoved: number;
+  bytesDelta: number;
+  filesChanged: number;
+  promptCount: number;
+}
+export const getProductivity = (days?: number) =>
+  request<ProductivityEntry[]>(`/dashboard/productivity${days ? `?days=${days}` : ''}`);
+
+// ---- Intents ----
+export const listIntents = (params?: { projectId?: string; status?: string; category?: string; days?: number; limit?: number }) => {
+  const qs = params ? '?' + new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])
+  ).toString() : '';
+  return request<import('../types').Intent[]>(`/intents${qs}`);
+};
+export const getIntentProductivity = (days?: number) =>
+  request<import('../types').IntentProductivityStats[]>(`/intents/productivity${days ? `?days=${days}` : ''}`);
+export const getIntentInsights = (params?: { days?: number; since?: string; tag?: string }) => {
+  const qs = params ? '?' + new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])
+  ).toString() : '';
+  return request<import('../types').IntentInsights>(`/intents/insights${qs}`);
+};
+export const backfillIntents = () =>
+  request<{ processing: number; remaining: number; message: string }>('/intents/backfill', { method: 'POST' });
+export const getBackfillCount = () =>
+  request<{ remaining: number }>('/intents/backfill-count');
+export const patchIntent = (id: string, data: Partial<import('../types').Intent>) =>
+  request<{ status: string }>(`/intents/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
 export const createProject = (data: Partial<Project>) =>
   request<Project>('/projects', { method: 'POST', body: JSON.stringify(data) });
 export const getProject = (id: string) => request<Project>(`/projects/${id}`);

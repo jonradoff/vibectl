@@ -67,7 +67,8 @@ VibeCtl spawns Claude Code processes in stream-json mode (`-p --input-format str
 
 - **Do NOT pass `CLAUDE_CODE_OAUTH_TOKEN`** from the macOS keychain. Claude Code manages its own token refresh cycle via the keychain. Forcing a snapshot as an env var causes 401s when the token rotates.
 - Only set `CLAUDE_CODE_OAUTH_TOKEN` for **explicitly user-provided tokens**: per-project tokens set via `/login`, or tokens stored in the persistent token file (`~/.vibectl/.claude-oauth-token` or `/data/.claude-oauth-token`).
-- Reading the keychain is fine for **read-only purposes** (e.g., computing a stable hash for usage tracking identity), but never inject it into the process environment.
+- Reading credentials is fine for **read-only purposes** (e.g., computing a stable hash for usage tracking identity, subscription usage API), but never inject them into the process environment.
+- **Credential location changes between Claude Code versions.** Always check both: (1) macOS keychain service `Claude Code-credentials` account `$USER`, and (2) `~/.claude/.credentials.json` → `claudeAiOauth.accessToken`. The `readClaudeTokenFromKeychain()` function handles both.
 
 ## Session resume (`--resume`)
 
@@ -90,6 +91,75 @@ VibeCtl spawns Claude Code processes in stream-json mode (`-p --input-format str
 # UI Conventions
 
 - **No browser dialogs** — Never use `confirm()`, `alert()`, or `prompt()`. Always use a styled React modal instead.
+- **Project cards are the primary interface for project settings and operations.** All project-level configuration (name, description, tags, health checks, deployment, etc.) is managed through the Settings tab of the project card (`CompactSettings` component). Other tabs provide views: Claude Code (terminal), Issues, Feedback, Files, Health, Intents, CI, Session History, Activity Log. New project-level features should be added as tabs or settings within the project card, not as standalone pages.
+- **Tags are project-level labels** set in the project card Settings tab, used for filtering in Mission Control (Projects tab, Productivity tab). These are distinct from intent-level tech tags which are auto-extracted.
+
+# Productivity Measurement System
+
+VibeCtl tracks developer productivity through an **intent-oriented** system, not lines of code.
+
+## Core Concepts
+
+**Intents** are units of developer work extracted automatically from completed chat sessions. When a session is archived, Haiku analyzes the conversation (user prompts, tool calls, files edited, bash commands) and classifies what was accomplished.
+
+Each intent has:
+- **Title + description** — what was done
+- **Category** — UI, API, infra, data, test, docs, bugfix, refactor
+- **Size** — S (1pt), M (3pt), L (5pt), XL (8pt) based on scope
+- **Status** — delivered, partial, abandoned, deferred
+- **Tech tags** — auto-detected languages/frameworks
+- **UX judgment** — low/medium/high (how much visual taste was required)
+
+## Design Principles
+
+1. **Zero manual input for creation** — intents are extracted automatically from chat session data we already capture. The developer never has to log work.
+
+2. **Human review for completion** — Haiku should err on the side of marking intents "partial" rather than "delivered." The developer confirms delivery via "Mark Complete" in the project card Intents tab. This is deliberate: conservative auto-classification ensures nothing falls through.
+
+3. **Points measure scope, not time** — A 5-point intent means it crossed multiple layers (frontend + backend), not that it took 5 hours. Points are relative effort indicators for portfolio-level analysis.
+
+4. **Tokens-per-point is the novel metric** — This measures AI efficiency by category. If UI tasks cost 4x the tokens per point of API tasks, that's actionable signal about where Claude Code adds the most value.
+
+5. **Tags are for portfolio filtering, not intent classification** — Project-level tags (set in Settings) let you slice the dashboard by project groups. Intent-level tech tags are auto-extracted and separate.
+
+## What the Data Shows
+
+- **Points by Category** (donut) — Am I building or maintaining?
+- **Investment by Project** (donut) — Where is my effort going?
+- **Points Over Time** (stacked area) — Is my output shifting?
+- **Tokens per Point** (bar) — Where is AI most/least efficient?
+- **Delivery Funnel** — How much work is falling through vs. completing?
+
+## What the Data Cannot Show
+
+- Whether you're working on the *right* things — points say nothing about business value
+- Accurate velocity trends — sizing is approximate and auto-generated
+- Cross-person comparisons — calibrated for one person's workflow
+
+## Data Flow
+
+1. User sends prompt → chat session captures messages (tool_use blocks, file paths, bash commands)
+2. Session ends → archived to `chat_history` collection
+3. Archive triggers async Haiku analysis → `intents` collection
+4. `code_deltas` capture per-file git diff stats between prompts (enrichment data)
+5. Analytics tab aggregates intents by time range, tag, category, project
+6. Backfill endpoint processes historical sessions that predate the feature
+
+## Collections
+
+- `intents` — extracted developer intents with sizing, status, tech tags
+- `code_deltas` — per-prompt git diff stats with file-level detail
+- `chat_history` — archived session transcripts (source data for extraction)
+- `claude_usage_records` — per-response token counts (90-day TTL)
+
+## Key Implementation Notes
+
+- Intent extraction uses `claude-haiku-4-5-20251001` via the Anthropic API (`ANTHROPIC_API_KEY` required)
+- Messages in `chat_history` are stored as BSON Binary — the extractor scans for the first `{` to find the JSON payload
+- Sessions with no extractable user prompts get a skip placeholder (`analysisModel: "skip"`) to prevent re-processing
+- Skip placeholders and zero-projectId intents are filtered out of all API queries
+- Deleted projects are excluded from productivity aggregation (intents remain but are hidden)
+- Backfill processes 3 sessions per batch synchronously to avoid race conditions and API overload
 
 # Tech Stack
 

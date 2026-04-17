@@ -13,6 +13,7 @@ import (
 func (s *MCPServer) registerTools() {
 	defer s.registerAdditionalTools()
 	defer s.registerMultiModuleTools()
+	defer s.registerIntentTools()
 	// 1. list_projects
 	s.server.AddTool(
 		mcp.NewTool("list_projects",
@@ -951,4 +952,152 @@ func (s *MCPServer) handleAddUnit(ctx context.Context, req mcp.CallToolRequest) 
 		return mcp.NewToolResultError(fmt.Sprintf("failed to add unit: %v", err)), nil
 	}
 	return jsonResult(unit)
+}
+
+// ─── Intent tools ────────────────────────────────────────────────────────────
+
+func (s *MCPServer) registerIntentTools() {
+	s.server.AddTool(
+		mcp.NewTool("list_intents",
+			mcp.WithDescription("List developer intents (extracted work items) for a project. Returns title, category, size, status, tokens, and duration."),
+			mcp.WithReadOnlyHintAnnotation(true),
+			mcp.WithString("project_code", mcp.Description("Project code to filter by (optional)")),
+			mcp.WithString("status", mcp.Description("Filter by status: delivered, partial, abandoned, deferred (optional)")),
+			mcp.WithString("category", mcp.Description("Filter by category: UI, API, infra, data, test, docs, bugfix, refactor (optional)")),
+			mcp.WithNumber("days", mcp.Description("Only intents from the last N days (default 30)")),
+			mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
+		),
+		s.handleListIntents,
+	)
+
+	s.server.AddTool(
+		mcp.NewTool("get_intent",
+			mcp.WithDescription("Get a single intent by its ID."),
+			mcp.WithReadOnlyHintAnnotation(true),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Intent ID")),
+		),
+		s.handleGetIntent,
+	)
+
+	s.server.AddTool(
+		mcp.NewTool("update_intent",
+			mcp.WithDescription("Update an intent's status, title, size, or category."),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Intent ID")),
+			mcp.WithString("status", mcp.Description("New status: delivered, partial, abandoned, deferred")),
+			mcp.WithString("title", mcp.Description("New title")),
+			mcp.WithString("size", mcp.Description("New size: S, M, L, XL")),
+			mcp.WithString("category", mcp.Description("New category")),
+		),
+		s.handleUpdateIntent,
+	)
+
+	s.server.AddTool(
+		mcp.NewTool("list_activity_log",
+			mcp.WithDescription("List recent activity log entries for a project."),
+			mcp.WithReadOnlyHintAnnotation(true),
+			mcp.WithString("project_code", mcp.Required(), mcp.Description("Project code")),
+			mcp.WithNumber("limit", mcp.Description("Max results (default 20)")),
+		),
+		s.handleListActivityLog,
+	)
+}
+
+func (s *MCPServer) handleListIntents(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	projectCode := req.GetString("project_code", "")
+	status := req.GetString("status", "")
+	category := req.GetString("category", "")
+	days := getIntArg(req, "days", 30)
+	limit := getIntArg(req, "limit", 50)
+
+	projectID := ""
+	if projectCode != "" {
+		proj, err := s.backend.GetProjectByCode(ctx, projectCode)
+		if err != nil || proj == nil {
+			return mcp.NewToolResultError(fmt.Sprintf("project %q not found", projectCode)), nil
+		}
+		projectID = proj.ID.Hex()
+	}
+
+	intents, err := s.backend.ListIntents(ctx, projectID, status, category, days, limit)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to list intents: %v", err)), nil
+	}
+	return jsonResult(intents)
+}
+
+func (s *MCPServer) handleGetIntent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id, err := req.RequireString("id")
+	if err != nil {
+		return mcp.NewToolResultError("id is required"), nil
+	}
+	intent, err := s.backend.GetIntentByID(ctx, id)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to get intent: %v", err)), nil
+	}
+	if intent == nil {
+		return mcp.NewToolResultError("intent not found"), nil
+	}
+	return jsonResult(intent)
+}
+
+func (s *MCPServer) handleUpdateIntent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id, err := req.RequireString("id")
+	if err != nil {
+		return mcp.NewToolResultError("id is required"), nil
+	}
+	updates := map[string]interface{}{}
+	if v := req.GetString("status", ""); v != "" {
+		updates["status"] = v
+	}
+	if v := req.GetString("title", ""); v != "" {
+		updates["title"] = v
+	}
+	if v := req.GetString("size", ""); v != "" {
+		updates["size"] = v
+		sizePoints := map[string]int{"S": 1, "M": 3, "L": 5, "XL": 8}[v]
+		if sizePoints > 0 {
+			updates["sizePoints"] = sizePoints
+		}
+	}
+	if v := req.GetString("category", ""); v != "" {
+		updates["category"] = v
+	}
+	if len(updates) == 0 {
+		return mcp.NewToolResultError("no fields to update"), nil
+	}
+	if err := s.backend.UpdateIntent(ctx, id, updates); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to update intent: %v", err)), nil
+	}
+	return mcp.NewToolResultText("intent updated"), nil
+}
+
+func getIntArg(req mcp.CallToolRequest, key string, def int) int {
+	s := req.GetString(key, "")
+	if s != "" {
+		var v int
+		fmt.Sscanf(s, "%d", &v)
+		if v > 0 {
+			return v
+		}
+	}
+	return def
+}
+
+func (s *MCPServer) handleListActivityLog(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	code, err := req.RequireString("project_code")
+	if err != nil {
+		return mcp.NewToolResultError("project_code is required"), nil
+	}
+	limit := getIntArg(req, "limit", 20)
+
+	proj, err := s.backend.GetProjectByCode(ctx, code)
+	if err != nil || proj == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("project %q not found", code)), nil
+	}
+
+	entries, err := s.backend.ListActivityLog(ctx, proj.ID.Hex(), limit)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to list activity log: %v", err)), nil
+	}
+	return jsonResult(entries)
 }

@@ -249,6 +249,12 @@ func (s *ProjectService) Update(ctx context.Context, id string, req *models.Upda
 	if req.Webhooks != nil {
 		setFields = append(setFields, bson.E{Key: "webhooks", Value: *req.Webhooks})
 	}
+	if req.Tags != nil {
+		setFields = append(setFields, bson.E{Key: "tags", Value: *req.Tags})
+	}
+	if req.Inactive != nil {
+		setFields = append(setFields, bson.E{Key: "inactive", Value: *req.Inactive})
+	}
 
 	update := bson.D{{Key: "$set", Value: setFields}}
 
@@ -263,6 +269,68 @@ func (s *ProjectService) Update(ctx context.Context, id string, req *models.Upda
 	}
 	s.publish("project.updated", id)
 	return &project, nil
+}
+
+// SetField sets a single field on a project.
+func (s *ProjectService) SetField(ctx context.Context, id string, field string, value interface{}) error {
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		return err
+	}
+	_, err = s.collection.UpdateByID(ctx, oid, bson.D{{Key: "$set", Value: bson.D{{Key: field, Value: value}}}})
+	return err
+}
+
+// ListStale returns non-archived, non-inactive projects with no prompt_sent activity in `days` days.
+func (s *ProjectService) ListStale(ctx context.Context, days int, activityLog *ActivityLogService) ([]models.Project, error) {
+	projects, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	var stale []models.Project
+	for _, p := range projects {
+		if p.Archived || p.Inactive {
+			continue
+		}
+		lastPrompt, err := activityLog.LastPromptAt(ctx, p.ID)
+		if err != nil {
+			continue
+		}
+		if lastPrompt == nil || lastPrompt.Before(since) {
+			stale = append(stale, p)
+		}
+	}
+	return stale, nil
+}
+
+// ListAllTags returns all unique tags across all non-archived projects.
+func (s *ProjectService) ListAllTags(ctx context.Context) ([]string, error) {
+	pipeline := bson.A{
+		bson.D{{Key: "$match", Value: bson.D{{Key: "archived", Value: bson.D{{Key: "$ne", Value: true}}}}}},
+		bson.D{{Key: "$unwind", Value: "$tags"}},
+		bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$tags"}}}},
+		bson.D{{Key: "$sort", Value: bson.D{{Key: "_id", Value: 1}}}},
+	}
+	cursor, err := s.collection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate tags: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var tags []string
+	for cursor.Next(ctx) {
+		var result struct {
+			ID string `bson:"_id"`
+		}
+		if err := cursor.Decode(&result); err == nil && result.ID != "" {
+			tags = append(tags, result.ID)
+		}
+	}
+	if tags == nil {
+		tags = []string{}
+	}
+	return tags, nil
 }
 
 // Delete removes a project by its ObjectID hex string.

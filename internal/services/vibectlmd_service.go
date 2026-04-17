@@ -25,6 +25,8 @@ type VibectlMdService struct {
 	healthRecords *HealthRecordService
 	version       string
 	writeMu       sync.Map // projectID string → *sync.Mutex
+	// OnWrite is called after VIBECTL.md is successfully written, with (projectID, content).
+	OnWrite func(projectID, content string)
 }
 
 func NewVibectlMdService(
@@ -161,6 +163,11 @@ func (s *VibectlMdService) WriteToProject(ctx context.Context, projectID string)
 
 	now := time.Now().UTC()
 	_ = s.projects.SetVibectlMdGeneratedAt(ctx, projectID, now)
+
+	// Notify active sessions of the update
+	if s.OnWrite != nil {
+		go s.OnWrite(projectID, content)
+	}
 	return nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
@@ -53,6 +54,7 @@ func (h *ProjectHandler) Routes() chi.Router {
 	r.Get("/", h.List)
 	r.With(middleware.RequireSuperAdmin).Post("/", h.Create)
 	r.Get("/archived", h.ListArchived)
+	r.Get("/tags", h.ListAllTags)
 	r.Get("/{id}", h.GetByID)
 	r.Put("/{id}", h.Update)
 	r.Delete("/{id}", h.Delete)
@@ -651,4 +653,61 @@ func regenerateClaudeMds(parent *models.Project, units []models.Project) {
 		}
 	}
 	slog.Info("regenerated CLAUDE.md files", "path", rootPath, "units", len(units))
+}
+
+// ListStale handles GET /api/v1/projects/stale — returns projects with no recent prompts.
+func (h *ProjectHandler) ListStale(w http.ResponseWriter, r *http.Request) {
+	daysStr := r.URL.Query().Get("days")
+	days := 7
+	if daysStr != "" {
+		fmt.Sscanf(daysStr, "%d", &days)
+	}
+	stale, err := h.projectService.ListStale(r.Context(), days, h.activityLogService)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_STALE_FAILED")
+		return
+	}
+	middleware.WriteJSON(w, http.StatusOK, stale)
+}
+
+// SetInactive handles POST /api/v1/projects/{id}/set-inactive.
+func (h *ProjectHandler) SetInactive(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	now := time.Now().UTC()
+	_, err := h.projectService.Update(r.Context(), id, &models.UpdateProjectRequest{
+		Inactive: boolPtr(true),
+	})
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "UPDATE_FAILED")
+		return
+	}
+	// Also set inactiveSince directly
+	h.projectService.SetField(r.Context(), id, "inactiveSince", now)
+	middleware.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// SetActive handles POST /api/v1/projects/{id}/set-active.
+func (h *ProjectHandler) SetActive(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	_, err := h.projectService.Update(r.Context(), id, &models.UpdateProjectRequest{
+		Inactive: boolPtr(false),
+	})
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "UPDATE_FAILED")
+		return
+	}
+	h.projectService.SetField(r.Context(), id, "inactiveSince", nil)
+	middleware.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// ListAllTags handles GET /api/v1/projects/tags — returns all unique tags.
+func (h *ProjectHandler) ListAllTags(w http.ResponseWriter, r *http.Request) {
+	tags, err := h.projectService.ListAllTags(r.Context())
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_TAGS_FAILED")
+		return
+	}
+	middleware.WriteJSON(w, http.StatusOK, tags)
 }

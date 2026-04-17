@@ -71,6 +71,21 @@ func (s *ClaudeUsageService) Record(ctx context.Context, rec *models.ClaudeUsage
 	return nil
 }
 
+// GetBySessionID returns all usage records for a given Claude session ID.
+func (s *ClaudeUsageService) GetBySessionID(ctx context.Context, sessionID string) ([]models.ClaudeUsageRecord, error) {
+	cursor, err := s.records.Find(ctx, bson.D{{Key: "sessionId", Value: sessionID}})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var results []models.ClaudeUsageRecord
+	cursor.All(ctx, &results)
+	if results == nil {
+		results = []models.ClaudeUsageRecord{}
+	}
+	return results, nil
+}
+
 // GetConfig returns the config for a token hash, or a default if none exists.
 func (s *ClaudeUsageService) GetConfig(ctx context.Context, tokenHash string) (*models.ClaudeUsageConfig, error) {
 	var cfg models.ClaudeUsageConfig

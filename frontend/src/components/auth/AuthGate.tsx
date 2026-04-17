@@ -112,11 +112,13 @@ function LoginScreen() {
     try {
       await login({ email: email || undefined, password });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '';
-      if (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed to fetch')) {
-        setError('Cannot reach server. Check that the backend is running.');
-      } else {
+      const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+      if (msg.includes('fetch') || msg.includes('network') || msg.includes('load failed') || msg.includes('networkerror') || msg.includes('econnrefused') || err instanceof TypeError) {
+        setError('Cannot reach server. Is the backend running on port 4380?');
+      } else if (msg.includes('unauthorized') || msg.includes('invalid') || msg.includes('credentials')) {
         setError('Invalid email or password.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Login failed.');
       }
       setPassword('');
     } finally {

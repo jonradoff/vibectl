@@ -2,7 +2,8 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listIssues, updateProject, createIssue, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects } from '../../api/client'
+import { listIssues, updateProject, createIssue, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent } from '../../api/client'
+import type { Intent } from '../../types'
 import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, DeploymentConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ActivityLogEntry } from '../../types'
 import { priorityColors, typeColors } from '../../types'
 import ChatView from '../chat/ChatView'
@@ -22,14 +23,14 @@ interface ProjectCardProps {
   embedded?: boolean // true when rendered inside MultiModuleCard (no own header chrome)
 }
 
-type CardTab = 'terminal' | 'shell' | 'issues' | 'files' | 'history' | 'health' | 'log' | 'settings' | 'members' | 'ci' | 'feedback' | 'modules'
+type CardTab = 'terminal' | 'shell' | 'issues' | 'files' | 'history' | 'health' | 'log' | 'settings' | 'members' | 'ci' | 'feedback' | 'modules' | 'intents'
 
 export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
   const { project, openIssueCount } = summary
   const [activeTab, setActiveTabRaw] = useState<CardTab>(() => {
     try {
       const saved = localStorage.getItem(`vibectl-card-tab-${project.id}`)
-      if (saved && ['terminal','shell','issues','files','history','health','log','settings','members','ci','feedback','modules'].includes(saved)) {
+      if (saved && ['terminal','shell','issues','files','history','health','log','settings','members','ci','feedback','modules','intents'].includes(saved)) {
         return saved as CardTab
       }
     } catch { /* ignore */ }
@@ -199,6 +200,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
   ]
 
   const menuItems: { key: CardTab; label: string; icon: string }[] = [
+    { key: 'intents', label: 'Intents', icon: 'intents' },
     { key: 'settings', label: 'Settings', icon: 'settings' },
     { key: 'history', label: 'Session History', icon: 'history' },
     { key: 'log', label: 'Activity Log', icon: 'log' },
@@ -551,6 +553,9 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
         {activeTab === 'settings' && (
           <CompactSettings project={project} currentUserRole={summary.currentUserRole} onClone={handleClone} />
         )}
+        {activeTab === 'intents' && (
+          <ProjectIntentsTab projectId={project.id} />
+        )}
         {activeTab === 'feedback' && (
           <FeedbackTab projectId={project.id} projectCode={project.code} />
         )}
@@ -829,6 +834,12 @@ function TabIcon({ name }: { name: string }) {
           <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 7.125C2.25 6.504 2.754 6 3.375 6h6c.621 0 1.125.504 1.125 1.125v3.75c0 .621-.504 1.125-1.125 1.125h-6a1.125 1.125 0 0 1-1.125-1.125v-3.75ZM14.25 8.625c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v8.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 0 1-1.125-1.125v-8.25ZM3.75 16.125c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v2.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 0 1-1.125-1.125v-2.25Z" />
         </svg>
       )
+    case 'intents':
+      return (
+        <svg className={cls} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" />
+        </svg>
+      )
     default:
       return <span className="text-xs">{name}</span>
   }
@@ -1059,6 +1070,138 @@ function NewIssueModal({ projectId, onClose }: { projectId: string; onClose: () 
   )
 }
 
+function ProjectIntentsTab({ projectId }: { projectId: string }) {
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+
+  const { data: intents = [], isLoading } = useQuery({
+    queryKey: ['intents', projectId],
+    queryFn: () => listIntents({ projectId, limit: 100 }),
+    refetchInterval: 30_000,
+  })
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) => patchIntent(id, { status } as Partial<Intent>),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['intents', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['intentProductivity'] })
+    },
+  })
+
+  const delivered = intents.filter((i: Intent) => i.status === 'delivered')
+  const deliveredPoints = delivered.reduce((s: number, i: Intent) => s + i.sizePoints, 0)
+  const totalPoints = intents.reduce((s: number, i: Intent) => s + i.sizePoints, 0)
+  const totalTokens = intents.reduce((s: number, i: Intent) => s + i.tokensInput + i.tokensOutput, 0)
+
+  const formatTokens = (n: number) => n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n)
+  const formatDuration = (secs: number) => {
+    if (secs < 60) return `${secs}s`
+    if (secs < 3600) return `${Math.round(secs / 60)}m`
+    return `${(secs / 3600).toFixed(1)}h`
+  }
+
+  const categoryColors: Record<string, string> = {
+    UI: 'bg-purple-500/20 text-purple-300', API: 'bg-blue-500/20 text-blue-300',
+    infra: 'bg-orange-500/20 text-orange-300', data: 'bg-cyan-500/20 text-cyan-300',
+    test: 'bg-green-500/20 text-green-300', docs: 'bg-gray-500/20 text-gray-300',
+    bugfix: 'bg-red-500/20 text-red-300', refactor: 'bg-amber-500/20 text-amber-300',
+  }
+  const statusIcons: Record<string, string> = {
+    delivered: '\u2705', partial: '\u26a0\ufe0f', abandoned: '\u274c', deferred: '\u23f8\ufe0f',
+  }
+
+  if (isLoading) {
+    return <div className="p-3 space-y-2">{[...Array(3)].map((_, i) => <div key={i} className="h-8 animate-pulse rounded bg-gray-800" />)}</div>
+  }
+
+  return (
+    <div className="p-3 overflow-y-auto h-full text-xs space-y-3">
+      {/* Summary */}
+      <div className="flex gap-3">
+        <div className="rounded bg-gray-800/50 border border-gray-700/40 px-2.5 py-1.5 text-center flex-1">
+          <div className="font-bold text-indigo-400">{deliveredPoints}<span className="text-gray-600 font-normal">/{totalPoints}</span></div>
+          <div className="text-[9px] text-gray-500">Points</div>
+        </div>
+        <div className="rounded bg-gray-800/50 border border-gray-700/40 px-2.5 py-1.5 text-center flex-1">
+          <div className="font-bold text-emerald-400">{delivered.length}<span className="text-gray-600 font-normal">/{intents.length}</span></div>
+          <div className="text-[9px] text-gray-500">Delivered</div>
+        </div>
+        <div className="rounded bg-gray-800/50 border border-gray-700/40 px-2.5 py-1.5 text-center flex-1">
+          <div className="font-bold text-gray-400">{formatTokens(totalTokens)}</div>
+          <div className="text-[9px] text-gray-500">Tokens</div>
+        </div>
+      </div>
+
+      {intents.length === 0 ? (
+        <div className="text-center py-6 text-gray-600">No intents extracted yet.</div>
+      ) : (
+        <div className="space-y-1">
+          {intents.map((intent: Intent) => (
+            <div key={intent.id} className="rounded border border-gray-700/40 bg-gray-800/30 overflow-hidden">
+              <button
+                onClick={() => setExpandedId(expandedId === intent.id ? null : intent.id)}
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-gray-700/20 transition-colors"
+              >
+                <span className="text-[11px]">{statusIcons[intent.status] || ''}</span>
+                <span className="font-medium text-gray-300 flex-1 truncate">{intent.title}</span>
+                <span className={`rounded px-1 py-0 text-[9px] font-medium ${categoryColors[intent.category] || 'bg-gray-700/50 text-gray-400'}`}>{intent.category}</span>
+                <span className="text-[10px] font-mono text-gray-500">{intent.size} ({intent.sizePoints}pt)</span>
+              </button>
+              {expandedId === intent.id && (
+                <div className="px-2.5 py-2 border-t border-gray-700/30 space-y-1.5 text-[10px]">
+                  <p className="text-gray-400">{intent.description}</p>
+                  <div className="flex flex-wrap gap-1">
+                    {(intent.techTags ?? []).map(t => <span key={t} className="rounded bg-gray-700/50 px-1.5 py-0.5 text-gray-400">{t}</span>)}
+                  </div>
+                  <div className="flex gap-3 text-gray-500">
+                    <span>{intent.size} ({intent.sizePoints} pt)</span>
+                    <span>UX: {intent.uxJudgment}</span>
+                    <span>Tokens: {formatTokens(intent.tokensInput + intent.tokensOutput)}</span>
+                    <span>Duration: {formatDuration(intent.wallClockSecs)}</span>
+                    <span>Prompts: {intent.promptCount}</span>
+                  </div>
+                  <p className="text-gray-600 italic">{intent.statusEvidence}</p>
+                  {(intent.filesChanged ?? []).length > 0 && (
+                    <details>
+                      <summary className="text-gray-500 cursor-pointer">{(intent.filesChanged ?? []).length} files</summary>
+                      <div className="mt-1 font-mono text-gray-600 max-h-20 overflow-y-auto">
+                        {(intent.filesChanged ?? []).map((f, i) => <div key={i}>{f}</div>)}
+                      </div>
+                    </details>
+                  )}
+                  <div className="flex items-center justify-between mt-1 pt-1 border-t border-gray-700/20">
+                    <span className="text-gray-600">{new Date(intent.completedAt).toLocaleString()}</span>
+                    <div className="flex gap-1.5">
+                      {intent.status !== 'delivered' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); statusMutation.mutate({ id: intent.id, status: 'delivered' }) }}
+                          disabled={statusMutation.isPending}
+                          className="rounded bg-emerald-800/40 hover:bg-emerald-700/50 text-emerald-300 px-2 py-0.5 text-[9px] font-medium transition-colors"
+                        >
+                          Mark Complete
+                        </button>
+                      )}
+                      {intent.status === 'delivered' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); statusMutation.mutate({ id: intent.id, status: 'partial' }) }}
+                          disabled={statusMutation.isPending}
+                          className="rounded bg-gray-700/40 hover:bg-gray-600/50 text-gray-400 px-2 py-0.5 text-[9px] font-medium transition-colors"
+                        >
+                          Mark Incomplete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CompactSettings({ project, currentUserRole, onClone }: { project: ProjectSummary['project']; currentUserRole?: string; onClone?: () => void }) {
   const queryClient = useQueryClient()
   const [name, setName] = useState(project.name)
@@ -1066,6 +1209,30 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
   const [localPath, setLocalPath] = useState(project.links.localPath || '')
   const [githubUrl, setGithubUrl] = useState(project.links.githubUrl || '')
   const [goals, setGoals] = useState((project.goals ?? []).join('\n'))
+  const [tags, setTags] = useState<string[]>(project.tags ?? [])
+  const [tagInput, setTagInput] = useState('')
+  const [tagSuggestions, setTagSuggestions] = useState<string[]>([])
+  const [allTags, setAllTags] = useState<string[]>([])
+  const [tagHighlight, setTagHighlight] = useState(0)
+
+  // Fetch all tags for autocomplete
+  useEffect(() => {
+    listAllTags().then(setAllTags).catch(() => {})
+  }, [])
+
+  const filteredSuggestions = tagInput.trim()
+    ? allTags.filter(t => t.toLowerCase().includes(tagInput.toLowerCase()) && !tags.includes(t))
+    : []
+
+  const addTag = (tag: string) => {
+    const t = tag.trim().toLowerCase()
+    if (t && !tags.includes(t)) setTags([...tags, t])
+    setTagInput('')
+    setTagHighlight(0)
+  }
+
+  const removeTag = (tag: string) => setTags(tags.filter(t => t !== tag))
+
   const [healthCheck, setHealthCheck] = useState<HealthCheckConfig>(
     project.healthCheck || { frontend: {}, backend: {}, monitorEnv: '' }
   )
@@ -1113,6 +1280,7 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
         githubUrl: githubUrl || undefined,
       },
       goals: goals.split('\n').map((g) => g.trim()).filter(Boolean),
+      tags,
       healthCheck,
       deployment,
     })
@@ -1142,6 +1310,53 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
       <div>
         <label className={labelClass}>Goals (one per line)</label>
         <textarea value={goals} onChange={(e) => setGoals(e.target.value)} rows={3} className={inputClass + ' resize-none'} placeholder="Ship v2 by Q2&#10;Fix critical bugs" />
+      </div>
+      <div>
+        <label className={labelClass}>Tags</label>
+        <div className="flex flex-wrap gap-1 mb-1">
+          {tags.map(tag => (
+            <span key={tag} className="inline-flex items-center gap-0.5 rounded-full bg-indigo-600/20 text-indigo-300 px-2 py-0.5 text-[10px] font-medium">
+              {tag}
+              <button onClick={() => removeTag(tag)} className="text-indigo-400 hover:text-indigo-200 ml-0.5">&times;</button>
+            </span>
+          ))}
+        </div>
+        <div className="relative">
+          <input
+            value={tagInput}
+            onChange={(e) => { setTagInput(e.target.value); setTagHighlight(0) }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && tagInput.trim()) {
+                e.preventDefault()
+                if (filteredSuggestions.length > 0) addTag(filteredSuggestions[tagHighlight])
+                else addTag(tagInput)
+              } else if (e.key === 'ArrowDown' && filteredSuggestions.length > 0) {
+                e.preventDefault()
+                setTagHighlight(h => (h + 1) % filteredSuggestions.length)
+              } else if (e.key === 'ArrowUp' && filteredSuggestions.length > 0) {
+                e.preventDefault()
+                setTagHighlight(h => (h - 1 + filteredSuggestions.length) % filteredSuggestions.length)
+              } else if (e.key === 'Backspace' && !tagInput && tags.length > 0) {
+                removeTag(tags[tags.length - 1])
+              }
+            }}
+            className={inputClass}
+            placeholder="Add tag..."
+          />
+          {filteredSuggestions.length > 0 && (
+            <div className="absolute z-10 left-0 right-0 mt-0.5 rounded border border-gray-600 bg-gray-800 shadow-lg max-h-32 overflow-y-auto">
+              {filteredSuggestions.map((s, i) => (
+                <button
+                  key={s}
+                  onMouseDown={(e) => { e.preventDefault(); addTag(s) }}
+                  className={`w-full text-left px-2 py-1 text-[10px] ${i === tagHighlight ? 'bg-indigo-600/30 text-indigo-200' : 'text-gray-300 hover:bg-gray-700/50'}`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
       {/* Health Check Config */}
       <div className="border-t border-gray-700/50 pt-2 mt-2">
@@ -1369,6 +1584,28 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
           </div>
         </div>
       )}
+
+      {/* Inactive toggle */}
+      <div className="border-t border-gray-700/50 pt-2 mt-2">
+        <label className={labelClass}>Inactive</label>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              const newVal = !project.inactive
+              updateProject(project.id, { inactive: newVal }).then(() => {
+                queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
+                queryClient.invalidateQueries({ queryKey: ['universeData'] })
+              })
+            }}
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${project.inactive ? 'bg-indigo-600' : 'bg-gray-600'}`}
+          >
+            <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${project.inactive ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
+          </button>
+          <span className="text-[10px] text-gray-500">
+            {project.inactive ? 'Project is inactive — hidden from default dashboard views' : 'Project is active'}
+          </span>
+        </div>
+      </div>
 
       {/* Archive — owner/super_admin only */}
       {(currentUserRole === 'owner' || currentUserRole === 'super_admin') && (

@@ -104,7 +104,10 @@ type Project struct {
 	CloneError            string             `json:"cloneError,omitempty" bson:"cloneError,omitempty"`
 	IssueCounter          int                `json:"issueCounter" bson:"issueCounter"`
 	Archived              bool               `json:"archived" bson:"archived"`
+	Inactive              bool               `json:"inactive" bson:"inactive"`
+	InactiveSince         *time.Time         `json:"inactiveSince,omitempty" bson:"inactiveSince,omitempty"`
 	Paused                bool               `json:"paused" bson:"paused"`
+	Tags                  []string           `json:"tags,omitempty" bson:"tags,omitempty"`
 	RecurringThemes       []RecurringTheme   `json:"recurringThemes,omitempty" bson:"recurringThemes,omitempty"`
 	ArchitectureSummary   string             `json:"architectureSummary,omitempty" bson:"architectureSummary,omitempty"`
 	ArchitectureUpdatedAt *time.Time         `json:"architectureUpdatedAt,omitempty" bson:"architectureUpdatedAt,omitempty"`
@@ -173,4 +176,6 @@ type UpdateProjectRequest struct {
 	HealthCheck *HealthCheckConfig `json:"healthCheck,omitempty"`
 	Deployment  *DeploymentConfig  `json:"deployment,omitempty"`
 	Webhooks    *[]WebhookConfig   `json:"webhooks,omitempty"`
+	Tags        *[]string          `json:"tags,omitempty"`
+	Inactive    *bool              `json:"inactive,omitempty"`
 }

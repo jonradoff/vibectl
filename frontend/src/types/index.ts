@@ -83,6 +83,9 @@ export interface Project {
   paused?: boolean;
   cloneStatus?: '' | 'cloning' | 'cloned' | 'error';
   cloneError?: string;
+  tags?: string[];
+  inactive?: boolean;
+  inactiveSince?: string;
   recurringThemes?: RecurringTheme[];
   architectureSummary?: string;
   architectureUpdatedAt?: string;
@@ -222,6 +225,8 @@ export interface ProjectUniverseData {
   projectType?: string;
   parentId?: string;
   unitName?: string;
+  tags?: string[];
+  inactive?: boolean;
 }
 
 export interface GoalAssessment {
@@ -351,6 +356,58 @@ export interface Plan {
   completedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// ---- Intents ----
+
+export interface Intent {
+  id: string;
+  projectId: string;
+  sessionIds: string[];
+  title: string;
+  description: string;
+  category: string;
+  techTags: string[];
+  uxJudgment: string;
+  size: string;
+  sizePoints: number;
+  status: string;
+  statusEvidence: string;
+  filesChanged: string[];
+  commitCount: number;
+  promptCount: number;
+  tokensInput: number;
+  tokensOutput: number;
+  wallClockSecs: number;
+  analysisModel: string;
+  startedAt: string;
+  completedAt: string;
+  extractedAt: string;
+}
+
+export interface IntentProductivityStats {
+  projectId: string;
+  projectName?: string;
+  projectCode?: string;
+  tags?: string[];
+  pointsDelivered: number;
+  intentCount: number;
+  byStatus: Record<string, number>;
+  byCategory: Record<string, number>;
+  totalTokensIn: number;
+  totalTokensOut: number;
+  totalWallClock: number;
+}
+
+export interface IntentInsights {
+  tokensByCategory: Record<string, { totalTokens: number; totalPoints: number; count: number }>;
+  tokensByTechTag: Record<string, { totalTokens: number; totalPoints: number; count: number }>;
+  tokensByUXLevel: Record<string, { totalTokens: number; totalPoints: number; count: number }>;
+  dailyPoints: Record<string, number>;
+  dailyByCategory: Record<string, { categories: Record<string, number>; total: number }>;
+  byProject: Record<string, { name: string; code: string; points: number; count: number; tokens: number }>;
+  funnel: Record<string, { count: number; points: number }>;
+  totalIntents: number;
 }
 
 export interface PlanListResponse {

@@ -20,6 +20,7 @@ type DashboardHandler struct {
 	memberService       *services.ProjectMemberService
 	activityLogService  *services.ActivityLogService
 	healthRecordService *services.HealthRecordService
+	codeDeltaService    *services.CodeDeltaService
 }
 
 func NewDashboardHandler(
@@ -30,6 +31,7 @@ func NewDashboardHandler(
 	ms *services.ProjectMemberService,
 	als *services.ActivityLogService,
 	hrs *services.HealthRecordService,
+	cds *services.CodeDeltaService,
 ) *DashboardHandler {
 	return &DashboardHandler{
 		projectService:      ps,
@@ -39,6 +41,7 @@ func NewDashboardHandler(
 		memberService:       ms,
 		activityLogService:  als,
 		healthRecordService: hrs,
+		codeDeltaService:    cds,
 	}
 }
 
@@ -47,6 +50,7 @@ func (h *DashboardHandler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/", h.GlobalDashboard)
 	r.Get("/universe", h.Universe)
+	r.Get("/productivity", h.Productivity)
 	return r
 }
 
@@ -168,6 +172,8 @@ func (h *DashboardHandler) Universe(w http.ResponseWriter, r *http.Request) {
 				ProjectType: proj.ProjectType,
 				ParentID:    parentID,
 				UnitName:    proj.UnitName,
+				Tags:        proj.Tags,
+				Inactive:    proj.Inactive,
 			}
 
 			// Activity sparkline: requested days
@@ -246,6 +252,55 @@ func (h *DashboardHandler) Universe(w http.ResponseWriter, r *http.Request) {
 	if firstErr != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, firstErr.Error(), "UNIVERSE_FAILED")
 		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, results)
+}
+
+// Productivity returns aggregated code delta stats per project.
+func (h *DashboardHandler) Productivity(w http.ResponseWriter, r *http.Request) {
+	daysStr := r.URL.Query().Get("days")
+	days := 7
+	if daysStr != "" {
+		fmt.Sscanf(daysStr, "%d", &days)
+	}
+	if days < 1 {
+		days = 1
+	}
+	if days > 365 {
+		days = 365
+	}
+
+	since := time.Now().UTC().AddDate(0, 0, -days)
+
+	if h.codeDeltaService == nil {
+		middleware.WriteJSON(w, http.StatusOK, []interface{}{})
+		return
+	}
+
+	stats, err := h.codeDeltaService.GetProductivity(r.Context(), since)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "PRODUCTIVITY_FAILED")
+		return
+	}
+
+	// Enrich with project names and tags
+	type EnrichedProductivity struct {
+		services.ProjectProductivity
+		ProjectName string   `json:"projectName"`
+		ProjectCode string   `json:"projectCode"`
+		Tags        []string `json:"tags,omitempty"`
+	}
+
+	results := make([]EnrichedProductivity, 0, len(stats))
+	for _, s := range stats {
+		ep := EnrichedProductivity{ProjectProductivity: s}
+		if proj, err := h.projectService.GetByID(r.Context(), s.ProjectID); err == nil && proj != nil {
+			ep.ProjectName = proj.Name
+			ep.ProjectCode = proj.Code
+			ep.Tags = proj.Tags
+		}
+		results = append(results, ep)
 	}
 
 	middleware.WriteJSON(w, http.StatusOK, results)

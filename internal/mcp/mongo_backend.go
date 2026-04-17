@@ -21,6 +21,8 @@ type MongoBackend struct {
 	healthRecords *services.HealthRecordService
 	prompts       *services.PromptService
 	vibectlMd     *services.VibectlMdService
+	intents       *services.IntentService
+	activityLog   *services.ActivityLogService
 	triageAgent   *agents.TriageAgent
 }
 
@@ -44,6 +46,16 @@ func NewMongoBackend(
 // SetTriageAgent injects the triage agent (optional — only available when ANTHROPIC_API_KEY is set).
 func (b *MongoBackend) SetTriageAgent(ta *agents.TriageAgent) {
 	b.triageAgent = ta
+}
+
+// SetIntentService injects the intent service.
+func (b *MongoBackend) SetIntentService(is *services.IntentService) {
+	b.intents = is
+}
+
+// SetActivityLogService injects the activity log service.
+func (b *MongoBackend) SetActivityLogService(als *services.ActivityLogService) {
+	b.activityLog = als
 }
 
 func (b *MongoBackend) ListProjects(ctx context.Context) ([]models.Project, error) {
@@ -235,4 +247,49 @@ func (b *MongoBackend) AddUnit(ctx context.Context, parentID bson.ObjectID, unit
 
 func (b *MongoBackend) GetProjectByID(ctx context.Context, id string) (*models.Project, error) {
 	return b.projects.GetByID(ctx, id)
+}
+
+func (b *MongoBackend) ListIntents(ctx context.Context, projectID, status, category string, days, limit int) ([]models.Intent, error) {
+	if b.intents == nil {
+		return []models.Intent{}, nil
+	}
+	var since time.Time
+	if days > 0 {
+		since = time.Now().UTC().AddDate(0, 0, -days)
+	}
+	return b.intents.List(ctx, projectID, status, category, since, limit)
+}
+
+func (b *MongoBackend) GetIntentByID(ctx context.Context, id string) (*models.Intent, error) {
+	if b.intents == nil {
+		return nil, fmt.Errorf("intent service not configured")
+	}
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		return nil, fmt.Errorf("invalid intent ID")
+	}
+	return b.intents.GetByID(ctx, oid)
+}
+
+func (b *MongoBackend) UpdateIntent(ctx context.Context, id string, updates map[string]interface{}) error {
+	if b.intents == nil {
+		return fmt.Errorf("intent service not configured")
+	}
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid intent ID")
+	}
+	fields := bson.D{}
+	for k, v := range updates {
+		fields = append(fields, bson.E{Key: k, Value: v})
+	}
+	return b.intents.Update(ctx, oid, fields)
+}
+
+func (b *MongoBackend) ListActivityLog(ctx context.Context, projectID string, limit int) ([]models.ActivityLog, error) {
+	if b.activityLog == nil {
+		return []models.ActivityLog{}, nil
+	}
+	entries, _, err := b.activityLog.List(ctx, projectID, "", limit, 0)
+	return entries, err
 }

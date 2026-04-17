@@ -38,6 +38,12 @@ type PlanLogger func(projectID, requestID, planText string)
 // PlanResponseLogger is called when the user accepts or rejects a plan.
 type PlanResponseLogger func(projectID, requestID, status, feedback string)
 
+// CodeDeltaSnapshot is called at the start of a prompt to record baseline state.
+type CodeDeltaSnapshot func(projectID, localPath string)
+
+// CodeDeltaRecord is called after a prompt completion to capture changes since snapshot.
+type CodeDeltaRecord func(projectID, localPath, sessionID string)
+
 // ChatWebSocketHandler handles WebSocket connections for chat mode.
 type ChatWebSocketHandler struct {
 	manager            *ChatManager
@@ -45,6 +51,8 @@ type ChatWebSocketHandler struct {
 	promptLogger       PromptLogger
 	planLogger         PlanLogger
 	planResponseLogger PlanResponseLogger
+	codeDeltaSnapshot  CodeDeltaSnapshot
+	codeDeltaRecord    CodeDeltaRecord
 	// RoleChecker is an optional function called before starting a new chat session.
 	// If it returns role "none" or an error, the launch is rejected.
 	// Leave nil to skip the check (standalone mode).
@@ -84,6 +92,12 @@ func extractPlanText(input map[string]interface{}) string {
 func (h *ChatWebSocketHandler) SetPlanLoggers(planLogger PlanLogger, planResponseLogger PlanResponseLogger) {
 	h.planLogger = planLogger
 	h.planResponseLogger = planResponseLogger
+}
+
+// SetCodeDeltaCallbacks configures callbacks for capturing code changes between prompts.
+func (h *ChatWebSocketHandler) SetCodeDeltaCallbacks(snapshot CodeDeltaSnapshot, record CodeDeltaRecord) {
+	h.codeDeltaSnapshot = snapshot
+	h.codeDeltaRecord = record
 }
 
 // HandleConnection upgrades to WebSocket and handles chat I/O.
@@ -196,6 +210,16 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 										planText := extractPlanText(block.Input)
 										go h.planLogger(activeProjectID, block.ID, planText)
 									}
+								}
+							}
+							// Capture code deltas on prompt completion (result events)
+							if evt.Type == "result" && h.codeDeltaRecord != nil && activeProjectID != "" {
+								lp := ""
+								if s := h.manager.GetSession(activeProjectID); s != nil {
+									lp = s.LocalPath
+								}
+								if lp != "" {
+									go h.codeDeltaRecord(activeProjectID, lp, sess.SessionID)
 								}
 							}
 						}
@@ -386,6 +410,11 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			if sess == nil {
 				slog.Warn("user_message for unknown session", "projectID", activeProjectID)
 				continue
+			}
+
+			// Snapshot code state before sending prompt
+			if h.codeDeltaSnapshot != nil && sess.LocalPath != "" {
+				go h.codeDeltaSnapshot(activeProjectID, sess.LocalPath)
 			}
 
 			if err := sess.SendMessage(userMsg.Text); err != nil {

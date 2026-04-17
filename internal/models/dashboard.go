@@ -35,6 +35,8 @@ type ProjectUniverseData struct {
 	ProjectType          string         `json:"projectType,omitempty"` // "multi" for multi-module projects
 	ParentID             string         `json:"parentId,omitempty"`
 	UnitName             string         `json:"unitName,omitempty"`
+	Tags                 []string       `json:"tags,omitempty"`
+	Inactive             bool           `json:"inactive,omitempty"`
 }
 
 type PMReviewResult struct {

@@ -474,6 +474,9 @@ func (h *AdminHandler) GetSubscriptionUsage(w http.ResponseWriter, r *http.Reque
 		token = terminal.ReadClaudeTokenFromKeychain()
 	}
 	if token == "" {
+		slog.Warn("subscription usage: no token found",
+			"storedToken", GetClaudeOAuthToken() != "",
+			"keychainToken", terminal.ReadClaudeTokenFromKeychain() != "")
 		middleware.WriteError(w, http.StatusServiceUnavailable, "no Claude OAuth token available", "NO_TOKEN")
 		return
 	}
@@ -564,19 +567,38 @@ func (h *AdminHandler) GetSubscriptionUsage(w http.ResponseWriter, r *http.Reque
 }
 
 func readSubscriptionType() string {
-	if out, err := exec.Command("security", "find-generic-password",
-		"-s", "Claude Code-credentials",
-		"-a", os.Getenv("USER"),
-		"-w",
-	).Output(); err == nil {
-		var creds struct {
-			ClaudeAiOauth struct {
-				SubscriptionType string `json:"subscriptionType"`
-			} `json:"claudeAiOauth"`
+	// Try macOS keychain first
+	acct := os.Getenv("USER")
+	if acct != "" {
+		if out, err := exec.Command("security", "find-generic-password",
+			"-s", "Claude Code-credentials", "-a", acct, "-w",
+		).Output(); err == nil {
+			var creds struct {
+				ClaudeAiOauth struct {
+					SubscriptionType string `json:"subscriptionType"`
+				} `json:"claudeAiOauth"`
+			}
+			if json.Unmarshal(out, &creds) == nil && creds.ClaudeAiOauth.SubscriptionType != "" {
+				return creds.ClaudeAiOauth.SubscriptionType
+			}
 		}
-		if json.Unmarshal(out, &creds) == nil {
-			return creds.ClaudeAiOauth.SubscriptionType
-		}
+	}
+	// Fallback: credentials file
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", ".credentials.json"))
+	if err != nil {
+		return ""
+	}
+	var creds struct {
+		ClaudeAiOauth struct {
+			SubscriptionType string `json:"subscriptionType"`
+		} `json:"claudeAiOauth"`
+	}
+	if json.Unmarshal(data, &creds) == nil {
+		return creds.ClaudeAiOauth.SubscriptionType
 	}
 	return ""
 }

@@ -8,6 +8,7 @@ import { getGlobalDashboard, getBulkStartProdStreamUrl, getBulkRestartProdStream
 import ProjectCard from '../components/projects/ProjectCard'
 import ProjectForm from '../components/projects/ProjectForm'
 import MissionControl from '../components/dashboard/MissionControl'
+import StaleProjectsModal from '../components/modals/StaleProjectsModal'
 import ChatView from '../components/chat/ChatView'
 import { useActiveProject } from '../contexts/ActiveProjectContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -547,6 +548,7 @@ function WorkspaceCard({ workspaceDir }: { workspaceDir: string }) {
           </div>
         )}
       </div>
+      <StaleProjectsModal />
     </div>
   )
 }

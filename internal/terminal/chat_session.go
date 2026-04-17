@@ -14,9 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -53,21 +51,37 @@ type ChatSession struct {
 	messages    []json.RawMessage // buffered events for reconnection
 	dirty       bool              // true if messages changed since last persist
 	mu          sync.Mutex
-	lastModel   string   // model from most recent message_start (for usage tracking)
-	stderrMu    sync.Mutex
-	stderrBuf   []string // recent stderr lines, capped at 50
+	lastModel            string   // model from most recent message_start (for usage tracking)
+	pendingContextUpdate string   // queued VIBECTL.md update to prepend to next user message
+	stderrMu             sync.Mutex
+	stderrBuf            []string // recent stderr lines, capped at 50
 }
 
 // UsageRecorderFunc is a callback invoked when Claude Code reports token usage.
 type UsageRecorderFunc func(tokenHash, projectID, sessionID, model string, inputTokens, outputTokens, cacheRead, cacheCreation int64)
 
+// QueueContextUpdate stores a VIBECTL.md update to be prepended to the next user message.
+func (s *ChatSession) QueueContextUpdate(content string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pendingContextUpdate = content
+}
+
 // SendMessage writes a user message to claude's stdin in stream-json format.
+// If a pending context update is queued, it's prepended to the message.
 func (s *ChatSession) SendMessage(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.stdin == nil {
 		return fmt.Errorf("session stdin closed")
+	}
+
+	// Prepend pending context update if available
+	if s.pendingContextUpdate != "" {
+		text = fmt.Sprintf("[CONTEXT UPDATE] Project status refreshed:\n\n<vibectl_md>\n%s\n</vibectl_md>\n\nThis is an automated context update, not a user instruction. Continue with whatever you were doing.\n\n---\n\n%s", s.pendingContextUpdate, text)
+		s.pendingContextUpdate = ""
+		slog.Info("injected context update into user message", "projectID", s.ProjectID)
 	}
 
 	msg := map[string]interface{}{
@@ -225,6 +239,21 @@ func (s *ChatSession) IsAlive() bool {
 }
 
 // ChatManager manages chat sessions keyed by project ID.
+// InjectContextUpdate queues a VIBECTL.md update for the next prompt on a project's active session.
+func (m *ChatManager) InjectContextUpdate(projectID, content string) {
+	m.mu.RLock()
+	sess, ok := m.sessions[projectID]
+	m.mu.RUnlock()
+	if !ok || !sess.IsAlive() {
+		return
+	}
+	sess.QueueContextUpdate(content)
+	slog.Info("queued context update", "projectID", projectID)
+}
+
+// IntentExtractorFunc is called after a session is archived, to extract developer intents.
+type IntentExtractorFunc func(entry *models.ChatHistoryEntry)
+
 type ChatManager struct {
 	sessions            map[string]*ChatSession
 	projectTokens       map[string]string // per-project Claude OAuth tokens (for account switching)
@@ -233,6 +262,7 @@ type ChatManager struct {
 	ChatSessionService  ChatSessionPersister
 	ChatHistoryService  ChatHistoryArchiver
 	UsageRecorder       UsageRecorderFunc // optional callback for token usage tracking
+	IntentExtractor     IntentExtractorFunc // optional callback for intent extraction after archive
 }
 
 // NewChatManager creates a new chat session manager.
@@ -621,6 +651,18 @@ func (m *ChatManager) archiveSession(sess *ChatSession) {
 		slog.Error("failed to archive chat session", "projectID", sess.ProjectID, "error", err)
 	} else {
 		slog.Info("chat session archived to history", "projectID", sess.ProjectID, "messages", len(msgs))
+		// Trigger async intent extraction
+		if m.IntentExtractor != nil {
+			entry := &models.ChatHistoryEntry{
+				ProjectID:       sess.ProjectID,
+				ClaudeSessionID: sess.SessionID,
+				Messages:        msgs,
+				MessageCount:    len(msgs),
+				StartedAt:       sess.StartedAt,
+				EndedAt:         time.Now().UTC(),
+			}
+			m.IntentExtractor(entry)
+		}
 	}
 }
 
@@ -884,43 +926,51 @@ func ReadClaudeTokenFromKeychain() string {
 	return readClaudeTokenFromKeychain()
 }
 
-// readClaudeTokenFromKeychain reads the Claude Code OAuth token from the macOS keychain.
-// Claude Code stores credentials in the keychain under service "Claude Code-credentials".
-// Returns empty string on non-macOS or if the token can't be read.
+// readClaudeTokenFromKeychain tries multiple locations where Claude Code stores OAuth tokens.
+// Claude Code has moved credentials between releases:
+//   1. macOS keychain: service "Claude Code-credentials", account = username (current)
+//   2. ~/.claude/.credentials.json with claudeAiOauth.accessToken (older)
+// Returns empty string if the token can't be found anywhere.
 func readClaudeTokenFromKeychain() string {
-	if runtime.GOOS != "darwin" {
-		return ""
-	}
-	// Determine the keychain account name (macOS username)
-	acct := ""
-	if u, err := user.Current(); err == nil {
-		acct = u.Username
-	}
-	if acct == "" {
-		return ""
+	// Try macOS keychain first (current Claude Code location)
+	acct := os.Getenv("USER")
+	if acct != "" {
+		out, err := exec.Command("security", "find-generic-password",
+			"-s", "Claude Code-credentials",
+			"-a", acct,
+			"-w",
+		).Output()
+		if err == nil {
+			var creds struct {
+				ClaudeAiOauth struct {
+					AccessToken string `json:"accessToken"`
+				} `json:"claudeAiOauth"`
+			}
+			if json.Unmarshal(out, &creds) == nil && creds.ClaudeAiOauth.AccessToken != "" {
+				return creds.ClaudeAiOauth.AccessToken
+			}
+		}
 	}
 
-	out, err := exec.Command("security", "find-generic-password",
-		"-s", "Claude Code-credentials",
-		"-a", acct,
-		"-w",
-	).Output()
+	// Fallback: ~/.claude/.credentials.json (older Claude Code versions)
+	home, err := os.UserHomeDir()
 	if err != nil {
-		slog.Debug("could not read Claude token from keychain", "error", err)
 		return ""
 	}
-
-	// The keychain value is JSON: {"claudeAiOauth":{"accessToken":"sk-ant-oat01-...",...}}
+	credPath := filepath.Join(home, ".claude", ".credentials.json")
+	data, err := os.ReadFile(credPath)
+	if err != nil {
+		return ""
+	}
 	var creds struct {
 		ClaudeAiOauth struct {
 			AccessToken string `json:"accessToken"`
 		} `json:"claudeAiOauth"`
 	}
-	if err := json.Unmarshal(out, &creds); err != nil {
-		slog.Warn("could not parse Claude keychain credentials", "error", err)
-		return ""
+	if json.Unmarshal(data, &creds) == nil && creds.ClaudeAiOauth.AccessToken != "" {
+		return creds.ClaudeAiOauth.AccessToken
 	}
-	return creds.ClaudeAiOauth.AccessToken
+	return ""
 }
 
 // PKCELoginParams holds the parameters for a PKCE OAuth login flow.

@@ -83,6 +83,10 @@ func main() {
 			promptService,
 			vibectlMdService,
 		)
+		intentService := services.NewIntentService(db)
+		activityLogService := services.NewActivityLogService(db)
+		mongoBackend.SetIntentService(intentService)
+		mongoBackend.SetActivityLogService(activityLogService)
 		if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
 			ta := agents.NewTriageAgent(feedbackService, issueService, projectService, key)
 			mongoBackend.SetTriageAgent(ta)

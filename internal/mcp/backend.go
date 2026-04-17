@@ -53,6 +53,14 @@ type Backend interface {
 	GenerateVibectlMd(ctx context.Context, projectID string) (string, error)
 	WriteVibectlMdToProject(ctx context.Context, projectID string) error
 
+	// Intents
+	ListIntents(ctx context.Context, projectID, status, category string, days, limit int) ([]models.Intent, error)
+	GetIntentByID(ctx context.Context, id string) (*models.Intent, error)
+	UpdateIntent(ctx context.Context, id string, updates map[string]interface{}) error
+
+	// Activity Log
+	ListActivityLog(ctx context.Context, projectID string, limit int) ([]models.ActivityLog, error)
+
 	// Multi-module
 	CreateMultiModuleProject(ctx context.Context, req *models.CreateProjectRequest) (*models.Project, []models.Project, error)
 	ListUnits(ctx context.Context, parentID bson.ObjectID) ([]models.Project, error)

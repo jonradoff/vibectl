@@ -437,3 +437,57 @@ func (b *APIBackend) GetProjectByID(ctx context.Context, id string) (*models.Pro
 	}
 	return &project, nil
 }
+
+func (b *APIBackend) ListIntents(ctx context.Context, projectID, status, category string, days, limit int) ([]models.Intent, error) {
+	params := url.Values{}
+	if projectID != "" {
+		params.Set("projectId", projectID)
+	}
+	if status != "" {
+		params.Set("status", status)
+	}
+	if category != "" {
+		params.Set("category", category)
+	}
+	if days > 0 {
+		params.Set("days", fmt.Sprintf("%d", days))
+	}
+	if limit > 0 {
+		params.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	var intents []models.Intent
+	if err := b.doGet(ctx, "/api/v1/intents?"+params.Encode(), &intents); err != nil {
+		return nil, err
+	}
+	return intents, nil
+}
+
+func (b *APIBackend) GetIntentByID(ctx context.Context, id string) (*models.Intent, error) {
+	var intent models.Intent
+	if err := b.doGet(ctx, "/api/v1/intents/"+url.PathEscape(id), &intent); err != nil {
+		return nil, err
+	}
+	return &intent, nil
+}
+
+func (b *APIBackend) UpdateIntent(ctx context.Context, id string, updates map[string]interface{}) error {
+	var out map[string]string
+	return b.doPatch(ctx, "/api/v1/intents/"+url.PathEscape(id), updates, &out)
+}
+
+func (b *APIBackend) ListActivityLog(ctx context.Context, projectID string, limit int) ([]models.ActivityLog, error) {
+	params := url.Values{}
+	if projectID != "" {
+		params.Set("projectId", projectID)
+	}
+	if limit > 0 {
+		params.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	var resp struct {
+		Entries []models.ActivityLog `json:"entries"`
+	}
+	if err := b.doGet(ctx, "/api/v1/activity-log?"+params.Encode(), &resp); err != nil {
+		return nil, err
+	}
+	return resp.Entries, nil
+}
