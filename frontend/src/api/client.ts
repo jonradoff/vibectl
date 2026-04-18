@@ -645,6 +645,16 @@ export interface SubscriptionUsage {
 export const getSubscriptionUsage = () =>
   request<SubscriptionUsage>('/admin/subscription-usage');
 
+// ---- Delegation ----
+export const getDelegationStatus = () =>
+  request<import('../types').DelegationStatus>('/delegation/status');
+export const testDelegation = (data: { url: string; apiKey: string }) =>
+  request<import('../types').DelegationTestResult>('/delegation/test', { method: 'POST', body: JSON.stringify(data) });
+export const enableDelegation = (data: { url: string; apiKey: string }) =>
+  request<{ status: string }>('/delegation/enable', { method: 'POST', body: JSON.stringify(data) });
+export const disableDelegation = () =>
+  request<{ status: string }>('/delegation/disable', { method: 'POST' });
+
 // ---- Claude Usage ----
 export const getClaudeUsageSummary = () =>
   request<import('../types').ClaudeUsageSummary[]>('/claude-usage/summary');

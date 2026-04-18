@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getSettings, updateSettings } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import type { AppSettings } from '../types';
+import DelegationSection from '../components/settings/DelegationSection';
 
 // ─── Help Drawers ────────────────────────────────────────────────────────────
 
@@ -261,6 +262,11 @@ function SettingsPage() {
               helpContent={<GitHubTokenHelpDrawer />}
             />
           </div>
+        </div>
+
+        {/* Delegation */}
+        <div className="mb-6">
+          <DelegationSection />
         </div>
 
         {/* VIBECTL.md Auto-Regen */}
