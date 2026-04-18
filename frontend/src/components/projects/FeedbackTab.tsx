@@ -416,7 +416,6 @@ function FeedbackDetailModal({ item, projectCode, onClose, onAccept, onDismiss, 
             Exit Review
           </button>
         </div>
-        )}
       </div>
     </div>
   )
