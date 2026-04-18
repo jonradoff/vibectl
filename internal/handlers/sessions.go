@@ -69,7 +69,7 @@ func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "CREATE_SESSION_ERROR")
 		return
 	}
-	h.bus.Publish(events.Event{Type: "session.created", ProjectID: projectID})
+	h.bus.Publish(events.Event{Type: "session.created", ProjectCode: projectID})
 	middleware.WriteJSON(w, http.StatusCreated, session)
 }
 
@@ -88,6 +88,6 @@ func (h *SessionHandler) Update(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "UPDATE_SESSION_ERROR")
 		return
 	}
-	h.bus.Publish(events.Event{Type: "session.updated", ProjectID: session.ProjectID.Hex()})
+	h.bus.Publish(events.Event{Type: "session.updated", ProjectCode: session.ProjectCode})
 	middleware.WriteJSON(w, http.StatusOK, session)
 }

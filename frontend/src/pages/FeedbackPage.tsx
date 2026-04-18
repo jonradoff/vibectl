@@ -41,7 +41,7 @@ export default function FeedbackPage() {
   const [showSubmitForm, setShowSubmitForm] = useState(false);
 
   const feedbackParams: Record<string, string> = {};
-  if (projectFilter !== 'all') feedbackParams.projectId = projectFilter;
+  if (projectFilter !== 'all') feedbackParams.projectCode = projectFilter;
   if (statusFilter !== 'all') feedbackParams.triageStatus = statusFilter;
   if (sourceFilter !== 'all') feedbackParams.sourceType = sourceFilter;
 
@@ -171,7 +171,7 @@ export default function FeedbackPage() {
                 {feedback.map((item: FeedbackItem) => {
                   const isPending = item.triageStatus === 'pending';
                   const isExpanded = expandedId === item.id;
-                  const project = item.projectId ? projectMap.get(item.projectId) : null;
+                  const project = item.projectCode ? projectMap.get(item.projectCode) : null;
 
                   return (
                     <Fragment key={item.id}>

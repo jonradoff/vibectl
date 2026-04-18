@@ -56,15 +56,15 @@ func (s *CommentService) ListByIssue(ctx context.Context, issueKey string) ([]mo
 }
 
 // Create inserts a new comment for an issue.
-func (s *CommentService) Create(ctx context.Context, issueKey string, projectID bson.ObjectID, body, author string) (*models.IssueComment, error) {
+func (s *CommentService) Create(ctx context.Context, issueKey string, projectCode string, body, author string) (*models.IssueComment, error) {
 	now := time.Now().UTC()
 	comment := models.IssueComment{
-		IssueKey:  issueKey,
-		ProjectID: projectID,
-		Body:      body,
-		Author:    author,
-		CreatedAt: now,
-		UpdatedAt: now,
+		IssueKey:    issueKey,
+		ProjectCode: projectCode,
+		Body:        body,
+		Author:      author,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	result, err := s.collection().InsertOne(ctx, comment)

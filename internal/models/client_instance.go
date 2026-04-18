@@ -22,7 +22,7 @@ type ClientInstance struct {
 
 // ProjectPathEntry maps a project to its local filesystem path on this client.
 type ProjectPathEntry struct {
-	ProjectID bson.ObjectID `bson:"projectId" json:"projectId"`
+	ProjectCode string        `bson:"projectCode" json:"projectCode"`
 	LocalPath string        `bson:"localPath" json:"localPath"`
 }
 

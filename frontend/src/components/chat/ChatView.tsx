@@ -50,7 +50,7 @@ export interface ChatSessionSnapshot {
 }
 
 interface ChatViewProps {
-  projectId: string
+  projectCode: string
   projectCode: string
   localPath?: string
   compact?: boolean
@@ -117,7 +117,7 @@ interface ToolUseBlock {
 type ContentBlock = TextBlock | ToolUseBlock
 
 export default function ChatView({
-  projectId,
+  projectCode,
   localPath,
   compact,
   onStatusChange,
@@ -133,11 +133,11 @@ export default function ChatView({
   const [streamingText, setStreamingText] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [inputText, setInputTextRaw] = useState(() => {
-    try { return sessionStorage.getItem(`vibectl-draft-${projectId}`) || '' } catch { return '' }
+    try { return sessionStorage.getItem(`vibectl-draft-${projectCode}`) || '' } catch { return '' }
   })
   const setInputText = (v: string) => {
     setInputTextRaw(v)
-    try { if (v) sessionStorage.setItem(`vibectl-draft-${projectId}`, v); else sessionStorage.removeItem(`vibectl-draft-${projectId}`) } catch { /* ignore */ }
+    try { if (v) sessionStorage.setItem(`vibectl-draft-${projectCode}`, v); else sessionStorage.removeItem(`vibectl-draft-${projectCode}`) } catch { /* ignore */ }
   }
   const [status, setStatusState] = useState<string>('disconnected')
   const statusRef = useRef('disconnected')
@@ -149,14 +149,14 @@ export default function ChatView({
   const [costUsd, setCostUsd] = useState<number | null>(null)
   const [permissionMode, setPermissionModeRaw] = useState<'accept-all' | 'approve'>(() => {
     try {
-      const saved = localStorage.getItem(`vibectl-perm-mode-${projectId}`)
+      const saved = localStorage.getItem(`vibectl-perm-mode-${projectCode}`)
       if (saved === 'accept-all' || saved === 'approve') return saved
     } catch { /* ignore */ }
     return 'accept-all'
   })
   const setPermissionMode = (mode: 'accept-all' | 'approve') => {
     setPermissionModeRaw(mode)
-    try { localStorage.setItem(`vibectl-perm-mode-${projectId}`, mode) } catch { /* ignore */ }
+    try { localStorage.setItem(`vibectl-perm-mode-${projectCode}`, mode) } catch { /* ignore */ }
   }
   const [slashHighlight, setSlashHighlight] = useState(0)
   const slashDismissedRef = useRef(false) // user pressed Escape to dismiss autocomplete
@@ -219,7 +219,7 @@ export default function ChatView({
   const isReplayingRef = useRef(false)
 
   // Input history (shell-style up/down arrow navigation), persisted to localStorage
-  const historyKey = `vibectl-input-history-${projectId}`
+  const historyKey = `vibectl-input-history-${projectCode}`
   const inputHistoryRef = useRef<string[]>(
     (() => { try { return JSON.parse(localStorage.getItem(historyKey) || '[]') } catch { return [] } })()
   )
@@ -317,7 +317,7 @@ export default function ChatView({
         // Send launch message
         ws.send(JSON.stringify({
           type: 'launch',
-          data: { projectId, localPath: localPath || '' },
+          data: { projectCode, localPath: localPath || '' },
         }))
       }
 
@@ -357,7 +357,7 @@ export default function ChatView({
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, localPath])
+  }, [projectCode, localPath])
 
   const handleEvent = useCallback((data: Record<string, unknown>) => {
     const type = data.type as string
@@ -728,7 +728,7 @@ export default function ChatView({
         // Standalone dev: PKCE OAuth flow via WS — no keychain mutation
         setIsReconnecting(false)
         setExitError(null)
-        sendWsMessage('login_start', { projectId: projectId, localPath: localPath })
+        sendWsMessage('login_start', { projectCode: projectCode, localPath: localPath })
       } else {
         // Remote/client mode: use the token paste modal
         setShowLoginModal(true)
@@ -824,7 +824,7 @@ export default function ChatView({
         wsRef.current.send(JSON.stringify({ type: 'user_message', data: { text: cmdName } }))
       }
     }
-  }, [sendWsMessage, permissionMode, modeInfo, projectId, localPath])
+  }, [sendWsMessage, permissionMode, modeInfo, projectCode, localPath])
 
   const sendMessage = useCallback(() => {
     const text = inputText.trim()
@@ -872,8 +872,8 @@ export default function ChatView({
   // Listen for external "send to this project" events (from Modules tab post-op)
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as { projectId: string; text: string }
-      if (detail.projectId !== projectId) return
+      const detail = (e as CustomEvent).detail as { projectCode: string; text: string }
+      if (detail.projectCode !== projectId) return
       // Inject as a user message
       setMessages((prev) => [...prev, { role: 'user', text: detail.text }])
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -1108,7 +1108,7 @@ export default function ChatView({
                 codeVerifier: pkce.codeVerifier,
                 clientId: pkce.clientId,
                 redirectUri: pkce.redirectUri,
-                projectId: projectId,
+                projectCode: projectCode,
                 localPath: localPath,
               })
             }} />
@@ -1185,7 +1185,7 @@ export default function ChatView({
               // Set per-project token and restart session with new account
               setIsReconnecting(false)
               setExitError(null)
-              sendWsMessage('set_project_token', { token, projectId: projectId, localPath: localPath })
+              sendWsMessage('set_project_token', { token, projectCode: projectCode, localPath: localPath })
             }}
             isStandalone={modeInfo?.mode === 'standalone'}
           />

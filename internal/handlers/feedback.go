@@ -172,36 +172,33 @@ func (h *FeedbackHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pid := ""
-	if item.ProjectID != nil {
-		pid = item.ProjectID.Hex()
-	}
-
 	// Activity log
-	if h.activityLogService != nil && item.ProjectID != nil {
-		oid := *item.ProjectID
+	if h.activityLogService != nil && item.ProjectCode != "" {
 		u := middleware.GetCurrentUser(r)
 		snippet := item.RawContent
 		if len(snippet) > 120 {
 			snippet = snippet[:120] + "…"
 		}
 		if u != nil {
-			h.activityLogService.LogAsyncWithUser("feedback_submitted", "Feedback submitted: "+snippet, &oid, &u.ID, u.DisplayName, "", nil)
+			h.activityLogService.LogAsyncWithUser("feedback_submitted", "Feedback submitted: "+snippet, item.ProjectCode, &u.ID, u.DisplayName, "", nil)
 		} else {
-			h.activityLogService.LogAsync("feedback_submitted", "Feedback submitted: "+snippet, &oid, "", nil)
+			h.activityLogService.LogAsync("feedback_submitted", "Feedback submitted: "+snippet, item.ProjectCode, "", nil)
 		}
 	}
 
-	// Fire feedback_created webhook
-	if h.webhookService != nil && item.ProjectID != nil {
+	// Fire feedback_created webhook (still needs ObjectID for webhook service)
+	if h.webhookService != nil && item.ProjectCode != "" {
 		go func() {
-			h.webhookService.Fire(context.Background(), *item.ProjectID,
-				models.WebhookEventFeedbackCreated,
-				map[string]any{"feedbackId": item.ID.Hex(), "sourceType": item.SourceType})
+			proj, err := h.projectService.GetByCode(context.Background(), item.ProjectCode)
+			if err == nil && proj != nil {
+				h.webhookService.Fire(context.Background(), proj.ID,
+					models.WebhookEventFeedbackCreated,
+					map[string]any{"feedbackId": item.ID.Hex(), "sourceType": item.SourceType})
+			}
 		}()
 	}
 
-	h.bus.Publish(events.Event{Type: "feedback.created", ProjectID: pid})
+	h.bus.Publish(events.Event{Type: "feedback.created", ProjectCode: item.ProjectCode})
 	middleware.WriteJSON(w, http.StatusCreated, item)
 }
 
@@ -249,10 +246,13 @@ func (h *FeedbackHandler) TriggerTriage(w http.ResponseWriter, r *http.Request) 
 		go func() {
 			ctx := context.Background()
 			item, fetchErr := h.feedbackService.GetByID(ctx, id)
-			if fetchErr == nil && item != nil && item.ProjectID != nil {
-				h.webhookService.Fire(ctx, *item.ProjectID, models.WebhookEventFeedbackTriaged, map[string]any{
-					"feedbackId": id,
-				})
+			if fetchErr == nil && item != nil && item.ProjectCode != "" {
+				proj, projErr := h.projectService.GetByCode(ctx, item.ProjectCode)
+				if projErr == nil && proj != nil {
+					h.webhookService.Fire(ctx, proj.ID, models.WebhookEventFeedbackTriaged, map[string]any{
+						"feedbackId": id,
+					})
+				}
 			}
 		}()
 	}
@@ -315,12 +315,12 @@ func (h *FeedbackHandler) Review(w http.ResponseWriter, r *http.Request) {
 
 	// If accepted and createIssue=true, create an issue from the proposed issue or manual fields
 	var createdIssue *models.Issue
-	if req.Action == "accept" && req.CreateIssue && item.ProjectID != nil && h.issueService != nil {
+	if req.Action == "accept" && req.CreateIssue && item.ProjectCode != "" && h.issueService != nil {
 		createdIssue = h.createIssueFromFeedback(r.Context(), item, &req)
 	}
 
-	if item.ProjectID != nil {
-		pid := *item.ProjectID
+	if item.ProjectCode != "" {
+		projectCode := item.ProjectCode
 		go func() {
 			ctx := context.Background()
 			action := "feedback_accepted"
@@ -341,9 +341,9 @@ func (h *FeedbackHandler) Review(w http.ResponseWriter, r *http.Request) {
 			u := middleware.GetCurrentUser(r)
 			if h.activityLogService != nil {
 				if u != nil {
-					h.activityLogService.LogAsyncWithUser(action, summary, &pid, &u.ID, u.DisplayName, "", nil)
+					h.activityLogService.LogAsyncWithUser(action, summary, projectCode, &u.ID, u.DisplayName, "", nil)
 				} else {
-					h.activityLogService.LogAsync(action, summary, &pid, "", nil)
+					h.activityLogService.LogAsync(action, summary, projectCode, "", nil)
 				}
 			}
 
@@ -351,8 +351,8 @@ func (h *FeedbackHandler) Review(w http.ResponseWriter, r *http.Request) {
 			if createdIssue != nil {
 				issueKey = createdIssue.IssueKey
 			}
-			h.decisionService.Record(ctx, pid, action, summary, issueKey)
-			h.vibectlMdService.UpdateSection(ctx, pid.Hex(), sections...)
+			h.decisionService.Record(ctx, projectCode, action, summary, issueKey)
+			h.vibectlMdService.UpdateSection(ctx, projectCode, sections...)
 		}()
 	}
 
@@ -361,8 +361,8 @@ func (h *FeedbackHandler) Review(w http.ResponseWriter, r *http.Request) {
 		item.LinkedIssueKey = createdIssue.IssueKey
 	}
 
-	if item.ProjectID != nil {
-		h.bus.Publish(events.Event{Type: "feedback.updated", ProjectID: item.ProjectID.Hex()})
+	if item.ProjectCode != "" {
+		h.bus.Publish(events.Event{Type: "feedback.updated", ProjectCode: item.ProjectCode})
 	}
 	middleware.WriteJSON(w, http.StatusOK, item)
 }
@@ -395,8 +395,7 @@ func (h *FeedbackHandler) BulkReview(w http.ResponseWriter, r *http.Request) {
 		results = append(results, *updated)
 
 		// Log activity per item
-		if h.activityLogService != nil && updated.ProjectID != nil {
-			oid := *updated.ProjectID
+		if h.activityLogService != nil && updated.ProjectCode != "" {
 			action := "feedback_accepted"
 			if item.Action == "dismiss" {
 				action = "feedback_dismissed"
@@ -405,7 +404,7 @@ func (h *FeedbackHandler) BulkReview(w http.ResponseWriter, r *http.Request) {
 			if len(snippet) > 80 {
 				snippet = snippet[:80] + "…"
 			}
-			h.activityLogService.LogAsync(action, fmt.Sprintf("Bulk %s: %s", item.Action, snippet), &oid, "", nil)
+			h.activityLogService.LogAsync(action, fmt.Sprintf("Bulk %s: %s", item.Action, snippet), updated.ProjectCode, "", nil)
 		}
 	}
 
@@ -434,10 +433,10 @@ func (h *FeedbackHandler) ListByProject(w http.ResponseWriter, r *http.Request) 
 // createIssueFromFeedback converts accepted feedback into an issue using AI proposal or manual fields.
 // Returns nil (non-fatal) if issue creation fails — the review itself still succeeds.
 func (h *FeedbackHandler) createIssueFromFeedback(ctx context.Context, item *models.FeedbackItem, req *models.ReviewFeedbackRequest) *models.Issue {
-	if item.ProjectID == nil {
+	if item.ProjectCode == "" {
 		return nil
 	}
-	projectID := item.ProjectID.Hex()
+	projectID := item.ProjectCode
 
 	// Build issue request: prefer AI proposal, fall back to manual fields, then raw content
 	title := req.IssueTitle

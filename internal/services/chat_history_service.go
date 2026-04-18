@@ -28,19 +28,19 @@ func NewChatHistoryService(db *mongo.Database) *ChatHistoryService {
 // EnsureIndexes creates indexes for efficient querying.
 func (s *ChatHistoryService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
-		{Keys: bson.D{{Key: "projectId", Value: 1}, {Key: "endedAt", Value: -1}}},
+		{Keys: bson.D{{Key: "projectCode", Value: 1}, {Key: "endedAt", Value: -1}}},
 	})
 	return err
 }
 
 // Archive stores a completed chat session in history.
-func (s *ChatHistoryService) Archive(ctx context.Context, projectID, claudeSessionID string, messages []json.RawMessage, startedAt time.Time) error {
+func (s *ChatHistoryService) Archive(ctx context.Context, projectCode, claudeSessionID string, messages []json.RawMessage, startedAt time.Time) error {
 	if len(messages) == 0 {
 		return nil // nothing to archive
 	}
 
 	entry := models.ChatHistoryEntry{
-		ProjectID:       projectID,
+		ProjectCode:     projectCode,
 		ClaudeSessionID: claudeSessionID,
 		Messages:        messages,
 		MessageCount:    len(messages),
@@ -56,11 +56,11 @@ func (s *ChatHistoryService) Archive(ctx context.Context, projectID, claudeSessi
 }
 
 // ListByProject returns history summaries for a project, newest first (without messages).
-func (s *ChatHistoryService) ListByProject(ctx context.Context, projectID string) ([]models.ChatHistorySummary, error) {
-	filter := bson.D{{Key: "projectId", Value: projectID}}
+func (s *ChatHistoryService) ListByProject(ctx context.Context, projectCode string) ([]models.ChatHistorySummary, error) {
+	filter := bson.D{{Key: "projectCode", Value: projectCode}}
 	opts := options.Find().SetSort(bson.D{{Key: "endedAt", Value: -1}}).
 		SetProjection(bson.D{
-			{Key: "projectId", Value: 1},
+			{Key: "projectCode", Value: 1},
 			{Key: "claudeSessionId", Value: 1},
 			{Key: "messageCount", Value: 1},
 			{Key: "startedAt", Value: 1},

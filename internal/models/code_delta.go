@@ -16,7 +16,7 @@ type FileChange struct {
 // CodeDelta records the code change metrics between prompt completions.
 type CodeDelta struct {
 	ID           bson.ObjectID  `json:"id" bson:"_id,omitempty"`
-	ProjectID    *bson.ObjectID `json:"projectId,omitempty" bson:"projectId,omitempty"`
+	ProjectCode  string         `json:"projectCode,omitempty" bson:"projectCode,omitempty"`
 	SessionID    string         `json:"sessionId,omitempty" bson:"sessionId,omitempty"`
 	LinesAdded   int64          `json:"linesAdded" bson:"linesAdded"`
 	LinesRemoved int64          `json:"linesRemoved" bson:"linesRemoved"`

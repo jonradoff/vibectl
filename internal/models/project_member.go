@@ -9,7 +9,7 @@ import (
 // ProjectMember links a user to a project with a specific role.
 type ProjectMember struct {
 	ID        bson.ObjectID `json:"id" bson:"_id,omitempty"`
-	ProjectID bson.ObjectID `json:"projectId" bson:"projectId"`
+	ProjectCode string        `json:"projectCode" bson:"projectCode"`
 	UserID    bson.ObjectID `json:"userId" bson:"userId"`
 	Role      ProjectRole   `json:"role" bson:"role"`
 	CreatedBy bson.ObjectID `json:"createdBy" bson:"createdBy"`

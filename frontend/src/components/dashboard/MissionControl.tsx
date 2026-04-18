@@ -132,12 +132,12 @@ function ProjectsTab({ days, sortField, sortDir, onSort, tagFilter, onTagFilter,
 
   const handleSort = onSort
 
-  const handleRowClick = (projectId: string) => {
+  const handleRowClick = (projectCode: string) => {
     openProject(projectId)
     setActiveProjectId(projectId)
     if (location.pathname !== '/') navigate('/')
     setTimeout(() => {
-      const el = document.querySelector(`[data-project-id="${projectId}"]`)
+      const el = document.querySelector(`[data-project-id="${projectCode}"]`)
       el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 100)
   }
@@ -159,7 +159,7 @@ function ProjectsTab({ days, sortField, sortDir, onSort, tagFilter, onTagFilter,
   // Build parent name lookup for modules
   const parentNames: Record<string, string> = {}
   for (const p of data) {
-    if (p.projectType === 'multi') parentNames[p.projectId] = p.projectName
+    if (p.projectType === 'multi') parentNames[p.projectCode] = p.projectName
   }
   const sortName = (p: ProjectUniverseData) =>
     p.parentId ? `${parentNames[p.parentId] ?? ''}\0${p.projectName}` : p.projectName
@@ -219,8 +219,8 @@ function ProjectsTab({ days, sortField, sortDir, onSort, tagFilter, onTagFilter,
         <tbody>
           {sorted.map((p: ProjectUniverseData) => (
             <tr
-              key={p.projectId}
-              onClick={() => handleRowClick(p.projectId)}
+              key={p.projectCode}
+              onClick={() => handleRowClick(p.projectCode)}
               className="border-b border-gray-800/60 hover:bg-gray-800/40 cursor-pointer transition-colors"
             >
               <td className="px-4 py-2.5 whitespace-nowrap">
@@ -239,7 +239,7 @@ function ProjectsTab({ days, sortField, sortDir, onSort, tagFilter, onTagFilter,
                   <span className="ml-1.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-purple-500/20 text-purple-300">orchestrator</span>
                 )}
                 {(() => {
-                  const ps = projectStatuses[p.projectId]
+                  const ps = projectStatuses[p.projectCode]
                   if (ps && CONNECTED_STATUSES.has(ps.terminalStatus) && ps.isActive && !ps.isWaiting) {
                     return <span className="ml-2 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-indigo-500/20 text-indigo-300 animate-pulse">working</span>
                   }
@@ -566,8 +566,8 @@ function UsageDetailModal({ summary, onClose, onConfigSave }: {
               <h4 className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">By project</h4>
               <div className="space-y-1.5">
                 {summary.byProject.sort((a, b) => b.totalTokens - a.totalTokens).map(p => (
-                  <div key={p.projectId} className="flex items-center justify-between text-xs">
-                    <span className="text-gray-400 truncate font-mono">{p.projectId}</span>
+                  <div key={p.projectCode} className="flex items-center justify-between text-xs">
+                    <span className="text-gray-400 truncate font-mono">{p.projectCode}</span>
                     <span className="font-mono text-gray-300 shrink-0 ml-2">{formatTokens(p.totalTokens)}</span>
                   </div>
                 ))}
@@ -761,7 +761,7 @@ function ProductivityTab({ tagFilter, onTagFilter, days }: { tagFilter: string; 
               }
               return prodSortAsc ? cmp : -cmp
             }).map((p: ProdStats) => (
-              <tr key={p.projectId} className="border-b border-gray-800/60 hover:bg-gray-800/40 transition-colors">
+              <tr key={p.projectCode} className="border-b border-gray-800/60 hover:bg-gray-800/40 transition-colors">
                 <td className="px-3 py-2">
                   <span className="font-medium text-gray-300">{p.projectName || 'Unknown'}</span>
                   {p.projectCode && <span className="ml-1.5 text-gray-500 font-mono">({p.projectCode})</span>}
@@ -839,7 +839,7 @@ export function CodeDeltaTab({ tagFilter, onTagFilter: _onTagFilter, days }: { t
     else { setSortBy(field); setSortAsc(false) }
   }
 
-  const handleRowClick = (projectId: string) => {
+  const handleRowClick = (projectCode: string) => {
     openProject(projectId)
     setActiveProjectId(projectId)
     if (location.pathname !== '/') navigate('/')
@@ -882,7 +882,7 @@ export function CodeDeltaTab({ tagFilter, onTagFilter: _onTagFilter, days }: { t
         </thead>
         <tbody>
           {sorted.map((e: ProductivityEntry) => (
-            <tr key={e.projectId} onClick={() => handleRowClick(e.projectId)} className="border-b border-gray-800/60 hover:bg-gray-800/40 cursor-pointer transition-colors">
+            <tr key={e.projectCode} onClick={() => handleRowClick(e.projectCode)} className="border-b border-gray-800/60 hover:bg-gray-800/40 cursor-pointer transition-colors">
               <td className="px-3 py-2 whitespace-nowrap">
                 <span className="font-medium text-gray-300">{e.projectName}</span>
                 <span className="ml-1.5 text-gray-500 font-mono">({e.projectCode})</span>

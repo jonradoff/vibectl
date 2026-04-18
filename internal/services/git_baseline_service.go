@@ -21,17 +21,17 @@ func NewGitBaselineService(db *mongo.Database) *GitBaselineService {
 
 func (s *GitBaselineService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "projectId", Value: 1}},
+		Keys:    bson.D{{Key: "projectCode", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	})
 	return err
 }
 
 // Upsert stores or updates the baseline for a project.
-func (s *GitBaselineService) Upsert(ctx context.Context, projectID, commitSHA, numstat string) error {
-	filter := bson.D{{Key: "projectId", Value: projectID}}
+func (s *GitBaselineService) Upsert(ctx context.Context, projectCode, commitSHA, numstat string) error {
+	filter := bson.D{{Key: "projectCode", Value: projectCode}}
 	update := bson.D{{Key: "$set", Value: bson.D{
-		{Key: "projectId", Value: projectID},
+		{Key: "projectCode", Value: projectCode},
 		{Key: "commitSHA", Value: commitSHA},
 		{Key: "numstat", Value: numstat},
 		{Key: "createdAt", Value: time.Now().UTC()},
@@ -42,9 +42,9 @@ func (s *GitBaselineService) Upsert(ctx context.Context, projectID, commitSHA, n
 }
 
 // Get retrieves the baseline for a project.
-func (s *GitBaselineService) Get(ctx context.Context, projectID string) (*models.GitBaseline, error) {
+func (s *GitBaselineService) Get(ctx context.Context, projectCode string) (*models.GitBaseline, error) {
 	var bl models.GitBaseline
-	err := s.collection.FindOne(ctx, bson.D{{Key: "projectId", Value: projectID}}).Decode(&bl)
+	err := s.collection.FindOne(ctx, bson.D{{Key: "projectCode", Value: projectCode}}).Decode(&bl)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return nil, nil
@@ -55,8 +55,8 @@ func (s *GitBaselineService) Get(ctx context.Context, projectID string) (*models
 }
 
 // Delete removes the baseline for a project (consumed after recording).
-func (s *GitBaselineService) Delete(ctx context.Context, projectID string) error {
-	_, err := s.collection.DeleteOne(ctx, bson.D{{Key: "projectId", Value: projectID}})
+func (s *GitBaselineService) Delete(ctx context.Context, projectCode string) error {
+	_, err := s.collection.DeleteOne(ctx, bson.D{{Key: "projectCode", Value: projectCode}})
 	return err
 }
 

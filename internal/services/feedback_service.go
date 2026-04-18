@@ -24,25 +24,21 @@ func NewFeedbackService(db *mongo.Database) *FeedbackService {
 	}
 }
 
-// EnsureIndexes creates indexes on projectId and triageStatus.
+// EnsureIndexes creates indexes on projectCode and triageStatus.
 func (s *FeedbackService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
-		{Keys: bson.D{{Key: "projectId", Value: 1}}},
+		{Keys: bson.D{{Key: "projectCode", Value: 1}}},
 		{Keys: bson.D{{Key: "triageStatus", Value: 1}}},
 		{Keys: bson.D{{Key: "sourceUrl", Value: 1}}},
 	})
 	return err
 }
 
-// List returns feedback items filtered by optional projectId, triageStatus, and sourceType.
+// List returns feedback items filtered by optional projectCode, triageStatus, and sourceType.
 func (s *FeedbackService) List(ctx context.Context, filters map[string]string) ([]models.FeedbackItem, error) {
 	filter := bson.D{}
-	if pid, ok := filters["projectId"]; ok && pid != "" {
-		oid, err := bson.ObjectIDFromHex(pid)
-		if err != nil {
-			return nil, fmt.Errorf("invalid projectId: %w", err)
-		}
-		filter = append(filter, bson.E{Key: "projectId", Value: oid})
+	if pc, ok := filters["projectCode"]; ok && pc != "" {
+		filter = append(filter, bson.E{Key: "projectCode", Value: pc})
 	}
 	if ts, ok := filters["triageStatus"]; ok && ts != "" {
 		filter = append(filter, bson.E{Key: "triageStatus", Value: ts})
@@ -69,14 +65,9 @@ func (s *FeedbackService) List(ctx context.Context, filters map[string]string) (
 }
 
 // ListByProject returns all feedback items for a given project.
-func (s *FeedbackService) ListByProject(ctx context.Context, projectID string) ([]models.FeedbackItem, error) {
-	oid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid project ID: %w", err)
-	}
-
+func (s *FeedbackService) ListByProject(ctx context.Context, projectCode string) ([]models.FeedbackItem, error) {
 	opts := options.Find().SetSort(bson.D{{Key: "submittedAt", Value: -1}})
-	cursor, err := s.collection.Find(ctx, bson.D{{Key: "projectId", Value: oid}}, opts)
+	cursor, err := s.collection.Find(ctx, bson.D{{Key: "projectCode", Value: projectCode}}, opts)
 	if err != nil {
 		return nil, fmt.Errorf("find feedback by project: %w", err)
 	}
@@ -107,12 +98,11 @@ func (s *FeedbackService) Create(ctx context.Context, req *models.CreateFeedback
 		SubmittedViaKey: req.SubmittedViaKey,
 	}
 
-	if req.ProjectID != "" {
-		oid, err := bson.ObjectIDFromHex(req.ProjectID)
-		if err != nil {
-			return nil, fmt.Errorf("invalid project ID: %w", err)
-		}
-		item.ProjectID = &oid
+	if req.ProjectCode != "" {
+		item.ProjectCode = req.ProjectCode
+	} else if req.ProjectID != "" {
+		// Legacy: resolve projectId to projectCode if needed
+		item.ProjectCode = req.ProjectID
 	}
 
 	result, err := s.collection.InsertOne(ctx, item)
@@ -131,6 +121,7 @@ func (s *FeedbackService) CreateBatch(ctx context.Context, reqs []models.CreateF
 	docs := make([]interface{}, len(reqs))
 
 	for i, req := range reqs {
+		_ = i // suppress unused warning
 		item := models.FeedbackItem{
 			SourceType:   req.SourceType,
 			SourceURL:    req.SourceURL,
@@ -139,12 +130,10 @@ func (s *FeedbackService) CreateBatch(ctx context.Context, reqs []models.CreateF
 			SubmittedAt:  now,
 			TriageStatus: models.TriageStatusPending,
 		}
-		if req.ProjectID != "" {
-			oid, err := bson.ObjectIDFromHex(req.ProjectID)
-			if err != nil {
-				return nil, fmt.Errorf("invalid project ID in batch item %d: %w", i, err)
-			}
-			item.ProjectID = &oid
+		if req.ProjectCode != "" {
+			item.ProjectCode = req.ProjectCode
+		} else if req.ProjectID != "" {
+			item.ProjectCode = req.ProjectID
 		}
 		items[i] = item
 		docs[i] = item
@@ -256,9 +245,9 @@ func (s *FeedbackService) CountPending(ctx context.Context) (int, error) {
 }
 
 // CountPendingByProject returns the number of pending feedback items for a project.
-func (s *FeedbackService) CountPendingByProject(ctx context.Context, projectID bson.ObjectID) (int, error) {
+func (s *FeedbackService) CountPendingByProject(ctx context.Context, projectCode string) (int, error) {
 	filter := bson.D{
-		{Key: "projectId", Value: projectID},
+		{Key: "projectCode", Value: projectCode},
 		{Key: "triageStatus", Value: bson.D{{Key: "$in", Value: bson.A{
 			models.TriageStatusPending,
 			models.TriageStatusTriaged,

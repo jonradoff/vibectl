@@ -10,7 +10,7 @@ import (
 type ClaudeUsageRecord struct {
 	ID                   bson.ObjectID `json:"id" bson:"_id,omitempty"`
 	TokenHash            string        `json:"tokenHash" bson:"tokenHash"`                       // SHA256 of OAuth token — stable identity per login
-	ProjectID            string        `json:"projectId" bson:"projectId"`                       // which project generated the usage
+	ProjectCode          string        `json:"projectCode" bson:"projectCode"`                    // which project generated the usage
 	SessionID            string        `json:"sessionId,omitempty" bson:"sessionId,omitempty"`    // Claude session ID
 	Model                string        `json:"model,omitempty" bson:"model,omitempty"`            // e.g. "claude-opus-4-6"
 	InputTokens          int64         `json:"inputTokens" bson:"inputTokens"`                   // prompt tokens
@@ -51,7 +51,7 @@ type ClaudeUsageSummary struct {
 
 // ProjectUsage is per-project token breakdown within a period.
 type ProjectUsage struct {
-	ProjectID    string `json:"projectId"`
+	ProjectCode  string `json:"projectCode"`
 	InputTokens  int64  `json:"inputTokens"`
 	OutputTokens int64  `json:"outputTokens"`
 	TotalTokens  int64  `json:"totalTokens"`

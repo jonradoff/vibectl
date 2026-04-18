@@ -163,7 +163,7 @@ export default function FeedbackTab({ projectId, projectCode }: FeedbackTabProps
       {/* Add feedback modal */}
       {showAdd && (
         <AddFeedbackModal
-          projectId={projectId}
+          projectId={projectCode}
           onClose={() => setShowAdd(false)}
           onCreated={invalidate}
         />
@@ -380,8 +380,8 @@ function FeedbackDetailModal({ item, projectCode, onClose, onAccept, onDismiss, 
 
 // ─── Add Feedback Modal ──────────────────────────────────────────────────────
 
-function AddFeedbackModal({ projectId, onClose, onCreated }: {
-  projectId: string
+function AddFeedbackModal({ projectCode, onClose, onCreated }: {
+  projectCode: string
   onClose: () => void
   onCreated: () => void
 }) {
@@ -389,7 +389,7 @@ function AddFeedbackModal({ projectId, onClose, onCreated }: {
   const [sourceType, setSourceType] = useState('manual')
 
   const mutation = useMutation({
-    mutationFn: () => createFeedback({ projectId, rawContent: content, sourceType }),
+    mutationFn: () => createFeedback({ projectCode, rawContent: content, sourceType }),
     onSuccess: () => { onCreated(); onClose() },
   })
 

@@ -28,7 +28,7 @@ func NewHealthRecordService(db *mongo.Database) *HealthRecordService {
 func (s *HealthRecordService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{
-			{Key: "projectId", Value: 1},
+			{Key: "projectCode", Value: 1},
 			{Key: "checkedAt", Value: -1},
 		}},
 		// TTL index: auto-delete records older than 7 days
@@ -41,11 +41,11 @@ func (s *HealthRecordService) EnsureIndexes(ctx context.Context) error {
 }
 
 // Insert stores a new health check record.
-func (s *HealthRecordService) Insert(ctx context.Context, projectID bson.ObjectID, results []models.HealthCheckResult) error {
+func (s *HealthRecordService) Insert(ctx context.Context, projectCode string, results []models.HealthCheckResult) error {
 	record := models.HealthRecord{
-		ProjectID: projectID,
-		Results:   results,
-		CheckedAt: time.Now().UTC(),
+		ProjectCode: projectCode,
+		Results:     results,
+		CheckedAt:   time.Now().UTC(),
 	}
 	_, err := s.collection.InsertOne(ctx, record)
 	if err != nil {
@@ -55,8 +55,8 @@ func (s *HealthRecordService) Insert(ctx context.Context, projectID bson.ObjectI
 }
 
 // GetLatest returns the most recent health record for a project, or nil if none exists.
-func (s *HealthRecordService) GetLatest(ctx context.Context, projectID bson.ObjectID) (*models.HealthRecord, error) {
-	filter := bson.D{{Key: "projectId", Value: projectID}}
+func (s *HealthRecordService) GetLatest(ctx context.Context, projectCode string) (*models.HealthRecord, error) {
+	filter := bson.D{{Key: "projectCode", Value: projectCode}}
 	opts := options.FindOne().SetSort(bson.D{{Key: "checkedAt", Value: -1}})
 
 	var record models.HealthRecord
@@ -72,10 +72,10 @@ func (s *HealthRecordService) GetLatest(ctx context.Context, projectID bson.Obje
 
 // DailyHealthStatus returns health status per day for the last `days` days, oldest first.
 // Values are "up", "down", "degraded", or "unknown". Takes the worst status seen each day.
-func (s *HealthRecordService) DailyHealthStatus(ctx context.Context, projectID bson.ObjectID, days int) ([]string, error) {
+func (s *HealthRecordService) DailyHealthStatus(ctx context.Context, projectCode string, days int) ([]string, error) {
 	since := time.Now().UTC().AddDate(0, 0, -days)
 	filter := bson.D{
-		{Key: "projectId", Value: projectID},
+		{Key: "projectCode", Value: projectCode},
 		{Key: "checkedAt", Value: bson.D{{Key: "$gte", Value: since}}},
 	}
 	cursor, err := s.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "checkedAt", Value: 1}}))
@@ -120,15 +120,10 @@ func (s *HealthRecordService) DailyHealthStatus(ctx context.Context, projectID b
 }
 
 // GetHistory returns health records for a project within the given duration (e.g. last 24h).
-func (s *HealthRecordService) GetHistory(ctx context.Context, projectID string, since time.Duration) ([]models.HealthRecord, error) {
-	oid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid project ID: %w", err)
-	}
-
+func (s *HealthRecordService) GetHistory(ctx context.Context, projectCode string, since time.Duration) ([]models.HealthRecord, error) {
 	cutoff := time.Now().UTC().Add(-since)
 	filter := bson.D{
-		{Key: "projectId", Value: oid},
+		{Key: "projectCode", Value: projectCode},
 		{Key: "checkedAt", Value: bson.D{{Key: "$gte", Value: cutoff}}},
 	}
 	opts := options.Find().SetSort(bson.D{{Key: "checkedAt", Value: 1}})

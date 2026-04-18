@@ -17,7 +17,7 @@ const roleBadgeClass = (role: ProjectRole): string => {
   return map[role];
 };
 
-export default function MembersPanel({ projectId }: { projectId: string }) {
+export default function MembersPanel({ projectId }: { projectCode: string }) {
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState('');
@@ -37,7 +37,7 @@ export default function MembersPanel({ projectId }: { projectId: string }) {
   const handleUpsert = async (userId: string, role: ProjectRole) => {
     setError('');
     try {
-      await upsertProjectMember(projectId, userId, role);
+      await upsertProjectMember(projectCode, userId, role);
       await invalidate();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
@@ -47,7 +47,7 @@ export default function MembersPanel({ projectId }: { projectId: string }) {
   const handleRemove = async (userId: string) => {
     setError('');
     try {
-      await removeProjectMember(projectId, userId);
+      await removeProjectMember(projectCode, userId);
       await invalidate();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');

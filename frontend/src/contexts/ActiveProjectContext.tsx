@@ -30,7 +30,7 @@ interface ActiveProjectContextValue {
   activeProjectId: string | null
   setActiveProjectId: (id: string | null) => void
   projectStatuses: Record<string, ProjectStatus>
-  updateProjectStatus: (projectId: string, status: ProjectStatus) => void
+  updateProjectStatus: (projectCode: string, status: ProjectStatus) => void
   closedProjectIds: Set<string>
   closeProject: (id: string) => void
   openProject: (id: string) => void
@@ -51,7 +51,7 @@ export function ActiveProjectProvider({ children }: { children: ReactNode }) {
   const [projectStatuses, setProjectStatuses] = useState<Record<string, ProjectStatus>>({})
   const [closedProjectIds, setClosedProjectIds] = useState<Set<string>>(loadClosedProjects)
 
-  const updateProjectStatus = useCallback((projectId: string, status: ProjectStatus) => {
+  const updateProjectStatus = useCallback((projectCode: string, status: ProjectStatus) => {
     setProjectStatuses((prev) => {
       const existing = prev[projectId]
       if (

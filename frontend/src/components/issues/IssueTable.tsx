@@ -7,7 +7,7 @@ import { priorityColors, typeColors } from '../../types';
 import StatusBadge from './StatusBadge';
 
 interface IssueTableProps {
-  projectId: string;
+  projectCode: string;
   projectCode: string;
 }
 
@@ -17,7 +17,7 @@ type ViewTab = 'active' | 'archived';
 
 const priorityOrder: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3, P4: 4, P5: 5 };
 
-function IssueTable({ projectId, projectCode }: IssueTableProps) {
+function IssueTable({ projectCode, projectCode }: IssueTableProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [viewTab, setViewTab] = useState<ViewTab>('active');
@@ -363,7 +363,7 @@ function IssueTable({ projectId, projectCode }: IssueTableProps) {
         </>
       ) : (
         <ArchivedIssueList
-          projectId={projectId}
+          projectId={projectCode}
           projectCode={projectCode}
           issues={archivedIssues ?? []}
           isLoading={archivedLoading}
@@ -383,7 +383,7 @@ function ArchivedIssueList({
   isLoading,
   onMutate,
 }: {
-  projectId: string;
+  projectCode: string;
   projectCode: string;
   issues: Issue[];
   isLoading: boolean;

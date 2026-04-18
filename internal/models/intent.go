@@ -18,7 +18,7 @@ type PRLink struct {
 // Intent represents a developer intent extracted from one or more chat sessions.
 type Intent struct {
 	ID             bson.ObjectID `json:"id" bson:"_id,omitempty"`
-	ProjectID      bson.ObjectID `json:"projectId" bson:"projectId"`
+	ProjectCode    string        `json:"projectCode" bson:"projectCode"`
 	SessionIDs     []string      `json:"sessionIds" bson:"sessionIds"`
 	Title          string        `json:"title" bson:"title"`
 	Description    string        `json:"description" bson:"description"`

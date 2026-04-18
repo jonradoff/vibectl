@@ -37,7 +37,7 @@ func NewIntentExtractor(is *IntentService, cds *CodeDeltaService, us *ClaudeUsag
 
 // sessionSummary is the condensed data sent to Haiku for analysis.
 type sessionSummary struct {
-	ProjectID      string   `json:"projectId"`
+	ProjectCode    string   `json:"projectCode"`
 	SessionID      string   `json:"sessionId"`
 	DurationSecs   int64    `json:"durationSecs"`
 	UserPrompts    []string `json:"userPrompts"`
@@ -72,16 +72,15 @@ func (e *IntentExtractor) ExtractFromSession(ctx context.Context, entry *models.
 		return fmt.Errorf("no AI client configured")
 	}
 
-	slog.Info("extracting intent", "sessionID", entry.ClaudeSessionID, "projectID", entry.ProjectID, "messages", len(entry.Messages))
+	slog.Info("extracting intent", "sessionID", entry.ClaudeSessionID, "projectCode", entry.ProjectCode, "messages", len(entry.Messages))
 
 	summary := e.buildSummary(ctx, entry)
 	if summary.PromptCount == 0 {
 		slog.Info("skipping session — no user prompts, marking as analyzed", "sessionID", entry.ClaudeSessionID)
 		// Create a minimal intent to mark this session as analyzed so it's not re-processed
-		projectID, _ := bson.ObjectIDFromHex(entry.ProjectID)
 		skip := &models.Intent{
-			ProjectID:  projectID,
-			SessionIDs: []string{entry.ClaudeSessionID},
+			ProjectCode: entry.ProjectCode,
+			SessionIDs:  []string{entry.ClaudeSessionID},
 			Title:      "(no extractable content)",
 			Status:     "abandoned",
 			Size:       "S",
@@ -96,8 +95,8 @@ func (e *IntentExtractor) ExtractFromSession(ctx context.Context, entry *models.
 
 	// Fetch recent intents for merge detection
 	var recentIntents []models.Intent
-	if entry.ProjectID != "" {
-		recentIntents, _ = e.intentService.ListRecent(ctx, entry.ProjectID, 7)
+	if entry.ProjectCode != "" {
+		recentIntents, _ = e.intentService.ListRecent(ctx, entry.ProjectCode, 7)
 	}
 
 	prompt := buildExtractionPrompt(summary, recentIntents)
@@ -140,7 +139,6 @@ func (e *IntentExtractor) ExtractFromSession(ctx context.Context, entry *models.
 	// Convert to Intent models and store.
 	// When multiple intents are extracted from one session, split tokens/duration
 	// proportionally by size points so they don't all show the full session total.
-	projectID, _ := bson.ObjectIDFromHex(entry.ProjectID)
 
 	// Pre-compute total size points for proportional splitting
 	totalPoints := 0
@@ -179,7 +177,7 @@ func (e *IntentExtractor) ExtractFromSession(ctx context.Context, entry *models.
 		}
 
 		intent := &models.Intent{
-			ProjectID:      projectID,
+			ProjectCode:    entry.ProjectCode,
 			SessionIDs:     []string{entry.ClaudeSessionID},
 			Title:          ei.Title,
 			Description:    ei.Description,
@@ -224,7 +222,7 @@ func (e *IntentExtractor) ExtractFromSessionAsync(entry *models.ChatHistoryEntry
 
 func (e *IntentExtractor) buildSummary(ctx context.Context, entry *models.ChatHistoryEntry) sessionSummary {
 	s := sessionSummary{
-		ProjectID:    entry.ProjectID,
+		ProjectCode:  entry.ProjectCode,
 		SessionID:    entry.ClaudeSessionID,
 		DurationSecs: int64(entry.EndedAt.Sub(entry.StartedAt).Seconds()),
 	}

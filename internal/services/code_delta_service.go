@@ -22,7 +22,7 @@ func NewCodeDeltaService(db *mongo.Database) *CodeDeltaService {
 
 func (s *CodeDeltaService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
-		{Keys: bson.D{{Key: "projectId", Value: 1}, {Key: "recordedAt", Value: -1}}},
+		{Keys: bson.D{{Key: "projectCode", Value: 1}, {Key: "recordedAt", Value: -1}}},
 		{Keys: bson.D{{Key: "recordedAt", Value: -1}}},
 	})
 	return err
@@ -46,8 +46,8 @@ func (s *CodeDeltaService) RecordAsync(delta *models.CodeDelta) {
 
 // ProjectProductivity holds aggregated code delta stats for a project.
 type ProjectProductivity struct {
-	ProjectID    string        `json:"projectId" bson:"-"`
-	RawID        bson.ObjectID `json:"-" bson:"_id"`
+	ProjectCode  string        `json:"projectCode" bson:"-"`
+	RawCode      string        `json:"-" bson:"_id"`
 	LinesAdded   int64         `json:"linesAdded" bson:"linesAdded"`
 	LinesRemoved int64         `json:"linesRemoved" bson:"linesRemoved"`
 	BytesDelta   int64         `json:"bytesDelta" bson:"bytesDelta"`
@@ -62,7 +62,7 @@ func (s *CodeDeltaService) GetProductivity(ctx context.Context, since time.Time)
 			{Key: "recordedAt", Value: bson.D{{Key: "$gte", Value: since}}},
 		}}},
 		bson.D{{Key: "$group", Value: bson.D{
-			{Key: "_id", Value: "$projectId"},
+			{Key: "_id", Value: "$projectCode"},
 			{Key: "linesAdded", Value: bson.D{{Key: "$sum", Value: "$linesAdded"}}},
 			{Key: "linesRemoved", Value: bson.D{{Key: "$sum", Value: "$linesRemoved"}}},
 			{Key: "bytesDelta", Value: bson.D{{Key: "$sum", Value: "$bytesDelta"}}},
@@ -86,21 +86,20 @@ func (s *CodeDeltaService) GetProductivity(ctx context.Context, since time.Time)
 		results = []ProjectProductivity{}
 	}
 	for i := range results {
-		results[i].ProjectID = results[i].RawID.Hex()
+		results[i].ProjectCode = results[i].RawCode
 	}
 	return results, nil
 }
 
 // GetProductivityByProject returns code delta stats for a specific project.
-func (s *CodeDeltaService) GetProductivityByProject(ctx context.Context, projectID string, since time.Time) (*ProjectProductivity, error) {
-	oid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
+func (s *CodeDeltaService) GetProductivityByProject(ctx context.Context, projectCode string, since time.Time) (*ProjectProductivity, error) {
+	if projectCode == "" {
 		return nil, nil
 	}
 
 	pipeline := bson.A{
 		bson.D{{Key: "$match", Value: bson.D{
-			{Key: "projectId", Value: oid},
+			{Key: "projectCode", Value: projectCode},
 			{Key: "recordedAt", Value: bson.D{{Key: "$gte", Value: since}}},
 		}}},
 		bson.D{{Key: "$group", Value: bson.D{
@@ -124,21 +123,18 @@ func (s *CodeDeltaService) GetProductivityByProject(ctx context.Context, project
 	if len(results) == 0 {
 		return nil, nil
 	}
-	results[0].ProjectID = projectID
+	results[0].ProjectCode = projectCode
 	return &results[0], nil
 }
 
 // ListRecent returns recent individual code delta records.
-func (s *CodeDeltaService) ListRecent(ctx context.Context, projectID string, limit int) ([]models.CodeDelta, error) {
+func (s *CodeDeltaService) ListRecent(ctx context.Context, projectCode string, limit int) ([]models.CodeDelta, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	filter := bson.D{}
-	if projectID != "" {
-		oid, err := bson.ObjectIDFromHex(projectID)
-		if err == nil {
-			filter = append(filter, bson.E{Key: "projectId", Value: oid})
-		}
+	if projectCode != "" {
+		filter = append(filter, bson.E{Key: "projectCode", Value: projectCode})
 	}
 	opts := options.Find().SetSort(bson.D{{Key: "recordedAt", Value: -1}}).SetLimit(int64(limit))
 	cursor, err := s.collection.Find(ctx, filter, opts)

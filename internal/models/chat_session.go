@@ -11,7 +11,7 @@ import (
 // after a backend restart.
 type ChatSessionState struct {
 	ID              bson.ObjectID     `json:"id" bson:"_id,omitempty"`
-	ProjectID       string            `json:"projectId" bson:"projectId"`
+	ProjectCode     string            `json:"projectCode" bson:"projectCode"`
 	ClaudeSessionID string            `json:"claudeSessionId" bson:"claudeSessionId"`
 	LocalPath       string            `json:"localPath" bson:"localPath"`
 	Messages        []json.RawMessage `json:"messages" bson:"messages"`

@@ -22,7 +22,7 @@ func NewPlanService(db *mongo.Database) *PlanService {
 
 func (s *PlanService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
-		{Keys: bson.D{{Key: "projectId", Value: 1}, {Key: "createdAt", Value: -1}}},
+		{Keys: bson.D{{Key: "projectCode", Value: 1}, {Key: "createdAt", Value: -1}}},
 		{Keys: bson.D{{Key: "status", Value: 1}, {Key: "createdAt", Value: -1}}},
 		{Keys: bson.D{{Key: "createdAt", Value: -1}}},
 	})
@@ -78,11 +78,11 @@ func (s *PlanService) UpdateStatus(ctx context.Context, id bson.ObjectID, status
 	return nil
 }
 
-// UpdateStatusByRequestID updates the plan matching a given requestID + projectID.
-func (s *PlanService) UpdateStatusByRequestID(ctx context.Context, projectID *bson.ObjectID, requestID string, status string, feedback string) error {
+// UpdateStatusByRequestID updates the plan matching a given requestID + projectCode.
+func (s *PlanService) UpdateStatusByRequestID(ctx context.Context, projectCode string, requestID string, status string, feedback string) error {
 	filter := bson.D{{Key: "requestId", Value: requestID}}
-	if projectID != nil {
-		filter = append(filter, bson.E{Key: "projectId", Value: *projectID})
+	if projectCode != "" {
+		filter = append(filter, bson.E{Key: "projectCode", Value: projectCode})
 	}
 	set := bson.D{
 		{Key: "status", Value: status},
@@ -117,7 +117,7 @@ func (s *PlanService) GetByID(ctx context.Context, id bson.ObjectID) (*models.Pl
 }
 
 // List returns plans with optional filtering.
-func (s *PlanService) List(ctx context.Context, projectID string, status string, limit int, offset int) ([]models.Plan, int64, error) {
+func (s *PlanService) List(ctx context.Context, projectCode string, status string, limit int, offset int) ([]models.Plan, int64, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -126,12 +126,8 @@ func (s *PlanService) List(ctx context.Context, projectID string, status string,
 	}
 
 	filter := bson.D{}
-	if projectID != "" {
-		oid, err := bson.ObjectIDFromHex(projectID)
-		if err != nil {
-			return nil, 0, fmt.Errorf("invalid project ID: %w", err)
-		}
-		filter = append(filter, bson.E{Key: "projectId", Value: oid})
+	if projectCode != "" {
+		filter = append(filter, bson.E{Key: "projectCode", Value: projectCode})
 	}
 	if status != "" {
 		filter = append(filter, bson.E{Key: "status", Value: status})
@@ -165,14 +161,13 @@ func (s *PlanService) List(ctx context.Context, projectID string, status string,
 
 // MarkAcceptedPlansCompleted marks all accepted plans for a project as completed
 // when the session ends (inference: if Claude finished without abandoning, the plan was completed).
-func (s *PlanService) MarkAcceptedPlansCompleted(ctx context.Context, projectID string) error {
-	oid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
-		return nil // silently skip invalid IDs
+func (s *PlanService) MarkAcceptedPlansCompleted(ctx context.Context, projectCode string) error {
+	if projectCode == "" {
+		return nil
 	}
 	now := time.Now().UTC()
 	filter := bson.D{
-		{Key: "projectId", Value: oid},
+		{Key: "projectCode", Value: projectCode},
 		{Key: "status", Value: "accepted"},
 	}
 	update := bson.D{{Key: "$set", Value: bson.D{
@@ -180,6 +175,6 @@ func (s *PlanService) MarkAcceptedPlansCompleted(ctx context.Context, projectID 
 		{Key: "completedAt", Value: now},
 		{Key: "updatedAt", Value: now},
 	}}}
-	_, err = s.collection.UpdateMany(ctx, filter, update)
-	return err
+	_, updateErr := s.collection.UpdateMany(ctx, filter, update)
+	return updateErr
 }

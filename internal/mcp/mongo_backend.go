@@ -90,12 +90,12 @@ func (b *MongoBackend) UpdateIssue(ctx context.Context, issueKey string, req *mo
 	return b.issues.Update(ctx, issueKey, req)
 }
 
-func (b *MongoBackend) CountIssuesByProject(ctx context.Context, projectID bson.ObjectID) (map[string]int, error) {
-	return b.issues.CountByProject(ctx, projectID)
+func (b *MongoBackend) CountIssuesByProject(ctx context.Context, projectCode string) (map[string]int, error) {
+	return b.issues.CountByProject(ctx, projectCode)
 }
 
-func (b *MongoBackend) CountIssuesByPriority(ctx context.Context, projectID bson.ObjectID) (map[string]int, error) {
-	return b.issues.CountByPriority(ctx, projectID)
+func (b *MongoBackend) CountIssuesByPriority(ctx context.Context, projectCode string) (map[string]int, error) {
+	return b.issues.CountByPriority(ctx, projectCode)
 }
 
 func (b *MongoBackend) ListSessions(ctx context.Context, projectID string) ([]models.SessionLog, error) {
@@ -114,8 +114,8 @@ func (b *MongoBackend) ListRecentDecisions(ctx context.Context, projectID string
 	return b.decisions.ListRecent(ctx, projectID, limit)
 }
 
-func (b *MongoBackend) RecordDecision(ctx context.Context, projectID bson.ObjectID, decisionType, summary, issueKey string) error {
-	return b.decisions.Record(ctx, projectID, decisionType, summary, issueKey)
+func (b *MongoBackend) RecordDecision(ctx context.Context, projectCode string, decisionType, summary, issueKey string) error {
+	return b.decisions.Record(ctx, projectCode, decisionType, summary, issueKey)
 }
 
 func (b *MongoBackend) ListPromptsByProject(ctx context.Context, projectID string) ([]models.Prompt, error) {
@@ -163,10 +163,10 @@ func (b *MongoBackend) ReviewFeedback(ctx context.Context, feedbackID string, re
 }
 
 func (b *MongoBackend) CreateIssueFromFeedback(ctx context.Context, item *models.FeedbackItem, req *models.ReviewFeedbackRequest) (*models.Issue, error) {
-	if item.ProjectID == nil {
+	if item.ProjectCode == "" {
 		return nil, fmt.Errorf("feedback has no project")
 	}
-	projectID := item.ProjectID.Hex()
+	projectCode := item.ProjectCode
 
 	title := req.IssueTitle
 	description := req.IssueDescription
@@ -219,7 +219,7 @@ func (b *MongoBackend) CreateIssueFromFeedback(ctx context.Context, item *models
 		ReproSteps:       reproSteps,
 		CreatedBy:        item.SubmittedBy,
 	}
-	issue, err := b.issues.Create(ctx, projectID, createReq)
+	issue, err := b.issues.Create(ctx, projectCode, createReq)
 	if err != nil {
 		return nil, err
 	}

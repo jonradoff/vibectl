@@ -25,11 +25,11 @@ func NewChatSessionService(db *mongo.Database) *ChatSessionService {
 	}
 }
 
-// EnsureIndexes creates indexes on projectId (unique) and status.
+// EnsureIndexes creates indexes on projectCode (unique) and status.
 func (s *ChatSessionService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{
-			Keys:    bson.D{{Key: "projectId", Value: 1}},
+			Keys:    bson.D{{Key: "projectCode", Value: 1}},
 			Options: options.Index().SetUnique(true),
 		},
 		{Keys: bson.D{{Key: "status", Value: 1}}},
@@ -38,10 +38,10 @@ func (s *ChatSessionService) EnsureIndexes(ctx context.Context) error {
 }
 
 // Upsert creates or updates the persisted chat session for a project.
-func (s *ChatSessionService) Upsert(ctx context.Context, projectID, claudeSessionID, localPath string, messages []json.RawMessage) error {
-	filter := bson.D{{Key: "projectId", Value: projectID}}
+func (s *ChatSessionService) Upsert(ctx context.Context, projectCode, claudeSessionID, localPath string, messages []json.RawMessage) error {
+	filter := bson.D{{Key: "projectCode", Value: projectCode}}
 	update := bson.D{{Key: "$set", Value: bson.D{
-		{Key: "projectId", Value: projectID},
+		{Key: "projectCode", Value: projectCode},
 		{Key: "claudeSessionId", Value: claudeSessionID},
 		{Key: "localPath", Value: localPath},
 		{Key: "messages", Value: messages},
@@ -57,8 +57,8 @@ func (s *ChatSessionService) Upsert(ctx context.Context, projectID, claudeSessio
 }
 
 // MarkResumable sets a session's status to "resumable" so it can be picked up after restart.
-func (s *ChatSessionService) MarkResumable(ctx context.Context, projectID string) error {
-	filter := bson.D{{Key: "projectId", Value: projectID}}
+func (s *ChatSessionService) MarkResumable(ctx context.Context, projectCode string) error {
+	filter := bson.D{{Key: "projectCode", Value: projectCode}}
 	update := bson.D{{Key: "$set", Value: bson.D{
 		{Key: "status", Value: "resumable"},
 		{Key: "updatedAt", Value: time.Now().UTC()},
@@ -68,8 +68,8 @@ func (s *ChatSessionService) MarkResumable(ctx context.Context, projectID string
 }
 
 // MarkDead sets a session's status to "dead" so it will not be resumed.
-func (s *ChatSessionService) MarkDead(ctx context.Context, projectID string) error {
-	filter := bson.D{{Key: "projectId", Value: projectID}}
+func (s *ChatSessionService) MarkDead(ctx context.Context, projectCode string) error {
+	filter := bson.D{{Key: "projectCode", Value: projectCode}}
 	update := bson.D{{Key: "$set", Value: bson.D{
 		{Key: "status", Value: "dead"},
 		{Key: "updatedAt", Value: time.Now().UTC()},
@@ -80,9 +80,9 @@ func (s *ChatSessionService) MarkDead(ctx context.Context, projectID string) err
 
 // GetResumable returns the resumable session for a project, or nil if none exists.
 // Matches both "resumable" (graceful shutdown) and "active" (server killed ungracefully).
-func (s *ChatSessionService) GetResumable(ctx context.Context, projectID string) (*models.ChatSessionState, error) {
+func (s *ChatSessionService) GetResumable(ctx context.Context, projectCode string) (*models.ChatSessionState, error) {
 	filter := bson.D{
-		{Key: "projectId", Value: projectID},
+		{Key: "projectCode", Value: projectCode},
 		{Key: "status", Value: bson.D{{Key: "$in", Value: bson.A{"resumable", "active"}}}},
 	}
 	var state models.ChatSessionState

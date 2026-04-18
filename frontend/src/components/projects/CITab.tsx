@@ -4,7 +4,7 @@ import { getCIStatus, ciCommit, ciPush, ciDeploy, ciRestartProd, ciStartProd, ci
 import type { CIStatus } from '../../types';
 
 interface CITabProps {
-  projectId: string;
+  projectCode: string;
   hasLocalPath: boolean;
   hasGitHubUrl: boolean;
   hasDeployCmd: boolean;
@@ -25,7 +25,7 @@ interface CITabProps {
 
 export type CILogEntry = { time: string; source: string; text: string; isError?: boolean }
 
-export default function CITab({ projectId, hasLocalPath, hasGitHubUrl, hasDeployCmd, hasStartDevCmd, hasStartProdCmd, hasRestartProdCmd, paused, githubUrl, isCloned, cloneStreaming, cloneLog, hasGitHubPAT, onClone, onPull, onSaveGithubUrl, onPausedChange }: CITabProps) {
+export default function CITab({ projectCode, hasLocalPath, hasGitHubUrl, hasDeployCmd, hasStartDevCmd, hasStartProdCmd, hasRestartProdCmd, paused, githubUrl, isCloned, cloneStreaming, cloneLog, hasGitHubPAT, onClone, onPull, onSaveGithubUrl, onPausedChange }: CITabProps) {
   const hasProdData = hasDeployCmd || hasStartProdCmd || hasRestartProdCmd;
   const [env, setEnv] = useState<'prod' | 'dev'>(!hasProdData && hasStartDevCmd ? 'dev' : 'prod');
   const [ciLog, setCiLog] = useState<CILogEntry[]>([]);
@@ -71,17 +71,17 @@ export default function CITab({ projectId, hasLocalPath, hasGitHubUrl, hasDeploy
       {env === 'prod' && (
         <div className="space-y-6">
           {/* Pause toggle */}
-          <PauseToggle projectId={projectId} paused={!!paused} onPausedChange={onPausedChange} />
+          <PauseToggle projectId={projectCode} paused={!!paused} onPausedChange={onPausedChange} />
 
           {/* Aggregate deploy */}
-          <DeployAllCard projectId={projectId} hasLocalPath={hasLocalPath} hasGitHubUrl={hasGitHubUrl} hasDeployCmd={hasDeployCmd} />
+          <DeployAllCard projectId={projectCode} hasLocalPath={hasLocalPath} hasGitHubUrl={hasGitHubUrl} hasDeployCmd={hasDeployCmd} />
 
           {/* Individual prod actions */}
           {(hasDeployCmd || hasStartProdCmd || hasRestartProdCmd) && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {hasDeployCmd && <DeployCard projectId={projectId} appendLog={appendLog} />}
-              {hasStartProdCmd && <StartProdCard projectId={projectId} appendLog={appendLog} />}
-              {hasRestartProdCmd && <RestartProdCard projectId={projectId} appendLog={appendLog} />}
+              {hasDeployCmd && <DeployCard projectId={projectCode} appendLog={appendLog} />}
+              {hasStartProdCmd && <StartProdCard projectId={projectCode} appendLog={appendLog} />}
+              {hasRestartProdCmd && <RestartProdCard projectId={projectCode} appendLog={appendLog} />}
             </div>
           )}
         </div>
@@ -91,7 +91,7 @@ export default function CITab({ projectId, hasLocalPath, hasGitHubUrl, hasDeploy
         <div className="space-y-6">
           {/* Restart Dev — primary action */}
           {hasStartDevCmd && (
-            <RestartDevCard projectId={projectId} appendLog={appendLog} />
+            <RestartDevCard projectId={projectCode} appendLog={appendLog} />
           )}
           {!hasStartDevCmd && (
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
@@ -106,8 +106,8 @@ export default function CITab({ projectId, hasLocalPath, hasGitHubUrl, hasDeploy
             {hasGitHubUrl && (
               <CloneCard isCloned={!!isCloned} cloneStreaming={!!cloneStreaming} cloneLog={cloneLog} hasGitHubPAT={hasGitHubPAT} onClone={onClone} onPull={onPull} />
             )}
-            <CommitCard projectId={projectId} hasLocalPath={hasLocalPath} />
-            <PushCard projectId={projectId} hasLocalPath={hasLocalPath} hasGitHubUrl={hasGitHubUrl} />
+            <CommitCard projectId={projectCode} hasLocalPath={hasLocalPath} />
+            <PushCard projectId={projectCode} hasLocalPath={hasLocalPath} hasGitHubUrl={hasGitHubUrl} />
           </div>
         </div>
       )}
@@ -134,7 +134,7 @@ export default function CITab({ projectId, hasLocalPath, hasGitHubUrl, hasDeploy
   );
 }
 
-function PauseToggle({ projectId, paused, onPausedChange }: { projectId: string; paused: boolean; onPausedChange?: (paused: boolean) => void }) {
+function PauseToggle({ projectCode, paused, onPausedChange }: { projectCode: string; paused: boolean; onPausedChange?: (paused: boolean) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -142,7 +142,7 @@ function PauseToggle({ projectId, paused, onPausedChange }: { projectId: string;
     setBusy(true);
     setError('');
     try {
-      const res = await ciTogglePause(projectId, !paused);
+      const res = await ciTogglePause(projectCode, !paused);
       onPausedChange?.(res.paused);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
@@ -379,7 +379,7 @@ function CloneCard({ isCloned, cloneStreaming, cloneLog, hasGitHubPAT, onClone, 
   );
 }
 
-function CommitCard({ projectId, hasLocalPath }: { projectId: string; hasLocalPath: boolean }) {
+function CommitCard({ projectCode, hasLocalPath }: { projectCode: string; hasLocalPath: boolean }) {
   const [message, setMessage] = useState('');
   const [output, setOutput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -388,7 +388,7 @@ function CommitCard({ projectId, hasLocalPath }: { projectId: string; hasLocalPa
   const run = async () => {
     setError(''); setOutput(''); setBusy(true);
     try {
-      const res = await ciCommit(projectId, message.trim());
+      const res = await ciCommit(projectCode, message.trim());
       setOutput(res.output || res.status);
       setMessage('');
     } catch (e) {
@@ -434,7 +434,7 @@ function CommitCard({ projectId, hasLocalPath }: { projectId: string; hasLocalPa
   );
 }
 
-function PushCard({ projectId, hasLocalPath, hasGitHubUrl }: { projectId: string; hasLocalPath: boolean; hasGitHubUrl: boolean }) {
+function PushCard({ projectCode, hasLocalPath, hasGitHubUrl }: { projectCode: string; hasLocalPath: boolean; hasGitHubUrl: boolean }) {
   const [output, setOutput] = useState('');
   const [warning, setWarning] = useState('');
   const [busy, setBusy] = useState(false);
@@ -481,7 +481,7 @@ function PushCard({ projectId, hasLocalPath, hasGitHubUrl }: { projectId: string
   );
 }
 
-function DeployCard({ projectId, appendLog }: { projectId: string; appendLog: (source: string, text: string, isError?: boolean) => void }) {
+function DeployCard({ projectCode, appendLog }: { projectCode: string; appendLog: (source: string, text: string, isError?: boolean) => void }) {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
@@ -529,7 +529,7 @@ function DeployCard({ projectId, appendLog }: { projectId: string; appendLog: (s
   );
 }
 
-function RestartDevCard({ projectId, appendLog }: { projectId: string; appendLog: (source: string, text: string, isError?: boolean) => void }) {
+function RestartDevCard({ projectCode, appendLog }: { projectCode: string; appendLog: (source: string, text: string, isError?: boolean) => void }) {
   const [streaming, setStreaming] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
@@ -581,7 +581,7 @@ function RestartDevCard({ projectId, appendLog }: { projectId: string; appendLog
   );
 }
 
-function RestartProdCard({ projectId, appendLog }: { projectId: string; appendLog: (source: string, text: string, isError?: boolean) => void }) {
+function RestartProdCard({ projectCode, appendLog }: { projectCode: string; appendLog: (source: string, text: string, isError?: boolean) => void }) {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
@@ -629,7 +629,7 @@ function RestartProdCard({ projectId, appendLog }: { projectId: string; appendLo
   );
 }
 
-function StartProdCard({ projectId, appendLog }: { projectId: string; appendLog: (source: string, text: string, isError?: boolean) => void }) {
+function StartProdCard({ projectCode, appendLog }: { projectCode: string; appendLog: (source: string, text: string, isError?: boolean) => void }) {
   const [busy, setBusy] = useState(false);
 
   const run = async () => {
@@ -667,7 +667,7 @@ function StartProdCard({ projectId, appendLog }: { projectId: string; appendLog:
 
 type DeployStep = { name: string; lines: string[]; status: 'running' | 'done' | 'error' };
 
-function DeployAllCard({ projectId, hasLocalPath, hasDeployCmd }: { projectId: string; hasLocalPath: boolean; hasGitHubUrl: boolean; hasDeployCmd: boolean }) {
+function DeployAllCard({ projectCode, hasLocalPath, hasDeployCmd }: { projectCode: string; hasLocalPath: boolean; hasGitHubUrl: boolean; hasDeployCmd: boolean }) {
   const [commitMsg, setCommitMsg] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [streaming, setStreaming] = useState(false);
@@ -690,7 +690,7 @@ function DeployAllCard({ projectId, hasLocalPath, hasDeployCmd }: { projectId: s
     setGlobalError('');
     setStreaming(true);
 
-    const url = getDeployAllStreamUrl(projectId, commitMsg.trim() || undefined);
+    const url = getDeployAllStreamUrl(projectCode, commitMsg.trim() || undefined);
     const es = new EventSource(url);
     esRef.current = es;
 

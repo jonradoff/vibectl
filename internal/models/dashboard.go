@@ -20,9 +20,8 @@ type GlobalDashboard struct {
 
 // ProjectUniverseData is the per-project data returned by GET /api/v1/dashboard/universe.
 type ProjectUniverseData struct {
-	ProjectID            string         `json:"projectId"`
-	ProjectName          string         `json:"projectName"`
 	ProjectCode          string         `json:"projectCode"`
+	ProjectName          string         `json:"projectName"`
 	ActivityByDay        []int          `json:"activityByDay"`   // last 90 days, oldest first
 	HealthByDay          []string       `json:"healthByDay"`     // last 7 days, oldest first: "up"/"down"/"degraded"/"unknown"
 	OpenIssueCount       int            `json:"openIssueCount"`
@@ -41,7 +40,7 @@ type ProjectUniverseData struct {
 
 type PMReviewResult struct {
 	ID               string            `json:"id" bson:"_id,omitempty"`
-	ProjectID        string            `json:"projectId" bson:"projectId"`
+	ProjectCode      string            `json:"projectCode" bson:"projectCode"`
 	GoalAssessments  []GoalAssessment  `json:"goalAssessments" bson:"goalAssessments"`
 	Gaps             []Gap             `json:"gaps" bson:"gaps"`
 	Risks            []Risk            `json:"risks" bson:"risks"`

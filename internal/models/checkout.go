@@ -10,7 +10,7 @@ import (
 // Only one user can hold the checkout for a project at a time.
 type CodeCheckout struct {
 	ID             bson.ObjectID `json:"id" bson:"_id,omitempty"`
-	ProjectID      bson.ObjectID `json:"projectId" bson:"projectId"`
+	ProjectCode    string        `json:"projectCode" bson:"projectCode"`
 	UserID         bson.ObjectID `json:"userId" bson:"userId"`
 	CheckedOutAt   time.Time     `json:"checkedOutAt" bson:"checkedOutAt"`
 	LastActivityAt time.Time     `json:"lastActivityAt" bson:"lastActivityAt"`

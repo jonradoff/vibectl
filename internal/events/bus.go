@@ -10,7 +10,7 @@ import (
 // Event is a single mutation notification.
 type Event struct {
 	Type      string         `json:"type"`      // e.g. "issue.created"
-	ProjectID string         `json:"projectId"` // empty for global events
+	ProjectCode string       `json:"projectCode"` // empty for global events
 	Payload   map[string]any `json:"payload,omitempty"`
 }
 

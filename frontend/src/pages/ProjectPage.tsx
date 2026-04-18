@@ -240,7 +240,7 @@ function ProjectPage() {
   );
 }
 
-function FeedbackTab({ projectId }: { projectId: string }) {
+function FeedbackTab({ projectId }: { projectCode: string }) {
   const { data: feedback, isLoading, error } = useQuery({
     queryKey: ['projectFeedback', projectId],
     queryFn: () => listProjectFeedback(projectId),

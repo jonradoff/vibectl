@@ -15,7 +15,7 @@ export default function PMReviewPage() {
   });
 
   const reviewMutation = useMutation({
-    mutationFn: (projectId: string) => runPMReview(projectId),
+    mutationFn: (projectCode: string) => runPMReview(projectId),
     onSuccess: (data) => setResult(data),
   });
 

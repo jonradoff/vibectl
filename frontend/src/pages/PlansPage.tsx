@@ -42,7 +42,7 @@ export default function PlansPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['plans', filterProjectId, filterStatus, limit, offset],
     queryFn: () => listPlans({
-      projectId: filterProjectId || undefined,
+      projectCode: filterProjectId || undefined,
       status: filterStatus || undefined,
       limit,
       offset,
@@ -111,7 +111,7 @@ export default function PlansPage() {
             <PlanRow
               key={plan.id}
               plan={plan}
-              project={plan.projectId ? projectMap.get(plan.projectId) : undefined}
+              project={plan.projectCode ? projectMap.get(plan.projectCode) : undefined}
               expanded={expandedId === plan.id}
               onToggle={() => setExpandedId(expandedId === plan.id ? null : plan.id)}
               onStatusChange={(status) => statusMutation.mutate({ planId: plan.id, status })}

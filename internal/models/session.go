@@ -16,7 +16,7 @@ const (
 
 type SessionLog struct {
 	ID             bson.ObjectID `json:"id" bson:"_id,omitempty"`
-	ProjectID      bson.ObjectID `json:"projectId" bson:"projectId"`
+	ProjectCode    string        `json:"projectCode" bson:"projectCode"`
 	StartedAt      time.Time     `json:"startedAt" bson:"startedAt"`
 	EndedAt        *time.Time    `json:"endedAt,omitempty" bson:"endedAt,omitempty"`
 	Summary        string        `json:"summary,omitempty" bson:"summary,omitempty"`

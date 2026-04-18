@@ -22,13 +22,13 @@ func NewPromptService(db *mongo.Database) *PromptService {
 
 func (s *PromptService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "projectId", Value: 1}, {Key: "name", Value: 1}},
+		Keys: bson.D{{Key: "projectCode", Value: 1}, {Key: "name", Value: 1}},
 	})
 	return err
 }
 
 // Create creates a prompt with ownership tracking.
-func (s *PromptService) Create(ctx context.Context, projectID string, req *models.CreatePromptRequest, userID *bson.ObjectID, userName string) (*models.Prompt, error) {
+func (s *PromptService) Create(ctx context.Context, projectCode string, req *models.CreatePromptRequest, userID *bson.ObjectID, userName string) (*models.Prompt, error) {
 	now := time.Now().UTC()
 	p := &models.Prompt{
 		Name:        req.Name,
@@ -40,15 +40,11 @@ func (s *PromptService) Create(ctx context.Context, projectID string, req *model
 		UpdatedAt:   now,
 	}
 
-	if projectID == "*" || projectID == "" {
+	if projectCode == "*" || projectCode == "" {
 		p.Global = true
-		p.ProjectID = nil
+		p.ProjectCode = ""
 	} else {
-		oid, err := bson.ObjectIDFromHex(projectID)
-		if err != nil {
-			return nil, fmt.Errorf("invalid project ID: %w", err)
-		}
-		p.ProjectID = &oid
+		p.ProjectCode = projectCode
 		p.Global = false
 	}
 
@@ -61,15 +57,10 @@ func (s *PromptService) Create(ctx context.Context, projectID string, req *model
 }
 
 // ListByProject returns prompts the user can see: shared prompts + user's own personal prompts.
-func (s *PromptService) ListByProject(ctx context.Context, projectID string, userID *bson.ObjectID) ([]models.Prompt, error) {
-	oid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid project ID: %w", err)
-	}
-
+func (s *PromptService) ListByProject(ctx context.Context, projectCode string, userID *bson.ObjectID) ([]models.Prompt, error) {
 	// Scope: project-specific OR global
 	scopeFilter := bson.A{
-		bson.D{{Key: "projectId", Value: oid}},
+		bson.D{{Key: "projectCode", Value: projectCode}},
 		bson.D{{Key: "global", Value: true}},
 	}
 
@@ -136,9 +127,9 @@ func (s *PromptService) ListAll(ctx context.Context, userID *bson.ObjectID) ([]m
 }
 
 // CountByProject returns the total number of prompts for a given project (including global prompts scoped to it).
-func (s *PromptService) CountByProject(ctx context.Context, projectID bson.ObjectID) (int, error) {
+func (s *PromptService) CountByProject(ctx context.Context, projectCode string) (int, error) {
 	filter := bson.D{{Key: "$or", Value: bson.A{
-		bson.D{{Key: "projectId", Value: projectID}},
+		bson.D{{Key: "projectCode", Value: projectCode}},
 		bson.D{{Key: "global", Value: true}},
 	}}}
 	n, err := s.collection.CountDocuments(ctx, filter)

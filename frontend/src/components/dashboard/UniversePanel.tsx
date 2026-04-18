@@ -113,7 +113,7 @@ function SparklineTable({ data }: { data: ProjectUniverseData[] }) {
         </thead>
         <tbody>
           {data.map((p) => (
-            <tr key={p.projectId} className="border-b border-gray-800 hover:bg-gray-800/30">
+            <tr key={p.projectCode} className="border-b border-gray-800 hover:bg-gray-800/30">
               <td className="py-2 pr-4">
                 <span className="font-mono text-gray-300 font-medium">{p.projectCode}</span>
                 <span className="ml-2 text-gray-500 truncate max-w-[120px] inline-block align-bottom">
@@ -166,7 +166,7 @@ function MinardBands({ data }: { data: ProjectUniverseData[] }) {
         const totalBands = days.length || 90
 
         return (
-          <div key={p.projectId} className="flex items-center gap-3">
+          <div key={p.projectCode} className="flex items-center gap-3">
             {/* Label */}
             <div className="w-16 text-right flex-shrink-0">
               <span className="text-xs font-mono text-gray-400">{p.projectCode}</span>
@@ -248,7 +248,7 @@ function AnnotatedTimeline({ data }: { data: ProjectUniverseData[] }) {
           const activityThreshold = maxActivity * 0.35
 
           return (
-            <div key={p.projectId} className="flex items-center gap-3" style={{ height: LANE_H }}>
+            <div key={p.projectCode} className="flex items-center gap-3" style={{ height: LANE_H }}>
               <div className="w-16 text-right flex-shrink-0">
                 <span className="text-xs font-mono text-gray-400">{p.projectCode}</span>
               </div>
@@ -319,7 +319,7 @@ function MissionControl({ data }: { data: ProjectUniverseData[] }) {
 
         return (
           <div
-            key={p.projectId}
+            key={p.projectCode}
             className="bg-gray-900 border border-gray-700/60 rounded p-2.5 flex flex-col gap-1.5 hover:border-gray-500/60 transition-colors"
           >
             {/* Header row */}

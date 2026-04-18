@@ -9,7 +9,7 @@ import (
 // Plan represents a Claude Code plan captured from a chat session.
 type Plan struct {
 	ID              bson.ObjectID  `json:"id" bson:"_id,omitempty"`
-	ProjectID       *bson.ObjectID `json:"projectId,omitempty" bson:"projectId,omitempty"`
+	ProjectCode     string         `json:"projectCode,omitempty" bson:"projectCode,omitempty"`
 	ClaudeSessionID string         `json:"claudeSessionId,omitempty" bson:"claudeSessionId,omitempty"`
 	RequestID       string         `json:"requestId" bson:"requestId"`                                 // control_request ID from Claude Code
 	PlanText        string         `json:"planText" bson:"planText"`                                   // the markdown plan content

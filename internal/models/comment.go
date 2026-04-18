@@ -9,7 +9,7 @@ import (
 type IssueComment struct {
 	ID        bson.ObjectID `json:"id" bson:"_id,omitempty"`
 	IssueKey  string        `json:"issueKey" bson:"issueKey"`
-	ProjectID bson.ObjectID `json:"projectId" bson:"projectId"`
+	ProjectCode string        `json:"projectCode" bson:"projectCode"`
 	Body      string        `json:"body" bson:"body"`
 	Author    string        `json:"author" bson:"author"`
 	CreatedAt time.Time     `json:"createdAt" bson:"createdAt"`

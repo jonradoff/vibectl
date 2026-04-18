@@ -23,12 +23,13 @@ type IssueHandler struct {
 	activityLogService *services.ActivityLogService
 	commentService     *services.CommentService
 	webhookService     *services.WebhookService
+	projectService     *services.ProjectService
 	bus                *events.Bus
 }
 
 // NewIssueHandler creates a new IssueHandler.
-func NewIssueHandler(is *services.IssueService, ds *services.DecisionService, vm *services.VibectlMdService, als *services.ActivityLogService, cs *services.CommentService, ws *services.WebhookService, bus *events.Bus) *IssueHandler {
-	return &IssueHandler{issueService: is, decisionService: ds, vibectlMdService: vm, activityLogService: als, commentService: cs, webhookService: ws, bus: bus}
+func NewIssueHandler(is *services.IssueService, ds *services.DecisionService, vm *services.VibectlMdService, als *services.ActivityLogService, cs *services.CommentService, ws *services.WebhookService, ps *services.ProjectService, bus *events.Bus) *IssueHandler {
+	return &IssueHandler{issueService: is, decisionService: ds, vibectlMdService: vm, activityLogService: als, commentService: cs, webhookService: ws, projectService: ps, bus: bus}
 }
 
 // ProjectIssueRoutes returns a chi.Router for project-scoped issue endpoints.
@@ -124,11 +125,10 @@ func (h *IssueHandler) Create(w http.ResponseWriter, r *http.Request) {
 	actingUser := middleware.GetCurrentUser(r)
 	go func() {
 		ctx := context.Background()
-		h.decisionService.Record(ctx, issue.ProjectID, "issue_created",
+		h.decisionService.Record(ctx, issue.ProjectCode, "issue_created",
 			fmt.Sprintf("Created %s (%s, %s): %s", issue.IssueKey, issue.Type, issue.Priority, issue.Title), issue.IssueKey)
-		h.vibectlMdService.UpdateSection(ctx, issue.ProjectID.Hex(), "status", "focus")
+		h.vibectlMdService.UpdateSection(ctx, issue.ProjectCode, "status", "focus")
 		if h.activityLogService != nil {
-			pid := issue.ProjectID
 			var uid *bson.ObjectID
 			var uname string
 			if actingUser != nil {
@@ -136,18 +136,20 @@ func (h *IssueHandler) Create(w http.ResponseWriter, r *http.Request) {
 				uname = actingUser.DisplayName
 			}
 			h.activityLogService.LogWithUser(ctx, "issue_created",
-				fmt.Sprintf("Created issue %s: %s", issue.IssueKey, issue.Title), &pid, uid, uname, "", nil)
+				fmt.Sprintf("Created issue %s: %s", issue.IssueKey, issue.Title), issue.ProjectCode, uid, uname, "", nil)
 		}
 		// Fire webhook for P0 issues
 		if issue.Priority == "P0" && h.webhookService != nil {
-			h.webhookService.Fire(ctx, issue.ProjectID, models.WebhookEventP0Created, map[string]any{
-				"issueKey": issue.IssueKey,
-				"title":    issue.Title,
-			})
+			if proj, err := h.projectService.GetByCode(ctx, issue.ProjectCode); err == nil && proj != nil {
+				h.webhookService.Fire(ctx, proj.ID, models.WebhookEventP0Created, map[string]any{
+					"issueKey": issue.IssueKey,
+					"title":    issue.Title,
+				})
+			}
 		}
 	}()
 
-	h.bus.Publish(events.Event{Type: "issue.created", ProjectID: issue.ProjectID.Hex()})
+	h.bus.Publish(events.Event{Type: "issue.created", ProjectCode: issue.ProjectCode})
 	middleware.WriteJSON(w, http.StatusCreated, issue)
 }
 
@@ -180,7 +182,7 @@ func (h *IssueHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.bus.Publish(events.Event{Type: "issue.updated", ProjectID: issue.ProjectID.Hex()})
+	h.bus.Publish(events.Event{Type: "issue.updated", ProjectCode: issue.ProjectCode})
 	middleware.WriteJSON(w, http.StatusOK, issue)
 }
 
@@ -203,11 +205,10 @@ func (h *IssueHandler) TransitionStatus(w http.ResponseWriter, r *http.Request) 
 	statusUser := middleware.GetCurrentUser(r)
 	go func() {
 		ctx := context.Background()
-		h.decisionService.Record(ctx, issue.ProjectID, "status_change",
+		h.decisionService.Record(ctx, issue.ProjectCode, "status_change",
 			fmt.Sprintf("Marked %s as %s", issue.IssueKey, issue.Status), issue.IssueKey)
-		h.vibectlMdService.UpdateSection(ctx, issue.ProjectID.Hex(), "status", "focus", "decisions")
+		h.vibectlMdService.UpdateSection(ctx, issue.ProjectCode, "status", "focus", "decisions")
 		if h.activityLogService != nil {
-			pid := issue.ProjectID
 			var uid *bson.ObjectID
 			var uname string
 			if statusUser != nil {
@@ -215,11 +216,11 @@ func (h *IssueHandler) TransitionStatus(w http.ResponseWriter, r *http.Request) 
 				uname = statusUser.DisplayName
 			}
 			h.activityLogService.LogWithUser(ctx, "issue_status",
-				fmt.Sprintf("Issue %s status changed to %s", issue.IssueKey, issue.Status), &pid, uid, uname, "", nil)
+				fmt.Sprintf("Issue %s status changed to %s", issue.IssueKey, issue.Status), issue.ProjectCode, uid, uname, "", nil)
 		}
 	}()
 
-	h.bus.Publish(events.Event{Type: "issue.updated", ProjectID: issue.ProjectID.Hex()})
+	h.bus.Publish(events.Event{Type: "issue.updated", ProjectCode: issue.ProjectCode})
 	middleware.WriteJSON(w, http.StatusOK, issue)
 }
 
@@ -236,12 +237,12 @@ func (h *IssueHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fetchErr == nil && issue != nil {
-		h.bus.Publish(events.Event{Type: "issue.deleted", ProjectID: issue.ProjectID.Hex()})
+		h.bus.Publish(events.Event{Type: "issue.deleted", ProjectCode: issue.ProjectCode})
 		go func() {
 			ctx := context.Background()
-			h.decisionService.Record(ctx, issue.ProjectID, "issue_archived",
+			h.decisionService.Record(ctx, issue.ProjectCode, "issue_archived",
 				fmt.Sprintf("Archived %s: %s", issue.IssueKey, issue.Title), issue.IssueKey)
-			h.vibectlMdService.UpdateSection(ctx, issue.ProjectID.Hex(), "status", "focus", "decisions")
+			h.vibectlMdService.UpdateSection(ctx, issue.ProjectCode, "status", "focus", "decisions")
 		}()
 	}
 
@@ -344,13 +345,13 @@ func (h *IssueHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	comment, err := h.commentService.Create(r.Context(), issueKey, issue.ProjectID, req.Body, req.Author)
+	comment, err := h.commentService.Create(r.Context(), issueKey, issue.ProjectCode, req.Body, req.Author)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "CREATE_COMMENT_FAILED")
 		return
 	}
 
-	h.bus.Publish(events.Event{Type: "comment.created", ProjectID: issue.ProjectID.Hex()})
+	h.bus.Publish(events.Event{Type: "comment.created", ProjectCode: issue.ProjectCode})
 	middleware.WriteJSON(w, http.StatusCreated, comment)
 }
 

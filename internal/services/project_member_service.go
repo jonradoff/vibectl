@@ -24,7 +24,7 @@ func NewProjectMemberService(db *mongo.Database, userSvc *UserService) *ProjectM
 func (s *ProjectMemberService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.col.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{
-			Keys:    bson.D{{Key: "projectId", Value: 1}, {Key: "userId", Value: 1}},
+			Keys:    bson.D{{Key: "projectCode", Value: 1}, {Key: "userId", Value: 1}},
 			Options: options.Index().SetUnique(true),
 		},
 		{Keys: bson.D{{Key: "userId", Value: 1}}},
@@ -33,10 +33,10 @@ func (s *ProjectMemberService) EnsureIndexes(ctx context.Context) error {
 }
 
 // Upsert adds or updates a member's role in a project.
-func (s *ProjectMemberService) Upsert(ctx context.Context, projectID, userID, createdBy bson.ObjectID, role models.ProjectRole) error {
+func (s *ProjectMemberService) Upsert(ctx context.Context, projectCode string, userID, createdBy bson.ObjectID, role models.ProjectRole) error {
 	now := time.Now().UTC()
 	_, err := s.col.UpdateOne(ctx,
-		bson.D{{Key: "projectId", Value: projectID}, {Key: "userId", Value: userID}},
+		bson.D{{Key: "projectCode", Value: projectCode}, {Key: "userId", Value: userID}},
 		bson.D{{Key: "$set", Value: bson.D{
 			{Key: "role", Value: role},
 			{Key: "createdBy", Value: createdBy},
@@ -48,15 +48,15 @@ func (s *ProjectMemberService) Upsert(ctx context.Context, projectID, userID, cr
 }
 
 // Remove removes a member from a project.
-func (s *ProjectMemberService) Remove(ctx context.Context, projectID, userID bson.ObjectID) error {
-	_, err := s.col.DeleteOne(ctx, bson.D{{Key: "projectId", Value: projectID}, {Key: "userId", Value: userID}})
+func (s *ProjectMemberService) Remove(ctx context.Context, projectCode string, userID bson.ObjectID) error {
+	_, err := s.col.DeleteOne(ctx, bson.D{{Key: "projectCode", Value: projectCode}, {Key: "userId", Value: userID}})
 	return err
 }
 
 // GetRole returns the role for a user in a project, or "" if not a member.
-func (s *ProjectMemberService) GetRole(ctx context.Context, projectID, userID bson.ObjectID) (models.ProjectRole, error) {
+func (s *ProjectMemberService) GetRole(ctx context.Context, projectCode string, userID bson.ObjectID) (models.ProjectRole, error) {
 	var m models.ProjectMember
-	err := s.col.FindOne(ctx, bson.D{{Key: "projectId", Value: projectID}, {Key: "userId", Value: userID}}).Decode(&m)
+	err := s.col.FindOne(ctx, bson.D{{Key: "projectCode", Value: projectCode}, {Key: "userId", Value: userID}}).Decode(&m)
 	if err == mongo.ErrNoDocuments {
 		return "", nil
 	}
@@ -67,8 +67,8 @@ func (s *ProjectMemberService) GetRole(ctx context.Context, projectID, userID bs
 }
 
 // HasRole returns true if the user has at least minRole in the project.
-func (s *ProjectMemberService) HasRole(ctx context.Context, projectID, userID bson.ObjectID, minRole models.ProjectRole) (bool, error) {
-	role, err := s.GetRole(ctx, projectID, userID)
+func (s *ProjectMemberService) HasRole(ctx context.Context, projectCode string, userID bson.ObjectID, minRole models.ProjectRole) (bool, error) {
+	role, err := s.GetRole(ctx, projectCode, userID)
 	if err != nil {
 		return false, err
 	}
@@ -76,8 +76,8 @@ func (s *ProjectMemberService) HasRole(ctx context.Context, projectID, userID bs
 }
 
 // ListByProject returns all members of a project with their user details.
-func (s *ProjectMemberService) ListByProject(ctx context.Context, projectID bson.ObjectID) ([]models.ProjectMemberView, error) {
-	cur, err := s.col.Find(ctx, bson.D{{Key: "projectId", Value: projectID}},
+func (s *ProjectMemberService) ListByProject(ctx context.Context, projectCode string) ([]models.ProjectMemberView, error) {
+	cur, err := s.col.Find(ctx, bson.D{{Key: "projectCode", Value: projectCode}},
 		options.Find().SetSort(bson.D{{Key: "createdAt", Value: 1}}))
 	if err != nil {
 		return nil, err
@@ -98,34 +98,34 @@ func (s *ProjectMemberService) ListByProject(ctx context.Context, projectID bson
 
 // SeedOwner makes a user the owner of a project if they have no membership yet.
 // Used during startup migration.
-func (s *ProjectMemberService) SeedOwner(ctx context.Context, projectID, userID bson.ObjectID) error {
-	count, err := s.col.CountDocuments(ctx, bson.D{{Key: "projectId", Value: projectID}, {Key: "userId", Value: userID}})
+func (s *ProjectMemberService) SeedOwner(ctx context.Context, projectCode string, userID bson.ObjectID) error {
+	count, err := s.col.CountDocuments(ctx, bson.D{{Key: "projectCode", Value: projectCode}, {Key: "userId", Value: userID}})
 	if err != nil {
 		return err
 	}
 	if count > 0 {
 		return nil // already a member
 	}
-	return s.Upsert(ctx, projectID, userID, userID, models.ProjectRoleOwner)
+	return s.Upsert(ctx, projectCode, userID, userID, models.ProjectRoleOwner)
 }
 
-// ListProjectIDsForUser returns all project IDs where the user is a member.
-func (s *ProjectMemberService) ListProjectIDsForUser(ctx context.Context, userID bson.ObjectID) ([]bson.ObjectID, error) {
-	cur, err := s.col.Find(ctx, bson.D{{Key: "userId", Value: userID}}, options.Find().SetProjection(bson.D{{Key: "projectId", Value: 1}}))
+// ListProjectCodesForUser returns all project codes where the user is a member.
+func (s *ProjectMemberService) ListProjectCodesForUser(ctx context.Context, userID bson.ObjectID) ([]string, error) {
+	cur, err := s.col.Find(ctx, bson.D{{Key: "userId", Value: userID}}, options.Find().SetProjection(bson.D{{Key: "projectCode", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
 	var results []struct {
-		ProjectID bson.ObjectID `bson:"projectId"`
+		ProjectCode string `bson:"projectCode"`
 	}
 	if err := cur.All(ctx, &results); err != nil {
 		return nil, err
 	}
-	ids := make([]bson.ObjectID, len(results))
+	codes := make([]string, len(results))
 	for i, r := range results {
-		ids[i] = r.ProjectID
+		codes[i] = r.ProjectCode
 	}
-	return ids, nil
+	return codes, nil
 }
 
 // UserEffectiveRole returns the effective role for a user, taking into account

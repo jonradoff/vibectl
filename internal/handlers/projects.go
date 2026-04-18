@@ -104,18 +104,18 @@ func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Filter to projects where the user is a member.
-	memberIDs, err := h.memberService.ListProjectIDsForUser(r.Context(), user.ID)
+	memberCodes, err := h.memberService.ListProjectCodesForUser(r.Context(), user.ID)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_PROJECTS_FAILED")
 		return
 	}
-	allowed := make(map[string]bool, len(memberIDs))
-	for _, id := range memberIDs {
-		allowed[id.Hex()] = true
+	allowed := make(map[string]bool, len(memberCodes))
+	for _, code := range memberCodes {
+		allowed[code] = true
 	}
 	var filtered []models.Project
 	for _, p := range projects {
-		if allowed[p.ID.Hex()] {
+		if allowed[p.Code] {
 			filtered = append(filtered, p)
 		}
 	}
@@ -144,33 +144,28 @@ func (h *ProjectHandler) Archive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	proj, err := h.projectService.GetByID(r.Context(), id)
+	if err != nil || proj == nil {
+		middleware.WriteError(w, http.StatusNotFound, "project not found", "NOT_FOUND")
+		return
+	}
+
 	if user.GlobalRole != models.GlobalRoleSuperAdmin && h.memberService != nil {
-		projectObjID, err := h.projectService.GetByID(r.Context(), id)
-		if err != nil || projectObjID == nil {
-			middleware.WriteError(w, http.StatusNotFound, "project not found", "NOT_FOUND")
-			return
-		}
-		role, err := h.memberService.GetRole(r.Context(), projectObjID.ID, user.ID)
+		role, err := h.memberService.GetRole(r.Context(), proj.Code, user.ID)
 		if err != nil || role != models.ProjectRoleOwner {
 			middleware.WriteError(w, http.StatusForbidden, "only project owners can archive projects", "FORBIDDEN")
 			return
 		}
 	}
 
-	// Look up project name for logging before archiving.
-	proj, _ := h.projectService.GetByID(r.Context(), id)
-	projName := id
-	if proj != nil {
-		projName = proj.Name + " (" + proj.Code + ")"
-	}
+	projName := proj.Name + " (" + proj.Code + ")"
 
 	if err := h.projectService.Archive(r.Context(), id); err != nil {
 		middleware.WriteError(w, http.StatusBadRequest, err.Error(), "ARCHIVE_FAILED")
 		return
 	}
 	if h.activityLogService != nil {
-		oid, _ := bson.ObjectIDFromHex(id)
-		h.activityLogService.LogAsyncWithUser("project_archived", "Archived project: "+projName, &oid, &user.ID, user.DisplayName, "", nil)
+		h.activityLogService.LogAsyncWithUser("project_archived", "Archived project: "+projName, proj.Code, &user.ID, user.DisplayName, "", nil)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -209,11 +204,10 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 		if h.activityLogService != nil {
 			user := middleware.GetCurrentUser(r)
-			uid := &parent.ID
 			var userID *bson.ObjectID
 			userName := ""
 			if user != nil { userID = &user.ID; userName = user.DisplayName }
-			h.activityLogService.LogAsyncWithUser("project_created", "Created multi-module project: "+parent.Name+" ("+parent.Code+") with "+fmt.Sprintf("%d", len(units))+" units", uid, userID, userName, "", nil)
+			h.activityLogService.LogAsyncWithUser("project_created", "Created multi-module project: "+parent.Name+" ("+parent.Code+") with "+fmt.Sprintf("%d", len(units))+" units", parent.Code, userID, userName, "", nil)
 		}
 		middleware.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 			"parent": parent.MaskSecrets(),
@@ -229,11 +223,10 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.activityLogService != nil {
 		user := middleware.GetCurrentUser(r)
-		pid := project.ID
 		var userID *bson.ObjectID
 		userName := ""
 		if user != nil { userID = &user.ID; userName = user.DisplayName }
-		h.activityLogService.LogAsyncWithUser("project_created", "Created project: "+project.Name+" ("+project.Code+")", &pid, userID, userName, "", nil)
+		h.activityLogService.LogAsyncWithUser("project_created", "Created project: "+project.Name+" ("+project.Code+")", project.Code, userID, userName, "", nil)
 	}
 	middleware.WriteJSON(w, http.StatusCreated, project.MaskSecrets())
 }
@@ -289,11 +282,10 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.activityLogService != nil {
-		pid := project.ID
 		if u := middleware.GetCurrentUser(r); u != nil {
-			h.activityLogService.LogAsyncWithUser("settings_change", "Updated settings for project: "+project.Name, &pid, &u.ID, u.DisplayName, "", nil)
+			h.activityLogService.LogAsyncWithUser("settings_change", "Updated settings for project: "+project.Name, project.Code, &u.ID, u.DisplayName, "", nil)
 		} else {
-			h.activityLogService.LogAsync("settings_change", "Updated settings for project: "+project.Name, &pid, "", nil)
+			h.activityLogService.LogAsync("settings_change", "Updated settings for project: "+project.Name, project.Code, "", nil)
 		}
 	}
 
@@ -329,7 +321,11 @@ func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.activityLogService != nil {
-		h.activityLogService.LogAsyncWithUser("project_deleted", "Permanently deleted project: "+projName, nil, &user.ID, user.DisplayName, "", nil)
+		projCode := ""
+		if proj != nil {
+			projCode = proj.Code
+		}
+		h.activityLogService.LogAsyncWithUser("project_deleted", "Permanently deleted project: "+projName, projCode, &user.ID, user.DisplayName, "", nil)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -343,9 +339,9 @@ func (h *ProjectHandler) MyRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "id")
-	pid, err := bson.ObjectIDFromHex(id)
-	if err != nil {
-		middleware.WriteError(w, http.StatusBadRequest, "invalid project id", "BAD_REQUEST")
+	project, err := h.projectService.GetByID(r.Context(), id)
+	if err != nil || project == nil {
+		middleware.WriteError(w, http.StatusNotFound, "project not found", "PROJECT_NOT_FOUND")
 		return
 	}
 	// Super admins have implicit owner access to all projects.
@@ -353,7 +349,7 @@ func (h *ProjectHandler) MyRole(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteJSON(w, http.StatusOK, map[string]string{"role": "owner", "projectId": id})
 		return
 	}
-	role, err := h.memberService.GetRole(r.Context(), pid, user.ID)
+	role, err := h.memberService.GetRole(r.Context(), project.Code, user.ID)
 	if err != nil {
 		// Not a member
 		middleware.WriteJSON(w, http.StatusOK, map[string]string{"role": "none", "projectId": id})
@@ -373,13 +369,13 @@ func (h *ProjectHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	issuesByStatus, err := h.issueService.CountByProject(ctx, project.ID)
+	issuesByStatus, err := h.issueService.CountByProject(ctx, project.Code)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "COUNT_ISSUES_FAILED")
 		return
 	}
 
-	issuesByPriority, err := h.issueService.CountByPriority(ctx, project.ID)
+	issuesByPriority, err := h.issueService.CountByPriority(ctx, project.Code)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "COUNT_ISSUES_FAILED")
 		return
@@ -408,7 +404,7 @@ func (h *ProjectHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	pendingFeedbackCount := 0
 	if h.feedbackService != nil {
-		pendingFeedbackCount, _ = h.feedbackService.CountPendingByProject(ctx, project.ID)
+		pendingFeedbackCount, _ = h.feedbackService.CountPendingByProject(ctx, project.Code)
 	}
 
 	summary := models.ProjectSummary{

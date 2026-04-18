@@ -24,28 +24,28 @@ func NewActivityLogService(db *mongo.Database) *ActivityLogService {
 func (s *ActivityLogService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "timestamp", Value: -1}}},
-		{Keys: bson.D{{Key: "projectId", Value: 1}, {Key: "timestamp", Value: -1}}},
+		{Keys: bson.D{{Key: "projectCode", Value: 1}, {Key: "timestamp", Value: -1}}},
 		{Keys: bson.D{{Key: "type", Value: 1}, {Key: "timestamp", Value: -1}}},
 	})
 	return err
 }
 
 // Log creates a new activity log entry.
-func (s *ActivityLogService) Log(ctx context.Context, logType, message string, projectID *bson.ObjectID, snippet string, metadata bson.M) error {
-	return s.LogWithUser(ctx, logType, message, projectID, nil, "", snippet, metadata)
+func (s *ActivityLogService) Log(ctx context.Context, logType, message string, projectCode string, snippet string, metadata bson.M) error {
+	return s.LogWithUser(ctx, logType, message, projectCode, nil, "", snippet, metadata)
 }
 
 // LogWithUser creates a new activity log entry with user attribution.
-func (s *ActivityLogService) LogWithUser(ctx context.Context, logType, message string, projectID *bson.ObjectID, userID *bson.ObjectID, userName string, snippet string, metadata bson.M) error {
+func (s *ActivityLogService) LogWithUser(ctx context.Context, logType, message string, projectCode string, userID *bson.ObjectID, userName string, snippet string, metadata bson.M) error {
 	entry := models.ActivityLog{
-		ProjectID: projectID,
-		UserID:    userID,
-		UserName:  userName,
-		Type:      logType,
-		Message:   message,
-		Snippet:   snippet,
-		Metadata:  metadata,
-		Timestamp: time.Now().UTC(),
+		ProjectCode: projectCode,
+		UserID:      userID,
+		UserName:    userName,
+		Type:        logType,
+		Message:     message,
+		Snippet:     snippet,
+		Metadata:    metadata,
+		Timestamp:   time.Now().UTC(),
 	}
 	_, err := s.collection.InsertOne(ctx, entry)
 	if err != nil {
@@ -55,26 +55,26 @@ func (s *ActivityLogService) LogWithUser(ctx context.Context, logType, message s
 }
 
 // LogAsync logs in a goroutine so it doesn't block the caller.
-func (s *ActivityLogService) LogAsync(logType, message string, projectID *bson.ObjectID, snippet string, metadata bson.M) {
+func (s *ActivityLogService) LogAsync(logType, message string, projectCode string, snippet string, metadata bson.M) {
 	go func() {
-		s.Log(context.Background(), logType, message, projectID, snippet, metadata)
+		s.Log(context.Background(), logType, message, projectCode, snippet, metadata)
 	}()
 }
 
 // LogAsyncWithUser logs with user attribution in a goroutine.
-func (s *ActivityLogService) LogAsyncWithUser(logType, message string, projectID *bson.ObjectID, userID *bson.ObjectID, userName string, snippet string, metadata bson.M) {
+func (s *ActivityLogService) LogAsyncWithUser(logType, message string, projectCode string, userID *bson.ObjectID, userName string, snippet string, metadata bson.M) {
 	go func() {
-		s.LogWithUser(context.Background(), logType, message, projectID, userID, userName, snippet, metadata)
+		s.LogWithUser(context.Background(), logType, message, projectCode, userID, userName, snippet, metadata)
 	}()
 }
 
 // DailyActivityCounts returns activity counts per day for the last `days` days,
 // oldest first. Zero-fills days with no activity.
-func (s *ActivityLogService) DailyActivityCounts(ctx context.Context, projectID bson.ObjectID, days int) ([]int, error) {
+func (s *ActivityLogService) DailyActivityCounts(ctx context.Context, projectCode string, days int) ([]int, error) {
 	since := time.Now().UTC().AddDate(0, 0, -days)
 	pipeline := bson.A{
 		bson.D{{Key: "$match", Value: bson.D{
-			{Key: "projectId", Value: projectID},
+			{Key: "projectCode", Value: projectCode},
 			{Key: "timestamp", Value: bson.D{{Key: "$gte", Value: since}}},
 		}}},
 		bson.D{{Key: "$group", Value: bson.D{
@@ -115,10 +115,10 @@ func (s *ActivityLogService) DailyActivityCounts(ctx context.Context, projectID 
 
 // DeployCountSince returns the number of deploy-type activity log entries
 // for a project in the last `days` days.
-func (s *ActivityLogService) DeployCountSince(ctx context.Context, projectID bson.ObjectID, days int) (int, error) {
+func (s *ActivityLogService) DeployCountSince(ctx context.Context, projectCode string, days int) (int, error) {
 	since := time.Now().UTC().AddDate(0, 0, -days)
 	filter := bson.D{
-		{Key: "projectId", Value: projectID},
+		{Key: "projectCode", Value: projectCode},
 		{Key: "timestamp", Value: bson.D{{Key: "$gte", Value: since}}},
 		{Key: "type", Value: bson.D{{Key: "$in", Value: bson.A{"deploy", "deploy_prod", "deploy_started", "deploy_complete", "deployment"}}}},
 	}
@@ -128,10 +128,10 @@ func (s *ActivityLogService) DeployCountSince(ctx context.Context, projectID bso
 
 // PromptCountSince returns the number of prompt_sent activity log entries
 // for a project in the last `days` days.
-func (s *ActivityLogService) PromptCountSince(ctx context.Context, projectID bson.ObjectID, days int) (int, error) {
+func (s *ActivityLogService) PromptCountSince(ctx context.Context, projectCode string, days int) (int, error) {
 	since := time.Now().UTC().AddDate(0, 0, -days)
 	filter := bson.D{
-		{Key: "projectId", Value: projectID},
+		{Key: "projectCode", Value: projectCode},
 		{Key: "timestamp", Value: bson.D{{Key: "$gte", Value: since}}},
 		{Key: "type", Value: "prompt_sent"},
 	}
@@ -140,9 +140,9 @@ func (s *ActivityLogService) PromptCountSince(ctx context.Context, projectID bso
 }
 
 // LastPromptAt returns the timestamp of the most recent prompt_sent entry for a project.
-func (s *ActivityLogService) LastPromptAt(ctx context.Context, projectID bson.ObjectID) (*time.Time, error) {
+func (s *ActivityLogService) LastPromptAt(ctx context.Context, projectCode string) (*time.Time, error) {
 	filter := bson.D{
-		{Key: "projectId", Value: projectID},
+		{Key: "projectCode", Value: projectCode},
 		{Key: "type", Value: "prompt_sent"},
 	}
 	opts := options.FindOne().SetSort(bson.D{{Key: "timestamp", Value: -1}}).SetProjection(bson.D{{Key: "timestamp", Value: 1}})
@@ -159,8 +159,8 @@ func (s *ActivityLogService) LastPromptAt(ctx context.Context, projectID bson.Ob
 }
 
 // LastActivityAt returns the timestamp of the most recent log entry for a project.
-func (s *ActivityLogService) LastActivityAt(ctx context.Context, projectID bson.ObjectID) (*time.Time, error) {
-	filter := bson.D{{Key: "projectId", Value: projectID}}
+func (s *ActivityLogService) LastActivityAt(ctx context.Context, projectCode string) (*time.Time, error) {
+	filter := bson.D{{Key: "projectCode", Value: projectCode}}
 	opts := options.FindOne().SetSort(bson.D{{Key: "timestamp", Value: -1}}).SetProjection(bson.D{{Key: "timestamp", Value: 1}})
 	var entry models.ActivityLog
 	err := s.collection.FindOne(ctx, filter, opts).Decode(&entry)
@@ -175,7 +175,7 @@ func (s *ActivityLogService) LastActivityAt(ctx context.Context, projectID bson.
 }
 
 // List returns recent activity log entries with optional filtering.
-func (s *ActivityLogService) List(ctx context.Context, projectID string, logType string, limit int, offset int) ([]models.ActivityLog, int64, error) {
+func (s *ActivityLogService) List(ctx context.Context, projectCode string, logType string, limit int, offset int) ([]models.ActivityLog, int64, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -184,12 +184,8 @@ func (s *ActivityLogService) List(ctx context.Context, projectID string, logType
 	}
 
 	filter := bson.D{}
-	if projectID != "" {
-		oid, err := bson.ObjectIDFromHex(projectID)
-		if err != nil {
-			return nil, 0, fmt.Errorf("invalid project ID: %w", err)
-		}
-		filter = append(filter, bson.E{Key: "projectId", Value: oid})
+	if projectCode != "" {
+		filter = append(filter, bson.E{Key: "projectCode", Value: projectCode})
 	}
 	if logType != "" {
 		filter = append(filter, bson.E{Key: "type", Value: logType})

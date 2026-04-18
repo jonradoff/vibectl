@@ -14,10 +14,11 @@ import (
 type CheckoutHandler struct {
 	checkoutSvc *services.CheckoutService
 	memberSvc   *services.ProjectMemberService
+	projectSvc  *services.ProjectService
 }
 
-func NewCheckoutHandler(checkoutSvc *services.CheckoutService, memberSvc *services.ProjectMemberService) *CheckoutHandler {
-	return &CheckoutHandler{checkoutSvc: checkoutSvc, memberSvc: memberSvc}
+func NewCheckoutHandler(checkoutSvc *services.CheckoutService, memberSvc *services.ProjectMemberService, projectSvc *services.ProjectService) *CheckoutHandler {
+	return &CheckoutHandler{checkoutSvc: checkoutSvc, memberSvc: memberSvc, projectSvc: projectSvc}
 }
 
 // Routes returns routes nested under /projects/{id}/checkout.
@@ -107,7 +108,12 @@ func (h *CheckoutHandler) requireMinRole(w http.ResponseWriter, r *http.Request,
 	if user.GlobalRole == models.GlobalRoleSuperAdmin {
 		return true
 	}
-	has, err := h.memberSvc.HasRole(r.Context(), projectID, user.ID, minRole)
+	project, err := h.projectSvc.GetByID(r.Context(), projectID.Hex())
+	if err != nil || project == nil {
+		middleware.WriteError(w, http.StatusNotFound, "project not found", "PROJECT_NOT_FOUND")
+		return false
+	}
+	has, err := h.memberSvc.HasRole(r.Context(), project.Code, user.ID, minRole)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "PERMISSION_CHECK_FAILED")
 		return false

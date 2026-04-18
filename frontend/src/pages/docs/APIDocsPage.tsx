@@ -56,7 +56,7 @@ function APIDocsPage() {
 
       <EndpointGroup name="Feedback">
         <Endpoint method="GET" path="/api/v1/feedback" desc="List feedback. Query: ?triageStatus=pending&projectId=ID&sourceType=manual" />
-        <Endpoint method="POST" path="/api/v1/feedback" desc="Submit feedback." body='{ "projectId", "rawContent", "sourceType": "manual|github_comment|api", "submittedBy", "sourceUrl" }' />
+        <Endpoint method="POST" path="/api/v1/feedback" desc="Submit feedback." body='{ "projectCode", "rawContent", "sourceType": "manual|github_comment|api", "submittedBy", "sourceUrl" }' />
         <Endpoint method="POST" path="/api/v1/feedback/batch" desc="Submit multiple feedback items." />
         <Endpoint method="GET" path="/api/v1/projects/{id}/feedback" desc="Feedback for a project." />
         <Endpoint method="POST" path="/api/v1/feedback/{id}/triage" desc="Trigger AI triage for one feedback item." />
@@ -115,7 +115,7 @@ function APIDocsPage() {
           body='{ "webhooks": [{ "url": "https://...", "events": ["p0_issue_created", "health_check_down", "health_check_up", "feedback_triaged"], "secret": "optional" }] }'
         />
         <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-3 text-xs text-gray-400 space-y-1">
-          <p><strong className="text-gray-300">Payload:</strong> <code>{"{ event, projectId, timestamp, data }"}</code></p>
+          <p><strong className="text-gray-300">Payload:</strong> <code>{"{ event, projectCode, timestamp, data }"}</code></p>
           <p><strong className="text-gray-300">Signature:</strong> When a secret is set, <code>X-Vibectl-Signature: sha256=&lt;hex&gt;</code> is included (HMAC-SHA256 over raw body).</p>
           <p><strong className="text-gray-300">Events:</strong> <code>p0_issue_created</code>, <code>health_check_down</code>, <code>health_check_up</code>, <code>feedback_triaged</code></p>
         </div>

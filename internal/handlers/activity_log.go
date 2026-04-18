@@ -8,7 +8,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jonradoff/vibectl/internal/middleware"
 	"github.com/jonradoff/vibectl/internal/services"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type ActivityLogHandler struct {
@@ -41,16 +40,15 @@ func (h *ActivityLogHandler) PostActivity(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	pid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
+	if projectID == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "invalid project id", "BAD_REQUEST")
 		return
 	}
 
 	if user != nil {
-		h.activityLogService.LogAsyncWithUser(body.Type, body.Message, &pid, &user.ID, user.DisplayName, body.Snippet, nil)
+		h.activityLogService.LogAsyncWithUser(body.Type, body.Message, projectID, &user.ID, user.DisplayName, body.Snippet, nil)
 	} else {
-		h.activityLogService.LogAsync(body.Type, body.Message, &pid, body.Snippet, nil)
+		h.activityLogService.LogAsync(body.Type, body.Message, projectID, body.Snippet, nil)
 	}
 
 	middleware.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})

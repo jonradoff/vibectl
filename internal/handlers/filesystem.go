@@ -14,7 +14,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jonradoff/vibectl/internal/middleware"
 	"github.com/jonradoff/vibectl/internal/services"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type FilesystemHandler struct {
@@ -218,11 +217,11 @@ func (h *FilesystemHandler) WriteFile(w http.ResponseWriter, r *http.Request) {
 	if h.activityLogService != nil {
 		relPath := r.URL.Query().Get("path")
 		projectID := chi.URLParam(r, "id")
-		if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
+		if project, err := h.projectService.GetByID(r.Context(), projectID); err == nil && project != nil {
 			if u := middleware.GetCurrentUser(r); u != nil {
-				h.activityLogService.LogAsyncWithUser("file_edit", "Edited file: "+relPath, &oid, &u.ID, u.DisplayName, "", nil)
+				h.activityLogService.LogAsyncWithUser("file_edit", "Edited file: "+relPath, project.Code, &u.ID, u.DisplayName, "", nil)
 			} else {
-				h.activityLogService.LogAsync("file_edit", "Edited file: "+relPath, &oid, "", nil)
+				h.activityLogService.LogAsync("file_edit", "Edited file: "+relPath, project.Code, "", nil)
 			}
 		}
 	}

@@ -33,7 +33,7 @@ type AIAnalysis struct {
 
 type FeedbackItem struct {
 	ID              bson.ObjectID          `json:"id" bson:"_id,omitempty"`
-	ProjectID       *bson.ObjectID         `json:"projectId,omitempty" bson:"projectId,omitempty"`
+	ProjectCode     string                 `json:"projectCode,omitempty" bson:"projectCode,omitempty"`
 	SourceType      string                 `json:"sourceType" bson:"sourceType"`
 	SourceURL       string                 `json:"sourceUrl,omitempty" bson:"sourceUrl,omitempty"`
 	RawContent      string                 `json:"rawContent" bson:"rawContent"`

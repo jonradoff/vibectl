@@ -8,7 +8,7 @@ import (
 
 type Prompt struct {
 	ID          bson.ObjectID  `json:"id" bson:"_id,omitempty"`
-	ProjectID   *bson.ObjectID `json:"projectId,omitempty" bson:"projectId,omitempty"` // nil = global prompt (all projects)
+	ProjectCode string         `json:"projectCode,omitempty" bson:"projectCode,omitempty"` // empty = global prompt (all projects)
 	Global      bool           `json:"global" bson:"global"`                           // true = applies to all projects
 	Name        string         `json:"name" bson:"name"`
 	Body        string         `json:"body" bson:"body"`

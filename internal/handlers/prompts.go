@@ -107,13 +107,10 @@ func (h *PromptHandler) createPrompt(w http.ResponseWriter, r *http.Request, pro
 			}
 		} else if h.memberService != nil && u != nil {
 			// Project shared prompt requires project owner role
-			pid, err := bson.ObjectIDFromHex(projectID)
-			if err == nil {
-				hasOwner, _ := h.memberService.HasRole(r.Context(), pid, u.ID, models.ProjectRoleOwner)
-				if !hasOwner && u.GlobalRole != models.GlobalRoleSuperAdmin {
-					middleware.WriteError(w, http.StatusForbidden, "only project owners can create shared project prompts", "FORBIDDEN")
-					return
-				}
+			hasOwner, _ := h.memberService.HasRole(r.Context(), projectID, u.ID, models.ProjectRoleOwner)
+			if !hasOwner && u.GlobalRole != models.GlobalRoleSuperAdmin {
+				middleware.WriteError(w, http.StatusForbidden, "only project owners can create shared project prompts", "FORBIDDEN")
+				return
 			}
 		}
 	}
@@ -129,16 +126,12 @@ func (h *PromptHandler) createPrompt(w http.ResponseWriter, r *http.Request, pro
 		scope = "project"
 	}
 	if u != nil {
-		h.activityLogService.LogAsyncWithUser("prompt_created", "Created "+scope+" prompt: "+prompt.Name, prompt.ProjectID, &u.ID, u.DisplayName, "", nil)
+		h.activityLogService.LogAsyncWithUser("prompt_created", "Created "+scope+" prompt: "+prompt.Name, prompt.ProjectCode, &u.ID, u.DisplayName, "", nil)
 	} else {
-		h.activityLogService.LogAsync("prompt_created", "Created "+scope+" prompt: "+prompt.Name, prompt.ProjectID, "", nil)
+		h.activityLogService.LogAsync("prompt_created", "Created "+scope+" prompt: "+prompt.Name, prompt.ProjectCode, "", nil)
 	}
 
-	pid := ""
-	if prompt.ProjectID != nil {
-		pid = prompt.ProjectID.Hex()
-	}
-	h.bus.Publish(events.Event{Type: "prompt.created", ProjectID: pid})
+	h.bus.Publish(events.Event{Type: "prompt.created", ProjectCode: prompt.ProjectCode})
 	middleware.WriteJSON(w, http.StatusCreated, prompt)
 }
 
@@ -180,16 +173,12 @@ func (h *PromptHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if u != nil {
-		h.activityLogService.LogAsyncWithUser("prompt_edited", "Edited prompt: "+prompt.Name, prompt.ProjectID, &u.ID, u.DisplayName, "", nil)
+		h.activityLogService.LogAsyncWithUser("prompt_edited", "Edited prompt: "+prompt.Name, prompt.ProjectCode, &u.ID, u.DisplayName, "", nil)
 	} else {
-		h.activityLogService.LogAsync("prompt_edited", "Edited prompt: "+prompt.Name, prompt.ProjectID, "", nil)
+		h.activityLogService.LogAsync("prompt_edited", "Edited prompt: "+prompt.Name, prompt.ProjectCode, "", nil)
 	}
 
-	pid := ""
-	if prompt.ProjectID != nil {
-		pid = prompt.ProjectID.Hex()
-	}
-	h.bus.Publish(events.Event{Type: "prompt.updated", ProjectID: pid})
+	h.bus.Publish(events.Event{Type: "prompt.updated", ProjectCode: prompt.ProjectCode})
 	middleware.WriteJSON(w, http.StatusOK, prompt)
 }
 
@@ -210,15 +199,11 @@ func (h *PromptHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if existing != nil {
-		pid := ""
-		if existing.ProjectID != nil {
-			pid = existing.ProjectID.Hex()
-		}
-		h.bus.Publish(events.Event{Type: "prompt.deleted", ProjectID: pid})
+		h.bus.Publish(events.Event{Type: "prompt.deleted", ProjectCode: existing.ProjectCode})
 		if u != nil {
-			h.activityLogService.LogAsyncWithUser("prompt_deleted", "Deleted prompt: "+existing.Name, existing.ProjectID, &u.ID, u.DisplayName, "", nil)
+			h.activityLogService.LogAsyncWithUser("prompt_deleted", "Deleted prompt: "+existing.Name, existing.ProjectCode, &u.ID, u.DisplayName, "", nil)
 		} else {
-			h.activityLogService.LogAsync("prompt_deleted", "Deleted prompt: "+existing.Name, existing.ProjectID, "", nil)
+			h.activityLogService.LogAsync("prompt_deleted", "Deleted prompt: "+existing.Name, existing.ProjectCode, "", nil)
 		}
 	}
 

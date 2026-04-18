@@ -47,7 +47,7 @@ export interface HealthCheckResult {
 
 export interface HealthRecord {
   id: string;
-  projectId: string;
+  projectCode: string;
   results: HealthCheckResult[];
   checkedAt: string;
 }
@@ -55,7 +55,7 @@ export interface HealthRecord {
 export interface IssueComment {
   id: string;
   issueKey: string;
-  projectId: string;
+  projectCode: string;
   body: string;
   author: string;
   createdAt: string;
@@ -132,7 +132,7 @@ export interface Attachment {
 
 export interface Issue {
   id: string;
-  projectId: string;
+  projectCode: string;
   issueKey: string;
   number: number;
   title: string;
@@ -168,7 +168,7 @@ export interface AIAnalysis {
 
 export interface FeedbackItem {
   id: string;
-  projectId?: string;
+  projectCode?: string;
   sourceType: string;
   sourceUrl?: string;
   rawContent: string;
@@ -185,7 +185,7 @@ export interface FeedbackItem {
 
 export interface SessionLog {
   id: string;
-  projectId: string;
+  projectCode: string;
   startedAt: string;
   endedAt?: string;
   summary?: string;
@@ -212,7 +212,7 @@ export interface GlobalDashboard {
 }
 
 export interface ProjectUniverseData {
-  projectId: string;
+  projectCode: string;
   projectName: string;
   projectCode: string;
   activityByDay: number[];   // last 90 days, oldest first
@@ -257,7 +257,7 @@ export interface Reprioritization {
 
 export interface PMReviewResult {
   id: string;
-  projectId: string;
+  projectCode: string;
   goalAssessments: GoalAssessment[];
   gaps: Gap[];
   risks: Risk[];
@@ -281,7 +281,7 @@ export interface DeploymentConfig {
 
 export interface Decision {
   id: string;
-  projectId: string;
+  projectCode: string;
   timestamp: string;
   action: string;
   summary: string;
@@ -297,7 +297,7 @@ export interface RecurringTheme {
 
 export interface ChatHistorySummary {
   id: string;
-  projectId: string;
+  projectCode: string;
   claudeSessionId: string;
   messageCount: number;
   startedAt: string;
@@ -306,7 +306,7 @@ export interface ChatHistorySummary {
 
 export interface ChatHistoryEntry {
   id: string;
-  projectId: string;
+  projectCode: string;
   claudeSessionId: string;
   messages: unknown[];
   messageCount: number;
@@ -316,7 +316,7 @@ export interface ChatHistoryEntry {
 
 export interface Prompt {
   id: string;
-  projectId?: string;
+  projectCode?: string;
   global: boolean;
   name: string;
   body: string;
@@ -329,7 +329,7 @@ export interface Prompt {
 
 export interface ActivityLogEntry {
   id: string;
-  projectId?: string;
+  projectCode?: string;
   userId?: string;
   userName?: string;
   type: string;
@@ -350,7 +350,7 @@ export interface ActivityLogResponse {
 
 export interface Plan {
   id: string;
-  projectId?: string;
+  projectCode?: string;
   claudeSessionId?: string;
   requestId: string;
   planText: string;
@@ -365,7 +365,7 @@ export interface Plan {
 
 export interface Intent {
   id: string;
-  projectId: string;
+  projectCode: string;
   sessionIds: string[];
   title: string;
   description: string;
@@ -389,7 +389,7 @@ export interface Intent {
 }
 
 export interface IntentProductivityStats {
-  projectId: string;
+  projectCode: string;
   projectName?: string;
   projectCode?: string;
   tags?: string[];
@@ -448,7 +448,7 @@ export interface User {
 
 export interface ProjectMember {
   id: string;
-  projectId: string;
+  projectCode: string;
   userId: string;
   role: ProjectRole;
   createdBy: string;
@@ -458,7 +458,7 @@ export interface ProjectMember {
 
 export interface CodeCheckout {
   id: string;
-  projectId: string;
+  projectCode: string;
   userId: string;
   checkedOutAt: string;
   lastActivityAt: string;
@@ -514,7 +514,7 @@ export interface ModeInfo {
 export type DisplayMode = 'server' | 'client' | 'dev-standalone';
 
 export interface ProjectPathEntry {
-  projectId: string;
+  projectCode: string;
   localPath: string;
 }
 
@@ -532,7 +532,7 @@ export interface ClientInstance {
 // ---- Claude Usage ----
 
 export interface ClaudeProjectUsage {
-  projectId: string;
+  projectCode: string;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;

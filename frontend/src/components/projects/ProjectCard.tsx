@@ -845,7 +845,7 @@ function TabIcon({ name }: { name: string }) {
   }
 }
 
-function CompactIssueList({ projectId, projectCode }: { projectId: string; projectCode: string }) {
+function CompactIssueList({ projectCode, projectCode }: { projectCode: string; projectCode: string }) {
   const [showNewIssue, setShowNewIssue] = useState(false)
   const { data: issues, isLoading } = useQuery({
     queryKey: ['issues', projectId],
@@ -905,7 +905,7 @@ function CompactIssueList({ projectId, projectCode }: { projectId: string; proje
 
       {showNewIssue && (
         <NewIssueModal
-          projectId={projectId}
+          projectId={projectCode}
           onClose={() => setShowNewIssue(false)}
         />
       )}
@@ -913,7 +913,7 @@ function CompactIssueList({ projectId, projectCode }: { projectId: string; proje
   )
 }
 
-function NewIssueModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+function NewIssueModal({ projectCode, onClose }: { projectCode: string; onClose: () => void }) {
   const queryClient = useQueryClient()
   const [title, setTitle] = useState('')
   const [type, setType] = useState<IssueType>('bug')
@@ -923,7 +923,7 @@ function NewIssueModal({ projectId, onClose }: { projectId: string; onClose: () 
   const [reproError, setReproError] = useState('')
 
   const mutation = useMutation({
-    mutationFn: (data: Partial<Issue>) => createIssue(projectId, data),
+    mutationFn: (data: Partial<Issue>) => createIssue(projectCode, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['issues', projectId] })
       queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
@@ -1070,13 +1070,13 @@ function NewIssueModal({ projectId, onClose }: { projectId: string; onClose: () 
   )
 }
 
-function ProjectIntentsTab({ projectId }: { projectId: string }) {
+function ProjectIntentsTab({ projectId }: { projectCode: string }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
   const { data: intents = [], isLoading } = useQuery({
     queryKey: ['intents', projectId],
-    queryFn: () => listIntents({ projectId, limit: 100 }),
+    queryFn: () => listIntents({ projectCode, limit: 100 }),
     refetchInterval: 30_000,
   })
 
@@ -1636,7 +1636,7 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
   )
 }
 
-function ChatHistoryTab({ projectId, currentSession }: { projectId: string; currentSession: ChatSessionSnapshot | null }) {
+function ChatHistoryTab({ projectCode, currentSession }: { projectCode: string; currentSession: ChatSessionSnapshot | null }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [viewingCurrent, setViewingCurrent] = useState(false)
 
@@ -2245,10 +2245,10 @@ function formatLogTime(iso: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function CompactActivityLog({ projectId }: { projectId: string }) {
+function CompactActivityLog({ projectId }: { projectCode: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ['activity-log', projectId],
-    queryFn: () => listActivityLog({ projectId, limit: 50 }),
+    queryFn: () => listActivityLog({ projectCode, limit: 50 }),
     refetchInterval: 15000,
   })
 
@@ -2565,7 +2565,7 @@ function ModulesTab({ parentId, parentProject, showParentHero }: {
                 onClick={() => {
                   // Send to orchestrator's Claude Code via WebSocket
                   // Find the orchestrator's ChatView and inject the message
-                  const event = new CustomEvent('vibectl:send-to-project', { detail: { projectId: parentId, text: buildPrompt(postOp) } })
+                  const event = new CustomEvent('vibectl:send-to-project', { detail: { projectCode: parentId, text: buildPrompt(postOp) } })
                   window.dispatchEvent(event)
                   setPostOp(null)
                 }}

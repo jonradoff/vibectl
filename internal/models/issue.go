@@ -86,7 +86,7 @@ type Attachment struct {
 
 type Issue struct {
 	ID          bson.ObjectID `json:"id" bson:"_id,omitempty"`
-	ProjectID   bson.ObjectID `json:"projectId" bson:"projectId"`
+	ProjectCode string        `json:"projectCode" bson:"projectCode"`
 	IssueKey    string        `json:"issueKey" bson:"issueKey"`
 	Number      int           `json:"number" bson:"number"`
 	Title       string        `json:"title" bson:"title"`

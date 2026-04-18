@@ -239,8 +239,8 @@ func (b *APIBackend) UpdateIssue(ctx context.Context, issueKey string, req *mode
 }
 
 // CountIssuesByProject computes status counts by fetching all issues.
-func (b *APIBackend) CountIssuesByProject(ctx context.Context, projectID bson.ObjectID) (map[string]int, error) {
-	issues, err := b.ListIssues(ctx, projectID.Hex(), nil)
+func (b *APIBackend) CountIssuesByProject(ctx context.Context, projectCode string) (map[string]int, error) {
+	issues, err := b.ListIssues(ctx, projectCode, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -252,8 +252,8 @@ func (b *APIBackend) CountIssuesByProject(ctx context.Context, projectID bson.Ob
 }
 
 // CountIssuesByPriority computes priority counts by fetching all issues.
-func (b *APIBackend) CountIssuesByPriority(ctx context.Context, projectID bson.ObjectID) (map[string]int, error) {
-	issues, err := b.ListIssues(ctx, projectID.Hex(), nil)
+func (b *APIBackend) CountIssuesByPriority(ctx context.Context, projectCode string) (map[string]int, error) {
+	issues, err := b.ListIssues(ctx, projectCode, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +302,7 @@ func (b *APIBackend) ListRecentDecisions(ctx context.Context, projectID string, 
 }
 
 // RecordDecision is not supported via the REST API (no POST /decisions endpoint).
-func (b *APIBackend) RecordDecision(ctx context.Context, projectID bson.ObjectID, decisionType, summary, issueKey string) error {
+func (b *APIBackend) RecordDecision(ctx context.Context, projectCode string, decisionType, summary, issueKey string) error {
 	return fmt.Errorf("RecordDecision is not supported in API mode: no POST /decisions endpoint available")
 }
 

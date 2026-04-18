@@ -76,13 +76,13 @@ func (h *DashboardHandler) GlobalDashboard(w http.ResponseWriter, r *http.Reques
 	summaries := make([]models.ProjectSummary, 0, len(projects))
 
 	for _, project := range projects {
-		issuesByStatus, err := h.issueService.CountByProject(ctx, project.ID)
+		issuesByStatus, err := h.issueService.CountByProject(ctx, project.Code)
 		if err != nil {
 			middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "COUNT_ISSUES_FAILED")
 			return
 		}
 
-		issuesByPriority, err := h.issueService.CountByPriority(ctx, project.ID)
+		issuesByPriority, err := h.issueService.CountByPriority(ctx, project.Code)
 		if err != nil {
 			middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "COUNT_ISSUES_FAILED")
 			return
@@ -103,7 +103,7 @@ func (h *DashboardHandler) GlobalDashboard(w http.ResponseWriter, r *http.Reques
 			if currentUser.GlobalRole == models.GlobalRoleSuperAdmin {
 				currentUserRole = string(models.ProjectRoleOwner)
 			} else if h.memberService != nil {
-				role, _ := h.memberService.GetRole(ctx, project.ID, currentUser.ID)
+				role, _ := h.memberService.GetRole(ctx, project.Code, currentUser.ID)
 				currentUserRole = string(role)
 			}
 		}
@@ -166,9 +166,8 @@ func (h *DashboardHandler) Universe(w http.ResponseWriter, r *http.Request) {
 				parentID = proj.ParentID.Hex()
 			}
 			data := models.ProjectUniverseData{
-				ProjectID:   proj.ID.Hex(),
-				ProjectName: proj.Name,
 				ProjectCode: proj.Code,
+				ProjectName: proj.Name,
 				ProjectType: proj.ProjectType,
 				ParentID:    parentID,
 				UnitName:    proj.UnitName,
@@ -177,7 +176,7 @@ func (h *DashboardHandler) Universe(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Activity sparkline: requested days
-			actByDay, err := h.activityLogService.DailyActivityCounts(ctx, proj.ID, activityDays)
+			actByDay, err := h.activityLogService.DailyActivityCounts(ctx, proj.Code, activityDays)
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -189,7 +188,7 @@ func (h *DashboardHandler) Universe(w http.ResponseWriter, r *http.Request) {
 			data.ActivityByDay = actByDay
 
 			// Health sparkline: 1 day (24h)
-			healthByDay, err := h.healthRecordService.DailyHealthStatus(ctx, proj.ID, 1)
+			healthByDay, err := h.healthRecordService.DailyHealthStatus(ctx, proj.Code, 1)
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -201,7 +200,7 @@ func (h *DashboardHandler) Universe(w http.ResponseWriter, r *http.Request) {
 			data.HealthByDay = healthByDay
 
 			// Current health: latest record
-			latestHealth, _ := h.healthRecordService.GetLatest(ctx, proj.ID)
+			latestHealth, _ := h.healthRecordService.GetLatest(ctx, proj.Code)
 			if latestHealth == nil || len(latestHealth.Results) == 0 {
 				data.CurrentHealth = "none"
 			} else {
@@ -216,27 +215,27 @@ func (h *DashboardHandler) Universe(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Issue counts
-			issuesByStatus, _ := h.issueService.CountByProject(ctx, proj.ID)
+			issuesByStatus, _ := h.issueService.CountByProject(ctx, proj.Code)
 			data.IssuesByStatus = issuesByStatus
 			data.OpenIssueCount = issuesByStatus["open"]
 
 			// Pending feedback count
-			pendingFeedback, _ := h.feedbackService.CountPendingByProject(ctx, proj.ID)
+			pendingFeedback, _ := h.feedbackService.CountPendingByProject(ctx, proj.Code)
 			data.PendingFeedbackCount = pendingFeedback
 
 			// Prompt count: prompt_sent activity log entries within the requested window
-			prompts, _ := h.activityLogService.PromptCountSince(ctx, proj.ID, activityDays)
+			prompts, _ := h.activityLogService.PromptCountSince(ctx, proj.Code, activityDays)
 			data.PromptCount = prompts
 
 			// Last prompt timestamp
-			lastPromptAt, _ := h.activityLogService.LastPromptAt(ctx, proj.ID)
+			lastPromptAt, _ := h.activityLogService.LastPromptAt(ctx, proj.Code)
 			if lastPromptAt != nil {
 				s := lastPromptAt.UTC().Format(time.RFC3339)
 				data.LastPromptAt = &s
 			}
 
 			// Last activity timestamp
-			lastAt, _ := h.activityLogService.LastActivityAt(ctx, proj.ID)
+			lastAt, _ := h.activityLogService.LastActivityAt(ctx, proj.Code)
 			if lastAt != nil {
 				s := lastAt.UTC().Format(time.RFC3339)
 				data.LastActivityAt = &s
@@ -295,7 +294,7 @@ func (h *DashboardHandler) Productivity(w http.ResponseWriter, r *http.Request) 
 	results := make([]EnrichedProductivity, 0, len(stats))
 	for _, s := range stats {
 		ep := EnrichedProductivity{ProjectProductivity: s}
-		if proj, err := h.projectService.GetByID(r.Context(), s.ProjectID); err == nil && proj != nil {
+		if proj, err := h.projectService.GetByCode(r.Context(), s.ProjectCode); err == nil && proj != nil {
 			ep.ProjectName = proj.Name
 			ep.ProjectCode = proj.Code
 			ep.Tags = proj.Tags

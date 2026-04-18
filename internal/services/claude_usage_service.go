@@ -36,7 +36,7 @@ func (s *ClaudeUsageService) EnsureIndexes(ctx context.Context) error {
 		}},
 		// Query by project + time range
 		{Keys: bson.D{
-			{Key: "projectId", Value: 1},
+			{Key: "projectCode", Value: 1},
 			{Key: "recordedAt", Value: -1},
 		}},
 		// TTL: auto-delete records older than 90 days
@@ -170,10 +170,10 @@ func (s *ClaudeUsageService) GetSummary(ctx context.Context, tokenHash string) (
 		totalCacheCreation += rec.CacheCreationTokens
 
 		// By project
-		pu, ok := byProject[rec.ProjectID]
+		pu, ok := byProject[rec.ProjectCode]
 		if !ok {
-			pu = &models.ProjectUsage{ProjectID: rec.ProjectID}
-			byProject[rec.ProjectID] = pu
+			pu = &models.ProjectUsage{ProjectCode: rec.ProjectCode}
+			byProject[rec.ProjectCode] = pu
 		}
 		pu.InputTokens += rec.InputTokens
 		pu.OutputTokens += rec.OutputTokens

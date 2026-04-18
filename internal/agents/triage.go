@@ -35,14 +35,14 @@ func (a *TriageAgent) TriageItem(ctx context.Context, feedbackID string) (*model
 	var projectName, projectCode string
 	var issues []models.Issue
 
-	if feedback.ProjectID != nil {
-		project, err := a.projectService.GetByID(ctx, feedback.ProjectID.Hex())
+	if feedback.ProjectCode != "" {
+		project, err := a.projectService.GetByCode(ctx, feedback.ProjectCode)
 		if err != nil {
 			slog.Warn("could not get project for feedback", "error", err)
 		} else {
 			projectName = project.Name
 			projectCode = project.Code
-			issues, _ = a.issueService.ListByProject(ctx, project.ID.Hex(), map[string]string{})
+			issues, _ = a.issueService.ListByProject(ctx, project.Code, map[string]string{})
 		}
 	}
 

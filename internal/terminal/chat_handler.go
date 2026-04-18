@@ -354,7 +354,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 					)
 
 					sess, resumeErr := h.manager.ResumeSession(
-						state.ProjectID,
+						state.ProjectCode,
 						state.LocalPath,
 						state.ClaudeSessionID,
 						state.Messages,

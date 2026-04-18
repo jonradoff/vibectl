@@ -16,33 +16,33 @@ type Backend interface {
 	GetProjectByCode(ctx context.Context, code string) (*models.Project, error)
 
 	// Issues
-	ListIssues(ctx context.Context, projectID string, filters map[string]string) ([]models.Issue, error)
+	ListIssues(ctx context.Context, projectCode string, filters map[string]string) ([]models.Issue, error)
 	GetIssueByKey(ctx context.Context, key string) (*models.Issue, error)
-	SearchIssues(ctx context.Context, query, projectID string) ([]models.Issue, error)
-	CreateIssue(ctx context.Context, projectID string, req *models.CreateIssueRequest) (*models.Issue, error)
+	SearchIssues(ctx context.Context, query, projectCode string) ([]models.Issue, error)
+	CreateIssue(ctx context.Context, projectCode string, req *models.CreateIssueRequest) (*models.Issue, error)
 	UpdateIssueStatus(ctx context.Context, issueKey, newStatus string) (*models.Issue, error)
 	UpdateIssue(ctx context.Context, issueKey string, req *models.UpdateIssueRequest) (*models.Issue, error)
-	CountIssuesByProject(ctx context.Context, projectID bson.ObjectID) (map[string]int, error)
-	CountIssuesByPriority(ctx context.Context, projectID bson.ObjectID) (map[string]int, error)
+	CountIssuesByProject(ctx context.Context, projectCode string) (map[string]int, error)
+	CountIssuesByPriority(ctx context.Context, projectCode string) (map[string]int, error)
 
 	// Sessions
-	ListSessions(ctx context.Context, projectID string) ([]models.SessionLog, error)
-	GetLatestSession(ctx context.Context, projectID string) (*models.SessionLog, error)
+	ListSessions(ctx context.Context, projectCode string) ([]models.SessionLog, error)
+	GetLatestSession(ctx context.Context, projectCode string) (*models.SessionLog, error)
 
 	// Health records
-	GetHealthHistory(ctx context.Context, projectID string, window time.Duration) ([]models.HealthRecord, error)
+	GetHealthHistory(ctx context.Context, projectCode string, window time.Duration) ([]models.HealthRecord, error)
 
 	// Decisions
-	ListRecentDecisions(ctx context.Context, projectID string, limit int) ([]models.Decision, error)
-	RecordDecision(ctx context.Context, projectID bson.ObjectID, decisionType, summary, issueKey string) error
+	ListRecentDecisions(ctx context.Context, projectCode string, limit int) ([]models.Decision, error)
+	RecordDecision(ctx context.Context, projectCode string, decisionType, summary, issueKey string) error
 
 	// Prompts
-	ListPromptsByProject(ctx context.Context, projectID string) ([]models.Prompt, error)
+	ListPromptsByProject(ctx context.Context, projectCode string) ([]models.Prompt, error)
 	ListAllPrompts(ctx context.Context) ([]models.Prompt, error)
 	GetPromptByID(ctx context.Context, id string) (*models.Prompt, error)
 
 	// Feedback
-	ListFeedbackByProject(ctx context.Context, projectID string) ([]models.FeedbackItem, error)
+	ListFeedbackByProject(ctx context.Context, projectCode string) ([]models.FeedbackItem, error)
 	CreateFeedback(ctx context.Context, req *models.CreateFeedbackRequest) (*models.FeedbackItem, error)
 	TriageFeedbackItem(ctx context.Context, feedbackID string) (*models.AIAnalysis, error)
 	ReviewFeedback(ctx context.Context, feedbackID string, req *models.ReviewFeedbackRequest) (*models.FeedbackItem, error)
@@ -50,16 +50,16 @@ type Backend interface {
 	LinkFeedbackToIssue(ctx context.Context, feedbackID, issueKey string) error
 
 	// VibectlMd
-	GenerateVibectlMd(ctx context.Context, projectID string) (string, error)
-	WriteVibectlMdToProject(ctx context.Context, projectID string) error
+	GenerateVibectlMd(ctx context.Context, projectCode string) (string, error)
+	WriteVibectlMdToProject(ctx context.Context, projectCode string) error
 
 	// Intents
-	ListIntents(ctx context.Context, projectID, status, category string, days, limit int) ([]models.Intent, error)
+	ListIntents(ctx context.Context, projectCode, status, category string, days, limit int) ([]models.Intent, error)
 	GetIntentByID(ctx context.Context, id string) (*models.Intent, error)
 	UpdateIntent(ctx context.Context, id string, updates map[string]interface{}) error
 
 	// Activity Log
-	ListActivityLog(ctx context.Context, projectID string, limit int) ([]models.ActivityLog, error)
+	ListActivityLog(ctx context.Context, projectCode string, limit int) ([]models.ActivityLog, error)
 
 	// Multi-module
 	CreateMultiModuleProject(ctx context.Context, req *models.CreateProjectRequest) (*models.Project, []models.Project, error)

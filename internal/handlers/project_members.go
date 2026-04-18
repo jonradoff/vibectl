@@ -33,17 +33,16 @@ func (h *ProjectMemberHandler) Routes() chi.Router {
 // List returns all members for the project.
 // Requires: owner, devops, or super_admin.
 func (h *ProjectMemberHandler) List(w http.ResponseWriter, r *http.Request) {
-	projectID, err := bson.ObjectIDFromHex(chi.URLParam(r, "id"))
-	if err != nil {
-		middleware.WriteError(w, http.StatusBadRequest, "invalid project id", "INVALID_ID")
+	project, ok := h.resolveProject(w, r)
+	if !ok {
 		return
 	}
 
-	if !h.requireProjectRole(w, r, projectID, models.ProjectRoleViewer) {
+	if !h.requireProjectRole(w, r, project.Code, models.ProjectRoleViewer) {
 		return
 	}
 
-	members, err := h.memberSvc.ListByProject(r.Context(), projectID)
+	members, err := h.memberSvc.ListByProject(r.Context(), project.Code)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_MEMBERS_FAILED")
 		return
@@ -53,12 +52,11 @@ func (h *ProjectMemberHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // Upsert adds or updates a member's role. Requires owner or super_admin.
 func (h *ProjectMemberHandler) Upsert(w http.ResponseWriter, r *http.Request) {
-	projectID, err := bson.ObjectIDFromHex(chi.URLParam(r, "id"))
-	if err != nil {
-		middleware.WriteError(w, http.StatusBadRequest, "invalid project id", "INVALID_ID")
+	project, ok := h.resolveProject(w, r)
+	if !ok {
 		return
 	}
-	if !h.requireProjectRole(w, r, projectID, models.ProjectRoleOwner) {
+	if !h.requireProjectRole(w, r, project.Code, models.ProjectRoleOwner) {
 		return
 	}
 
@@ -78,7 +76,7 @@ func (h *ProjectMemberHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 	}
 	caller := middleware.GetCurrentUser(r)
 	createdBy := caller.ID
-	if err := h.memberSvc.Upsert(r.Context(), projectID, userID, createdBy, req.Role); err != nil {
+	if err := h.memberSvc.Upsert(r.Context(), project.Code, userID, createdBy, req.Role); err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "UPSERT_MEMBER_FAILED")
 		return
 	}
@@ -87,12 +85,11 @@ func (h *ProjectMemberHandler) Upsert(w http.ResponseWriter, r *http.Request) {
 
 // Remove removes a member from the project. Requires owner or super_admin.
 func (h *ProjectMemberHandler) Remove(w http.ResponseWriter, r *http.Request) {
-	projectID, err := bson.ObjectIDFromHex(chi.URLParam(r, "id"))
-	if err != nil {
-		middleware.WriteError(w, http.StatusBadRequest, "invalid project id", "INVALID_ID")
+	project, ok := h.resolveProject(w, r)
+	if !ok {
 		return
 	}
-	if !h.requireProjectRole(w, r, projectID, models.ProjectRoleOwner) {
+	if !h.requireProjectRole(w, r, project.Code, models.ProjectRoleOwner) {
 		return
 	}
 
@@ -101,16 +98,27 @@ func (h *ProjectMemberHandler) Remove(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusBadRequest, "invalid user id", "INVALID_ID")
 		return
 	}
-	if err := h.memberSvc.Remove(r.Context(), projectID, userID); err != nil {
+	if err := h.memberSvc.Remove(r.Context(), project.Code, userID); err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "REMOVE_MEMBER_FAILED")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// resolveProject looks up the project from the URL "id" param and returns it.
+func (h *ProjectMemberHandler) resolveProject(w http.ResponseWriter, r *http.Request) (*models.Project, bool) {
+	id := chi.URLParam(r, "id")
+	project, err := h.projectSvc.GetByID(r.Context(), id)
+	if err != nil || project == nil {
+		middleware.WriteError(w, http.StatusNotFound, "project not found", "PROJECT_NOT_FOUND")
+		return nil, false
+	}
+	return project, true
+}
+
 // requireProjectRole checks that the current user has at least minRole in the project.
 // super_admins always pass. Returns false and writes the error if check fails.
-func (h *ProjectMemberHandler) requireProjectRole(w http.ResponseWriter, r *http.Request, projectID bson.ObjectID, minRole models.ProjectRole) bool {
+func (h *ProjectMemberHandler) requireProjectRole(w http.ResponseWriter, r *http.Request, projectCode string, minRole models.ProjectRole) bool {
 	user := middleware.GetCurrentUser(r)
 	if user == nil {
 		middleware.WriteError(w, http.StatusUnauthorized, "not authenticated", "UNAUTHORIZED")
@@ -119,7 +127,7 @@ func (h *ProjectMemberHandler) requireProjectRole(w http.ResponseWriter, r *http
 	if user.GlobalRole == models.GlobalRoleSuperAdmin {
 		return true
 	}
-	has, err := h.memberSvc.HasRole(r.Context(), projectID, user.ID, minRole)
+	has, err := h.memberSvc.HasRole(r.Context(), projectCode, user.ID, minRole)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "PERMISSION_CHECK_FAILED")
 		return false

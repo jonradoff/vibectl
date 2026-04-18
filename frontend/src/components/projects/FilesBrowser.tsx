@@ -43,7 +43,7 @@ const PINNED_KEY_PREFIX = 'vibectl-pinned-files-'
 const DEFAULT_PINNED = ['CLAUDE.md', 'VIBECTL.md', 'README.md']
 const PINNED_INITIALIZED_PREFIX = 'vibectl-pinned-init-'
 
-function loadPinnedFiles(projectId: string): Set<string> {
+function loadPinnedFiles(projectCode: string): Set<string> {
   try {
     const raw = localStorage.getItem(PINNED_KEY_PREFIX + projectId)
     if (raw) {
@@ -51,25 +51,25 @@ function loadPinnedFiles(projectId: string): Set<string> {
       // On first load after feature addition, merge defaults
       if (!localStorage.getItem(PINNED_INITIALIZED_PREFIX + projectId)) {
         for (const d of DEFAULT_PINNED) saved.add(d)
-        localStorage.setItem(PINNED_INITIALIZED_PREFIX + projectId, '1')
-        localStorage.setItem(PINNED_KEY_PREFIX + projectId, JSON.stringify([...saved]))
+        localStorage.setItem(PINNED_INITIALIZED_PREFIX + projectCode, '1')
+        localStorage.setItem(PINNED_KEY_PREFIX + projectCode, JSON.stringify([...saved]))
       }
       return saved
     }
     // No saved data — use defaults and mark initialized
-    localStorage.setItem(PINNED_INITIALIZED_PREFIX + projectId, '1')
+    localStorage.setItem(PINNED_INITIALIZED_PREFIX + projectCode, '1')
     return new Set(DEFAULT_PINNED)
   } catch {
     return new Set(DEFAULT_PINNED)
   }
 }
 
-function savePinnedFiles(projectId: string, pinned: Set<string>) {
-  localStorage.setItem(PINNED_KEY_PREFIX + projectId, JSON.stringify([...pinned]))
+function savePinnedFiles(projectCode: string, pinned: Set<string>) {
+  localStorage.setItem(PINNED_KEY_PREFIX + projectCode, JSON.stringify([...pinned]))
 }
 
 interface FilesBrowserProps {
-  projectId: string
+  projectCode: string
   localPath?: string
   githubUrl?: string
   onClone?: () => void
@@ -116,7 +116,7 @@ function formatModTime(iso?: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-export default function FilesBrowser({ projectId, localPath, githubUrl, onClone }: FilesBrowserProps) {
+export default function FilesBrowser({ projectCode, localPath, githubUrl, onClone }: FilesBrowserProps) {
   const [currentPath, setCurrentPath] = useState('.')
   const [editingFile, setEditingFile] = useState<string | null>(null)
   const [pinnedFiles, setPinnedFiles] = useState(() => loadPinnedFiles(projectId))
@@ -126,16 +126,16 @@ export default function FilesBrowser({ projectId, localPath, githubUrl, onClone 
   const hasLocalPath = !!localPath
 
   const { data: entries, isLoading, error } = useQuery({
-    queryKey: ['files', projectId, currentPath],
-    queryFn: () => listDirectory(projectId, currentPath),
+    queryKey: ['files', projectCode, currentPath],
+    queryFn: () => listDirectory(projectCode, currentPath),
     enabled: hasLocalPath,
     retry: 1,
   })
 
   // Always fetch root entries so pinned files are available regardless of current path
   const { data: rootEntries } = useQuery({
-    queryKey: ['files', projectId, '.'],
-    queryFn: () => listDirectory(projectId, '.'),
+    queryKey: ['files', projectCode, '.'],
+    queryFn: () => listDirectory(projectCode, '.'),
     enabled: hasLocalPath,
     retry: 1,
   })
@@ -159,7 +159,7 @@ export default function FilesBrowser({ projectId, localPath, githubUrl, onClone 
       } else {
         next.add(path)
       }
-      savePinnedFiles(projectId, next)
+      savePinnedFiles(projectCode, next)
       return next
     })
   }, [projectId])
@@ -360,7 +360,7 @@ export default function FilesBrowser({ projectId, localPath, githubUrl, onClone 
       {/* File editor modal — portaled to body to escape transform containment */}
       {editingFile && createPortal(
         <FileEditorModal
-          projectId={projectId}
+          projectId={projectCode}
           filePath={editingFile}
           onClose={() => setEditingFile(null)}
         />,
@@ -370,7 +370,7 @@ export default function FilesBrowser({ projectId, localPath, githubUrl, onClone 
       {/* Create file prompt — portaled to body */}
       {createPrompt && createPortal(
         <CreateFilePrompt
-          projectId={projectId}
+          projectId={projectCode}
           fileName={createPrompt.name}
           filePath={createPrompt.path}
           onCreated={(path) => {
@@ -386,13 +386,13 @@ export default function FilesBrowser({ projectId, localPath, githubUrl, onClone 
 }
 
 function CreateFilePrompt({
-  projectId,
+  projectCode,
   fileName,
   filePath,
   onCreated,
   onCancel,
 }: {
-  projectId: string
+  projectCode: string
   fileName: string
   filePath: string
   onCreated: (path: string) => void
@@ -421,7 +421,7 @@ function CreateFilePrompt({
         await generateVibectlMd(projectId)
       } else {
         // Create an empty file
-        await writeFile(projectId, filePath, '')
+        await writeFile(projectCode, filePath, '')
       }
       queryClient.invalidateQueries({ queryKey: ['files', projectId] })
       onCreated(filePath)
@@ -553,7 +553,7 @@ function FileRow({
   )
 }
 
-function FileEditorModal({ projectId, filePath, onClose }: { projectId: string; filePath: string; onClose: () => void }) {
+function FileEditorModal({ projectCode, filePath, onClose }: { projectCode: string; filePath: string; onClose: () => void }) {
   const queryClient = useQueryClient()
   const [content, setContent] = useState('')
   const [isDirty, setIsDirty] = useState(false)
@@ -562,8 +562,8 @@ function FileEditorModal({ projectId, filePath, onClose }: { projectId: string; 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const { data: fileData, isLoading, error } = useQuery({
-    queryKey: ['fileContent', projectId, filePath],
-    queryFn: () => readFile(projectId, filePath),
+    queryKey: ['fileContent', projectCode, filePath],
+    queryFn: () => readFile(projectCode, filePath),
     retry: false,
   })
 
@@ -603,11 +603,11 @@ function FileEditorModal({ projectId, filePath, onClose }: { projectId: string; 
   }, [isDirty, tryClose, showUnsavedPrompt])
 
   const saveMutation = useMutation({
-    mutationFn: () => writeFile(projectId, filePath, content),
+    mutationFn: () => writeFile(projectCode, filePath, content),
     onSuccess: () => {
       setIsDirty(false)
       setSaved(true)
-      queryClient.invalidateQueries({ queryKey: ['fileContent', projectId, filePath] })
+      queryClient.invalidateQueries({ queryKey: ['fileContent', projectCode, filePath] })
       queryClient.invalidateQueries({ queryKey: ['files', projectId] })
       setTimeout(() => setSaved(false), 2000)
     },

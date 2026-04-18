@@ -8,7 +8,7 @@ interface ServerEvent {
 
 // Maps server event types to the React Query keys that should be invalidated.
 function keysForEvent(e: ServerEvent): unknown[][] {
-  const pid = e.projectId;
+  const pid = e.projectCode;
   switch (e.type) {
     case 'issue.created':
     case 'issue.updated':

@@ -26,7 +26,7 @@ func NewIntentService(db *mongo.Database) *IntentService {
 
 func (s *IntentService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
-		{Keys: bson.D{{Key: "projectId", Value: 1}, {Key: "completedAt", Value: -1}}},
+		{Keys: bson.D{{Key: "projectCode", Value: 1}, {Key: "completedAt", Value: -1}}},
 		{Keys: bson.D{{Key: "status", Value: 1}}},
 		{Keys: bson.D{{Key: "category", Value: 1}}},
 		{Keys: bson.D{{Key: "extractedAt", Value: -1}}},
@@ -71,19 +71,15 @@ func (s *IntentService) GetBySessionID(ctx context.Context, sessionID string) ([
 	return results, nil
 }
 
-func (s *IntentService) ListByProject(ctx context.Context, projectID string, since time.Time, limit int) ([]models.Intent, error) {
+func (s *IntentService) ListByProject(ctx context.Context, projectCode string, since time.Time, limit int) ([]models.Intent, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	filter := bson.D{
 		{Key: "analysisModel", Value: bson.D{{Key: "$ne", Value: "skip"}}},
 	}
-	if projectID != "" {
-		oid, err := bson.ObjectIDFromHex(projectID)
-		if err != nil {
-			return nil, fmt.Errorf("invalid project ID: %w", err)
-		}
-		filter = append(filter, bson.E{Key: "projectId", Value: oid})
+	if projectCode != "" {
+		filter = append(filter, bson.E{Key: "projectCode", Value: projectCode})
 	}
 	if !since.IsZero() {
 		filter = append(filter, bson.E{Key: "completedAt", Value: bson.D{{Key: "$gte", Value: since}}})
@@ -102,19 +98,17 @@ func (s *IntentService) ListByProject(ctx context.Context, projectID string, sin
 	return results, nil
 }
 
-func (s *IntentService) List(ctx context.Context, projectID, status, category string, since time.Time, limit int) ([]models.Intent, error) {
+func (s *IntentService) List(ctx context.Context, projectCode, status, category string, since time.Time, limit int) ([]models.Intent, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	// Exclude skip placeholders and zero-projectId intents from all queries
+	// Exclude skip placeholders and empty-projectCode intents from all queries
 	filter := bson.D{
 		{Key: "analysisModel", Value: bson.D{{Key: "$ne", Value: "skip"}}},
-		{Key: "projectId", Value: bson.D{{Key: "$ne", Value: bson.ObjectID{}}}},
+		{Key: "projectCode", Value: bson.D{{Key: "$ne", Value: ""}}},
 	}
-	if projectID != "" {
-		if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
-			filter = append(filter, bson.E{Key: "projectId", Value: oid})
-		}
+	if projectCode != "" {
+		filter = append(filter, bson.E{Key: "projectCode", Value: projectCode})
 	}
 	if status != "" {
 		filter = append(filter, bson.E{Key: "status", Value: status})
@@ -167,14 +161,14 @@ func (s *IntentService) Merge(ctx context.Context, existingID bson.ObjectID, new
 }
 
 // ListRecent returns recent intents for a project (for merge detection).
-func (s *IntentService) ListRecent(ctx context.Context, projectID string, days int) ([]models.Intent, error) {
+func (s *IntentService) ListRecent(ctx context.Context, projectCode string, days int) ([]models.Intent, error) {
 	since := time.Now().UTC().AddDate(0, 0, -days)
 	filter := bson.D{
 		{Key: "analysisModel", Value: bson.D{{Key: "$ne", Value: "skip"}}},
 		{Key: "completedAt", Value: bson.D{{Key: "$gte", Value: since}}},
 	}
-	if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
-		filter = append(filter, bson.E{Key: "projectId", Value: oid})
+	if projectCode != "" {
+		filter = append(filter, bson.E{Key: "projectCode", Value: projectCode})
 	}
 	opts := options.Find().SetSort(bson.D{{Key: "completedAt", Value: -1}}).SetLimit(10)
 	cursor, err := s.collection.Find(ctx, filter, opts)
@@ -274,7 +268,7 @@ func (s *IntentService) ListUnanalyzedSessions(ctx context.Context, limit int) (
 		SetLimit(int64(limit)).
 		SetProjection(bson.D{
 			{Key: "_id", Value: 1},
-			{Key: "projectId", Value: 1},
+			{Key: "projectCode", Value: 1},
 			{Key: "claudeSessionId", Value: 1},
 			{Key: "messageCount", Value: 1},
 			{Key: "startedAt", Value: 1},
@@ -306,9 +300,8 @@ func (s *IntentService) GetHistoryEntry(ctx context.Context, id bson.ObjectID) (
 
 // ProductivityStats holds aggregated intent metrics for the productivity API.
 type ProductivityStats struct {
-	ProjectID      string `json:"projectId"`
+	ProjectCode    string `json:"projectCode"`
 	ProjectName    string `json:"projectName,omitempty"`
-	ProjectCode    string `json:"projectCode,omitempty"`
 	Tags           []string `json:"tags,omitempty"`
 	PointsDelivered int    `json:"pointsDelivered"`
 	IntentCount    int    `json:"intentCount"`

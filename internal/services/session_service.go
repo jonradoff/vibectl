@@ -24,24 +24,19 @@ func NewSessionService(db *mongo.Database) *SessionService {
 	}
 }
 
-// EnsureIndexes creates indexes on projectId and startedAt.
+// EnsureIndexes creates indexes on projectCode and startedAt.
 func (s *SessionService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
-		{Keys: bson.D{{Key: "projectId", Value: 1}}},
+		{Keys: bson.D{{Key: "projectCode", Value: 1}}},
 		{Keys: bson.D{{Key: "startedAt", Value: -1}}},
 	})
 	return err
 }
 
 // ListByProject returns all sessions for a project, sorted by startedAt descending.
-func (s *SessionService) ListByProject(ctx context.Context, projectID string) ([]models.SessionLog, error) {
-	oid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid project ID: %w", err)
-	}
-
+func (s *SessionService) ListByProject(ctx context.Context, projectCode string) ([]models.SessionLog, error) {
 	opts := options.Find().SetSort(bson.D{{Key: "startedAt", Value: -1}})
-	cursor, err := s.collection.Find(ctx, bson.D{{Key: "projectId", Value: oid}}, opts)
+	cursor, err := s.collection.Find(ctx, bson.D{{Key: "projectCode", Value: projectCode}}, opts)
 	if err != nil {
 		return nil, fmt.Errorf("find sessions: %w", err)
 	}
@@ -58,15 +53,10 @@ func (s *SessionService) ListByProject(ctx context.Context, projectID string) ([
 }
 
 // GetLatest returns the most recent session for a project.
-func (s *SessionService) GetLatest(ctx context.Context, projectID string) (*models.SessionLog, error) {
-	oid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid project ID: %w", err)
-	}
-
+func (s *SessionService) GetLatest(ctx context.Context, projectCode string) (*models.SessionLog, error) {
 	opts := options.FindOne().SetSort(bson.D{{Key: "startedAt", Value: -1}})
 	var session models.SessionLog
-	err = s.collection.FindOne(ctx, bson.D{{Key: "projectId", Value: oid}}, opts).Decode(&session)
+	err := s.collection.FindOne(ctx, bson.D{{Key: "projectCode", Value: projectCode}}, opts).Decode(&session)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return nil, fmt.Errorf("no sessions found for project")
@@ -77,15 +67,10 @@ func (s *SessionService) GetLatest(ctx context.Context, projectID string) (*mode
 }
 
 // Create inserts a new session with status=active and startedAt=now.
-func (s *SessionService) Create(ctx context.Context, projectID string) (*models.SessionLog, error) {
-	oid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid project ID: %w", err)
-	}
-
+func (s *SessionService) Create(ctx context.Context, projectCode string) (*models.SessionLog, error) {
 	now := time.Now().UTC()
 	session := models.SessionLog{
-		ProjectID:      oid,
+		ProjectCode:    projectCode,
 		StartedAt:      now,
 		IssuesWorkedOn: []string{},
 		Status:         models.SessionStatusActive,

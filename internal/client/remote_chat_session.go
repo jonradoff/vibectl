@@ -103,7 +103,7 @@ func (s *RemoteChatSessionService) GetResumable(ctx context.Context, projectID s
 	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
 		return nil, nil // null body = no session
 	}
-	if state.ProjectID == "" {
+	if state.ProjectCode == "" {
 		return nil, nil
 	}
 	return &state, nil

@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"go.mongodb.org/mongo-driver/v2/bson"
-
 	"github.com/jonradoff/vibectl/internal/models"
 )
 
@@ -61,22 +59,21 @@ func (s *VibectlMdService) Generate(ctx context.Context, projectID string) (stri
 		return "", fmt.Errorf("get project: %w", err)
 	}
 
-	oid, _ := bson.ObjectIDFromHex(projectID)
 	now := time.Now().UTC()
 
 	// Fetch open issues
-	allIssues, _ := s.issues.ListByProject(ctx, projectID, nil)
+	allIssues, _ := s.issues.ListByProject(ctx, project.Code, nil)
 	openIssues := filterOpenIssues(allIssues)
 
 	// Counts
-	priorityCounts, _ := s.issues.CountByPriority(ctx, oid)
+	priorityCounts, _ := s.issues.CountByPriority(ctx, project.Code)
 	typeCounts := countIssuesByType(openIssues)
 
 	// Recent decisions
-	decisions, _ := s.decisions.ListRecent(ctx, projectID, 20)
+	decisions, _ := s.decisions.ListRecent(ctx, project.Code, 20)
 
 	// Latest session
-	latestSession, _ := s.sessions.GetLatest(ctx, projectID)
+	latestSession, _ := s.sessions.GetLatest(ctx, project.Code)
 
 	// Read existing notes section
 	existingNotes := "_Add your own notes here. This section is preserved across regenerations._"
@@ -113,7 +110,7 @@ func (s *VibectlMdService) Generate(ctx context.Context, projectID string) (stri
 	writeSection(&b, "Goals", "goals", s.genGoals(project))
 	writeSection(&b, "Deployment", "deployment", s.genDeployment(project))
 	writeSection(&b, "Recent Decisions", "decisions", s.genDecisions(decisions))
-	pendingFeedback, _ := s.feedback.ListByProject(ctx, projectID)
+	pendingFeedback, _ := s.feedback.ListByProject(ctx, project.Code)
 	writeSection(&b, "Pending Feedback", "feedback", genPendingFeedback(pendingFeedback))
 	writeSection(&b, "Recurring Themes", "themes", s.genThemes(project))
 	writeSection(&b, "Architecture", "architecture", s.genArchitecture(project))
@@ -194,13 +191,12 @@ func (s *VibectlMdService) UpdateSection(ctx context.Context, projectID string, 
 
 	content := string(existing)
 
-	oid, _ := bson.ObjectIDFromHex(projectID)
-	allIssues, _ := s.issues.ListByProject(ctx, projectID, nil)
+	allIssues, _ := s.issues.ListByProject(ctx, project.Code, nil)
 	openIssues := filterOpenIssues(allIssues)
-	priorityCounts, _ := s.issues.CountByPriority(ctx, oid)
+	priorityCounts, _ := s.issues.CountByPriority(ctx, project.Code)
 	typeCounts := countIssuesByType(openIssues)
-	decisions, _ := s.decisions.ListRecent(ctx, projectID, 20)
-	latestSession, _ := s.sessions.GetLatest(ctx, projectID)
+	decisions, _ := s.decisions.ListRecent(ctx, project.Code, 20)
+	latestSession, _ := s.sessions.GetLatest(ctx, project.Code)
 
 	for _, name := range sectionNames {
 		var sc string
@@ -216,7 +212,7 @@ func (s *VibectlMdService) UpdateSection(ctx context.Context, projectID string, 
 		case "decisions":
 			sc = s.genDecisions(decisions)
 		case "feedback":
-			feedbackItems, _ := s.feedback.ListByProject(ctx, projectID)
+			feedbackItems, _ := s.feedback.ListByProject(ctx, project.Code)
 			sc = genPendingFeedback(feedbackItems)
 		case "themes":
 			sc = s.genThemes(project)

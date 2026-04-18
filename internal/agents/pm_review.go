@@ -59,7 +59,7 @@ func (a *PMReviewAgent) Review(ctx context.Context, projectID string) (*models.P
 		return nil, fmt.Errorf("parsing AI response: %w", err)
 	}
 
-	result.ProjectID = projectID
+	result.ProjectCode = projectID
 	result.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 
 	return &result, nil

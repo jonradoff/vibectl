@@ -27,14 +27,9 @@ func (s *IssueService) collection() *mongo.Collection {
 }
 
 // ListByProject returns issues for a project, optionally filtered by type, priority, and status.
-func (s *IssueService) ListByProject(ctx context.Context, projectID string, filters map[string]string) ([]models.Issue, error) {
-	pid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid project ID: %w", err)
-	}
-
+func (s *IssueService) ListByProject(ctx context.Context, projectCode string, filters map[string]string) ([]models.Issue, error) {
 	filter := bson.D{
-		{Key: "projectId", Value: pid},
+		{Key: "projectCode", Value: projectCode},
 		{Key: "archived", Value: bson.D{{Key: "$ne", Value: true}}},
 	}
 	if v, ok := filters["type"]; ok && v != "" {
@@ -65,7 +60,7 @@ func (s *IssueService) ListByProject(ctx context.Context, projectID string, filt
 }
 
 // Create creates a new issue within a transaction, incrementing the project counter atomically.
-func (s *IssueService) Create(ctx context.Context, projectID string, req *models.CreateIssueRequest) (*models.Issue, error) {
+func (s *IssueService) Create(ctx context.Context, projectCode string, req *models.CreateIssueRequest) (*models.Issue, error) {
 	if !models.ValidIssueType(string(req.Type)) {
 		return nil, fmt.Errorf("invalid issue type: %s", req.Type)
 	}
@@ -76,12 +71,7 @@ func (s *IssueService) Create(ctx context.Context, projectID string, req *models
 		return nil, fmt.Errorf("reproSteps should be provided for bug issues")
 	}
 
-	pid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid project ID: %w", err)
-	}
-
-	project, err := s.projects.GetByID(ctx, projectID)
+	project, err := s.projects.GetByCode(ctx, projectCode)
 	if err != nil {
 		return nil, fmt.Errorf("getting project: %w", err)
 	}
@@ -107,7 +97,7 @@ func (s *IssueService) Create(ctx context.Context, projectID string, req *models
 	defer sess.EndSession(ctx)
 
 	_, err = sess.WithTransaction(ctx, func(ctx context.Context) (interface{}, error) {
-		counter, err := s.projects.IncrementCounter(ctx, pid)
+		counter, err := s.projects.IncrementCounter(ctx, project.ID)
 		if err != nil {
 			return nil, fmt.Errorf("incrementing counter: %w", err)
 		}
@@ -119,7 +109,7 @@ func (s *IssueService) Create(ctx context.Context, projectID string, req *models
 		}
 
 		issue = models.Issue{
-			ProjectID:        pid,
+			ProjectCode:      projectCode,
 			IssueKey:         fmt.Sprintf("%s-%04d", project.Code, counter),
 			Number:           counter,
 			Title:            req.Title,
@@ -295,12 +285,8 @@ func (s *IssueService) Restore(ctx context.Context, issueKey string) error {
 
 // DeleteAllByProject permanently removes all issues (archived or not) for a project.
 // Used for cascade deletion when a project is permanently deleted.
-func (s *IssueService) DeleteAllByProject(ctx context.Context, projectID string) error {
-	pid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
-		return fmt.Errorf("invalid project ID: %w", err)
-	}
-	_, err = s.collection().DeleteMany(ctx, bson.D{{Key: "projectId", Value: pid}})
+func (s *IssueService) DeleteAllByProject(ctx context.Context, projectCode string) error {
+	_, err := s.collection().DeleteMany(ctx, bson.D{{Key: "projectCode", Value: projectCode}})
 	if err != nil {
 		return fmt.Errorf("delete issues for project: %w", err)
 	}
@@ -323,14 +309,9 @@ func (s *IssueService) PermanentDelete(ctx context.Context, issueKey string) err
 }
 
 // ListArchived returns archived issues for a project.
-func (s *IssueService) ListArchived(ctx context.Context, projectID string) ([]models.Issue, error) {
-	pid, err := bson.ObjectIDFromHex(projectID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid project ID: %w", err)
-	}
-
+func (s *IssueService) ListArchived(ctx context.Context, projectCode string) ([]models.Issue, error) {
 	filter := bson.D{
-		{Key: "projectId", Value: pid},
+		{Key: "projectCode", Value: projectCode},
 		{Key: "archived", Value: true},
 	}
 
@@ -352,15 +333,11 @@ func (s *IssueService) ListArchived(ctx context.Context, projectID string) ([]mo
 }
 
 // Search performs a text search on title and description, optionally scoped to a project.
-func (s *IssueService) Search(ctx context.Context, query string, projectID string) ([]models.Issue, error) {
+func (s *IssueService) Search(ctx context.Context, query string, projectCode string) ([]models.Issue, error) {
 	filter := bson.D{{Key: "$text", Value: bson.D{{Key: "$search", Value: query}}}}
 
-	if projectID != "" {
-		pid, err := bson.ObjectIDFromHex(projectID)
-		if err != nil {
-			return nil, fmt.Errorf("invalid project ID: %w", err)
-		}
-		filter = append(filter, bson.E{Key: "projectId", Value: pid})
+	if projectCode != "" {
+		filter = append(filter, bson.E{Key: "projectCode", Value: projectCode})
 	}
 
 	opts := options.Find().
@@ -392,7 +369,7 @@ func (s *IssueService) EnsureIndexes(ctx context.Context) error {
 		},
 		{
 			Keys: bson.D{
-				{Key: "projectId", Value: 1},
+				{Key: "projectCode", Value: 1},
 				{Key: "priority", Value: 1},
 				{Key: "status", Value: 1},
 			},
@@ -413,10 +390,10 @@ func (s *IssueService) EnsureIndexes(ctx context.Context) error {
 }
 
 // CountByProject returns issue counts grouped by status for a project (excludes archived).
-func (s *IssueService) CountByProject(ctx context.Context, projectID bson.ObjectID) (map[string]int, error) {
+func (s *IssueService) CountByProject(ctx context.Context, projectCode string) (map[string]int, error) {
 	pipeline := bson.A{
 		bson.D{{Key: "$match", Value: bson.D{
-			{Key: "projectId", Value: projectID},
+			{Key: "projectCode", Value: projectCode},
 			{Key: "archived", Value: bson.D{{Key: "$ne", Value: true}}},
 		}}},
 		bson.D{{Key: "$group", Value: bson.D{
@@ -446,10 +423,10 @@ func (s *IssueService) CountByProject(ctx context.Context, projectID bson.Object
 }
 
 // CountByPriority returns issue counts grouped by priority for a project (excludes archived).
-func (s *IssueService) CountByPriority(ctx context.Context, projectID bson.ObjectID) (map[string]int, error) {
+func (s *IssueService) CountByPriority(ctx context.Context, projectCode string) (map[string]int, error) {
 	pipeline := bson.A{
 		bson.D{{Key: "$match", Value: bson.D{
-			{Key: "projectId", Value: projectID},
+			{Key: "projectCode", Value: projectCode},
 			{Key: "archived", Value: bson.D{{Key: "$ne", Value: true}}},
 		}}},
 		bson.D{{Key: "$group", Value: bson.D{

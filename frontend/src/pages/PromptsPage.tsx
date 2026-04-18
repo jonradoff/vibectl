@@ -69,7 +69,7 @@ export default function PromptsPage() {
     setFormName(p.name)
     setFormBody(p.body)
     setFormShared(p.shared)
-    setFormProjectId(p.global ? '*' : (p.projectId || '*'))
+    setFormProjectId(p.global ? '*' : (p.projectCode || '*'))
   }
 
   const startCreate = () => {
@@ -83,7 +83,7 @@ export default function PromptsPage() {
   const filtered = filterProjectId === 'global'
     ? prompts.filter(p => p.global)
     : filterProjectId
-      ? prompts.filter(p => p.projectId === filterProjectId || p.global)
+      ? prompts.filter(p => p.projectCode === filterProjectId || p.global)
       : prompts
 
   return (
@@ -204,7 +204,7 @@ export default function PromptsPage() {
       ) : (
         <div className="space-y-2">
           {filtered.map(prompt => {
-            const project = prompt.projectId ? projectMap.get(prompt.projectId) : null
+            const project = prompt.projectCode ? projectMap.get(prompt.projectCode) : null
             return (
               <div
                 key={prompt.id}

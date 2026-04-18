@@ -130,13 +130,13 @@ func (h *IntentHandler) Productivity(w http.ResponseWriter, r *http.Request) {
 	// Aggregate by project
 	byProject := map[string]*services.ProductivityStats{}
 	for _, intent := range intents {
-		pid := intent.ProjectID.Hex()
+		pid := intent.ProjectCode
 		ps, ok := byProject[pid]
 		if !ok {
 			ps = &services.ProductivityStats{
-				ProjectID:  pid,
-				ByStatus:   map[string]int{},
-				ByCategory: map[string]int{},
+				ProjectCode: pid,
+				ByStatus:    map[string]int{},
+				ByCategory:  map[string]int{},
 			}
 			byProject[pid] = ps
 		}
@@ -154,7 +154,7 @@ func (h *IntentHandler) Productivity(w http.ResponseWriter, r *http.Request) {
 	// Enrich with project names/tags — skip deleted projects
 	results := make([]services.ProductivityStats, 0, len(byProject))
 	for _, ps := range byProject {
-		proj, err := h.projectService.GetByID(r.Context(), ps.ProjectID)
+		proj, err := h.projectService.GetByCode(r.Context(), ps.ProjectCode)
 		if err != nil || proj == nil {
 			continue // project was deleted
 		}
@@ -181,15 +181,15 @@ func (h *IntentHandler) Insights(w http.ResponseWriter, r *http.Request) {
 		since = time.Now().UTC().AddDate(0, 0, -days)
 	}
 
-	// If tag filter, resolve matching project IDs
-	var tagProjectIDs map[string]bool
+	// If tag filter, resolve matching project codes
+	var tagProjectCodes map[string]bool
 	if tag != "" {
-		tagProjectIDs = map[string]bool{}
+		tagProjectCodes = map[string]bool{}
 		projects, _ := h.projectService.List(r.Context())
 		for _, p := range projects {
 			for _, t := range p.Tags {
 				if t == tag {
-					tagProjectIDs[p.ID.Hex()] = true
+					tagProjectCodes[p.Code] = true
 					break
 				}
 			}
@@ -203,10 +203,10 @@ func (h *IntentHandler) Insights(w http.ResponseWriter, r *http.Request) {
 	}
 	// Filter by tag if specified
 	intents := allIntents
-	if tagProjectIDs != nil {
+	if tagProjectCodes != nil {
 		intents = nil
 		for _, intent := range allIntents {
-			if tagProjectIDs[intent.ProjectID.Hex()] {
+			if tagProjectCodes[intent.ProjectCode] {
 				intents = append(intents, intent)
 			}
 		}
@@ -302,11 +302,11 @@ func (h *IntentHandler) Insights(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// By project
-		pid := intent.ProjectID.Hex()
+		pid := intent.ProjectCode
 		pa, ok := byProject[pid]
 		if !ok {
 			pa = &projectAgg{}
-			if proj, err := h.projectService.GetByID(r.Context(), pid); err == nil && proj != nil {
+			if proj, err := h.projectService.GetByCode(r.Context(), pid); err == nil && proj != nil {
 				pa.Name = proj.Name
 				pa.Code = proj.Code
 			}

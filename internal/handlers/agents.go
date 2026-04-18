@@ -50,7 +50,7 @@ func (h *AgentHandler) TriggerPMReview(w http.ResponseWriter, r *http.Request) {
 		ctx := context.Background()
 		project, _ := h.projectService.GetByID(ctx, projectID)
 		if project != nil {
-			h.decisionService.Record(ctx, project.ID, "pm_review",
+			h.decisionService.Record(ctx, project.Code, "pm_review",
 				"PM review completed: "+result.OverallAssessment, "")
 
 			if h.archAgent != nil {

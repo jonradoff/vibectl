@@ -155,7 +155,7 @@ func main() {
 				// Seed admin as owner of all existing projects
 				projects, _ := projectService.List(idxCtx)
 				for _, p := range projects {
-					memberService.SeedOwner(idxCtx, p.ID, adminUser.ID)
+					memberService.SeedOwner(idxCtx, p.Code, adminUser.ID)
 				}
 				slog.Info("seeded admin as owner of existing projects", "count", len(projects))
 			}
@@ -241,7 +241,7 @@ func main() {
 	chatManager.UsageRecorder = func(tokenHash, projectID, sessionID, model string, inputTokens, outputTokens, cacheRead, cacheCreation int64) {
 		rec := &models.ClaudeUsageRecord{
 			TokenHash:           tokenHash,
-			ProjectID:           projectID,
+			ProjectCode:         projectID,
 			SessionID:           sessionID,
 			Model:               model,
 			InputTokens:         inputTokens,
@@ -273,19 +273,15 @@ func main() {
 			snippet = snippet[:120] + "..."
 		}
 		meta := bson.M{"fullText": text}
-		if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
-			activityLogService.LogAsync("prompt_sent", "Sent prompt to Claude Code", &oid, snippet, meta)
-		}
+		activityLogService.LogAsync("prompt_sent", "Sent prompt to Claude Code", projectID, snippet, meta)
 	})
 	chatWSHandler.SetPlanLoggers(
 		func(projectID, requestID, planText string) {
 			plan := &models.Plan{
-				RequestID: requestID,
-				PlanText:  planText,
-				Status:    "pending",
-			}
-			if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
-				plan.ProjectID = &oid
+				RequestID:   requestID,
+				PlanText:    planText,
+				Status:      "pending",
+				ProjectCode: projectID,
 			}
 			planService.CreateAsync(plan)
 
@@ -295,23 +291,19 @@ func main() {
 				snippet = snippet[:120] + "..."
 			}
 			meta := bson.M{"fullText": planText, "requestId": requestID}
-			if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
-				activityLogService.LogAsync("plan_received", "Claude Code generated a plan", &oid, snippet, meta)
-			}
+			activityLogService.LogAsync("plan_received", "Claude Code generated a plan", projectID, snippet, meta)
 		},
 		func(projectID, requestID, status, feedback string) {
-			if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
-				go func() {
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					defer cancel()
-					planService.UpdateStatusByRequestID(ctx, &oid, requestID, status, feedback)
-				}()
-				msg := "Plan " + status
-				if feedback != "" {
-					msg += " with feedback"
-				}
-				activityLogService.LogAsync("plan_"+status, msg, &oid, feedback, bson.M{"requestId": requestID})
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				planService.UpdateStatusByRequestID(ctx, projectID, requestID, status, feedback)
+			}()
+			msg := "Plan " + status
+			if feedback != "" {
+				msg += " with feedback"
 			}
+			activityLogService.LogAsync("plan_"+status, msg, projectID, feedback, bson.M{"requestId": requestID})
 		},
 	)
 	// Per-project baselines: snapshot git state before prompt, diff after.
@@ -447,15 +439,13 @@ func main() {
 			}
 
 			delta := &models.CodeDelta{
+				ProjectCode:  projectID,
 				SessionID:    sessionID,
 				LinesAdded:   totalAdded,
 				LinesRemoved: totalRemoved,
 				BytesDelta:   (totalAdded - totalRemoved) * 40,
 				FilesChanged: totalFiles,
 				Files:        dedupFiles,
-			}
-			if oid, err := bson.ObjectIDFromHex(projectID); err == nil {
-				delta.ProjectID = &oid
 			}
 			codeDeltaService.RecordAsync(delta)
 		},
@@ -474,12 +464,12 @@ func main() {
 		cfg.GitHubClientID, cfg.GitHubClientSecret, cfg.GitHubToken, cfg.BaseURL, frontendURL, cfg.AnthropicKey != "")
 	userHandler := handlers.NewUserHandler(userService, authSessionService)
 	memberHandler := handlers.NewProjectMemberHandler(memberService, projectService)
-	checkoutHandler := handlers.NewCheckoutHandler(checkoutService, memberService)
+	checkoutHandler := handlers.NewCheckoutHandler(checkoutService, memberService, projectService)
 	ciHandler := handlers.NewCIHandler(projectService, memberService, cfg.GitHubToken)
 	apiKeyHandler := handlers.NewAPIKeyHandler(apiKeyService)
 
 	projectHandler := handlers.NewProjectHandler(projectService, issueService, sessionService, feedbackService, activityLogService, memberService, eventBus)
-	issueHandler := handlers.NewIssueHandler(issueService, decisionService, vibectlMdService, activityLogService, commentService, webhookService, eventBus)
+	issueHandler := handlers.NewIssueHandler(issueService, decisionService, vibectlMdService, activityLogService, commentService, webhookService, projectService, eventBus)
 	feedbackHandler := handlers.NewFeedbackHandler(feedbackService, issueService, triageAgent, themesAgent, decisionService, vibectlMdService, projectService, activityLogService, webhookService, eventBus)
 	settingsHandler := handlers.NewSettingsHandler(settingsService, cfg.DatabaseName, parseMongoUser(cfg.MongoDBURI))
 	sessionHandler := handlers.NewSessionHandler(sessionService, eventBus)
@@ -820,8 +810,8 @@ func main() {
 					results = append(results, healthCheckHandler.Probe("Backend", backendURL))
 				}
 				if len(results) > 0 {
-					prevRecord, _ := healthRecordService.GetLatest(ctx, p.ID)
-					if err := healthRecordService.Insert(ctx, p.ID, results); err != nil {
+					prevRecord, _ := healthRecordService.GetLatest(ctx, p.Code)
+					if err := healthRecordService.Insert(ctx, p.Code, results); err != nil {
 						continue
 					}
 					if prevRecord != nil {
@@ -871,7 +861,7 @@ func main() {
 		srv.Shutdown(shutdownCtx)
 	}()
 
-	activityLogService.LogAsync("backend_start", "VibeCtl server started on port "+cfg.Port+" (v"+config.Version+")", nil, "", nil)
+	activityLogService.LogAsync("backend_start", "VibeCtl server started on port "+cfg.Port+" (v"+config.Version+")", "", "", nil)
 	slog.Info("starting VibeCtl server", "port", cfg.Port, "githubOAuth", cfg.GitHubClientID != "")
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

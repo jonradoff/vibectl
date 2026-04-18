@@ -8,7 +8,7 @@ import { useMode } from '../../contexts/ModeContext'
 import '@xterm/xterm/css/xterm.css'
 
 interface UserShellViewProps {
-  projectId: string
+  projectCode: string
   compact?: boolean
   onStatusChange?: (status: string) => void
 }
@@ -21,7 +21,7 @@ interface WSMessage {
 
 type PathStatus = 'resolving' | 'ready' | 'unconfigured'
 
-export default function UserShellView({ projectId, compact, onStatusChange }: UserShellViewProps) {
+export default function UserShellView({ projectCode, compact, onStatusChange }: UserShellViewProps) {
   const termNodeRef = useRef<HTMLDivElement | null>(null)
   const inlineSlotRef = useRef<HTMLDivElement>(null)
   const fullscreenSlotRef = useRef<HTMLDivElement>(null)
@@ -69,14 +69,14 @@ export default function UserShellView({ projectId, compact, onStatusChange }: Us
         }
       })
       .catch(() => setPathStatus('unconfigured'))
-  }, [projectId, isClientMode])
+  }, [projectCode, isClientMode])
 
   const handleSetupSave = async () => {
     if (!setupInput.trim()) return
     setSetupSaving(true)
     setSetupError('')
     try {
-      await setLocalPath(projectId, setupInput.trim())
+      await setLocalPath(projectCode, setupInput.trim())
       setWorkDir(setupInput.trim())
       setPathStatus('ready')
       setShowPathChange(false)
@@ -200,7 +200,7 @@ export default function UserShellView({ projectId, compact, onStatusChange }: Us
       termNodeRef.current = null
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, pathStatus, workDir])
+  }, [projectCode, pathStatus, workDir])
 
   useEffect(() => {
     const termNode = termNodeRef.current

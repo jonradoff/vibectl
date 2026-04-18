@@ -39,7 +39,7 @@ type ChatHistoryArchiver interface {
 // ChatSession represents a claude code process running in stream-json mode.
 type ChatSession struct {
 	ID          string
-	ProjectID   string
+	ProjectCode string
 	LocalPath   string
 	SessionID   string // Claude session ID from init event
 	TokenHash   string // SHA256 of OAuth token used — stable identity per login
@@ -81,7 +81,7 @@ func (s *ChatSession) SendMessage(text string) error {
 	if s.pendingContextUpdate != "" {
 		text = fmt.Sprintf("[CONTEXT UPDATE] Project status refreshed:\n\n<vibectl_md>\n%s\n</vibectl_md>\n\nThis is an automated context update, not a user instruction. Continue with whatever you were doing.\n\n---\n\n%s", s.pendingContextUpdate, text)
 		s.pendingContextUpdate = ""
-		slog.Info("injected context update into user message", "projectID", s.ProjectID)
+		slog.Info("injected context update into user message", "projectID", s.ProjectCode)
 	}
 
 	msg := map[string]interface{}{
@@ -423,7 +423,7 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 
 	sess := &ChatSession{
 		ID:        uuid.New().String(),
-		ProjectID: projectID,
+		ProjectCode: projectID,
 		LocalPath: localPath,
 		TokenHash: tokenHash,
 		StartedAt: time.Now().UTC(),
@@ -631,8 +631,8 @@ func (m *ChatManager) persistSession(sess *ChatSession) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := m.ChatSessionService.Upsert(ctx, sess.ProjectID, sid, sess.LocalPath, msgs); err != nil {
-		slog.Error("failed to persist chat session", "projectID", sess.ProjectID, "error", err)
+	if err := m.ChatSessionService.Upsert(ctx, sess.ProjectCode, sid, sess.LocalPath, msgs); err != nil {
+		slog.Error("failed to persist chat session", "projectID", sess.ProjectCode, "error", err)
 	}
 }
 
@@ -647,14 +647,14 @@ func (m *ChatManager) archiveSession(sess *ChatSession) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := m.ChatHistoryService.Archive(ctx, sess.ProjectID, sess.SessionID, msgs, sess.StartedAt); err != nil {
-		slog.Error("failed to archive chat session", "projectID", sess.ProjectID, "error", err)
+	if err := m.ChatHistoryService.Archive(ctx, sess.ProjectCode, sess.SessionID, msgs, sess.StartedAt); err != nil {
+		slog.Error("failed to archive chat session", "projectCode", sess.ProjectCode, "error", err)
 	} else {
-		slog.Info("chat session archived to history", "projectID", sess.ProjectID, "messages", len(msgs))
+		slog.Info("chat session archived to history", "projectCode", sess.ProjectCode, "messages", len(msgs))
 		// Trigger async intent extraction
 		if m.IntentExtractor != nil {
 			entry := &models.ChatHistoryEntry{
-				ProjectID:       sess.ProjectID,
+				ProjectCode:     sess.ProjectCode,
 				ClaudeSessionID: sess.SessionID,
 				Messages:        msgs,
 				MessageCount:    len(msgs),
@@ -773,7 +773,7 @@ func (m *ChatManager) ShutdownAll() {
 		// Mark resumable if we have a claude session ID
 		if sess.SessionID != "" && m.ChatSessionService != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			m.ChatSessionService.MarkResumable(ctx, sess.ProjectID)
+			m.ChatSessionService.MarkResumable(ctx, sess.ProjectCode)
 			cancel()
 		}
 
@@ -781,7 +781,7 @@ func (m *ChatManager) ShutdownAll() {
 		delete(m.sessions, pid)
 
 		slog.Info("chat session saved for resume",
-			"projectID", sess.ProjectID,
+			"projectID", sess.ProjectCode,
 			"claudeSessionID", sess.SessionID,
 		)
 	}
@@ -846,7 +846,7 @@ func (m *ChatManager) extractStreamUsage(line []byte, sess *ChatSession) {
 		sess.mu.Unlock()
 
 		slog.Info("claude usage recorded",
-			"projectID", sess.ProjectID,
+			"projectID", sess.ProjectCode,
 			"model", model,
 			"inputTokens", u.InputTokens,
 			"outputTokens", u.OutputTokens,
@@ -856,7 +856,7 @@ func (m *ChatManager) extractStreamUsage(line []byte, sess *ChatSession) {
 
 		m.UsageRecorder(
 			sess.TokenHash,
-			sess.ProjectID,
+			sess.ProjectCode,
 			sess.SessionID,
 			model,
 			u.InputTokens,
@@ -894,13 +894,13 @@ func (m *ChatManager) extractResultUsage(line []byte, sess *ChatSession) {
 		sess.mu.Unlock()
 	}
 	slog.Info("claude usage recorded (result)",
-		"projectID", sess.ProjectID,
+		"projectID", sess.ProjectCode,
 		"model", model,
 		"inputTokens", u.InputTokens,
 		"outputTokens", u.OutputTokens,
 	)
 	m.UsageRecorder(
-		sess.TokenHash, sess.ProjectID, sess.SessionID, model,
+		sess.TokenHash, sess.ProjectCode, sess.SessionID, model,
 		u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheCreationTokens,
 	)
 }

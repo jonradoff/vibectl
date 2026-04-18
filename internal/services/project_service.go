@@ -30,9 +30,9 @@ func NewProjectService(db *mongo.Database, bus *events.Bus) *ProjectService {
 	}
 }
 
-func (s *ProjectService) publish(eventType, projectID string) {
+func (s *ProjectService) publish(eventType, projectCode string) {
 	if s.bus != nil {
-		s.bus.Publish(events.Event{Type: eventType, ProjectID: projectID})
+		s.bus.Publish(events.Event{Type: eventType, ProjectCode: projectCode})
 	}
 }
 
@@ -183,7 +183,7 @@ func (s *ProjectService) Create(ctx context.Context, req *models.CreateProjectRe
 	}
 
 	project.ID = result.InsertedID.(bson.ObjectID)
-	s.publish("project.created", project.ID.Hex())
+	s.publish("project.created", project.Code)
 	return &project, nil
 }
 
@@ -293,7 +293,7 @@ func (s *ProjectService) ListStale(ctx context.Context, days int, activityLog *A
 		if p.Archived || p.Inactive {
 			continue
 		}
-		lastPrompt, err := activityLog.LastPromptAt(ctx, p.ID)
+		lastPrompt, err := activityLog.LastPromptAt(ctx, p.Code)
 		if err != nil {
 			continue
 		}
@@ -592,7 +592,7 @@ func (s *ProjectService) AddUnit(ctx context.Context, parentID bson.ObjectID, un
 		return nil, fmt.Errorf("insert unit: %w", err)
 	}
 	project.ID = result.InsertedID.(bson.ObjectID)
-	s.publish("project.created", project.ID.Hex())
+	s.publish("project.created", project.Code)
 	return &project, nil
 }
 
