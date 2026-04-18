@@ -141,6 +141,9 @@ func (h *DelegationHandler) ExportProject(w http.ResponseWriter, r *http.Request
 		"code":        project.Code,
 		"description": project.Description,
 		"goals":       project.Goals,
+		"links": map[string]interface{}{
+			"githubUrl": project.Links.GitHubURL,
+		},
 	}
 	bodyBytes, _ := json.Marshal(createBody)
 
