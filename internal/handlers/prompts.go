@@ -14,13 +14,14 @@ import (
 
 type PromptHandler struct {
 	promptService      *services.PromptService
+	projectService     *services.ProjectService
 	activityLogService *services.ActivityLogService
 	memberService      *services.ProjectMemberService
 	bus                *events.Bus
 }
 
-func NewPromptHandler(ps *services.PromptService, als *services.ActivityLogService, ms *services.ProjectMemberService, bus *events.Bus) *PromptHandler {
-	return &PromptHandler{promptService: ps, activityLogService: als, memberService: ms, bus: bus}
+func NewPromptHandler(ps *services.PromptService, prs *services.ProjectService, als *services.ActivityLogService, ms *services.ProjectMemberService, bus *events.Bus) *PromptHandler {
+	return &PromptHandler{promptService: ps, projectService: prs, activityLogService: als, memberService: ms, bus: bus}
 }
 
 // ProjectPromptRoutes mounts under /api/v1/projects/{id}/prompts
@@ -44,11 +45,18 @@ func (h *PromptHandler) PromptRoutes() chi.Router {
 
 func (h *PromptHandler) ListByProject(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
+
+	project, err := h.projectService.GetByID(r.Context(), projectID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+		return
+	}
+
 	var userID *bson.ObjectID
 	if u := middleware.GetCurrentUser(r); u != nil {
 		userID = &u.ID
 	}
-	prompts, err := h.promptService.ListByProject(r.Context(), projectID, userID)
+	prompts, err := h.promptService.ListByProject(r.Context(), project.Code, userID)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_FAILED")
 		return
@@ -71,7 +79,14 @@ func (h *PromptHandler) ListAll(w http.ResponseWriter, r *http.Request) {
 
 func (h *PromptHandler) Create(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
-	h.createPrompt(w, r, projectID)
+
+	project, err := h.projectService.GetByID(r.Context(), projectID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+		return
+	}
+
+	h.createPrompt(w, r, project.Code)
 }
 
 func (h *PromptHandler) CreateGlobal(w http.ResponseWriter, r *http.Request) {

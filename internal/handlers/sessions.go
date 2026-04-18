@@ -13,11 +13,12 @@ import (
 
 type SessionHandler struct {
 	sessionService *services.SessionService
+	projectService *services.ProjectService
 	bus            *events.Bus
 }
 
-func NewSessionHandler(ss *services.SessionService, bus *events.Bus) *SessionHandler {
-	return &SessionHandler{sessionService: ss, bus: bus}
+func NewSessionHandler(ss *services.SessionService, ps *services.ProjectService, bus *events.Bus) *SessionHandler {
+	return &SessionHandler{sessionService: ss, projectService: ps, bus: bus}
 }
 
 // ProjectSessionRoutes returns a router mounted under /api/v1/projects/{id}/sessions.
@@ -40,7 +41,13 @@ func (h *SessionHandler) SessionRoutes() chi.Router {
 func (h *SessionHandler) ListByProject(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 
-	sessions, err := h.sessionService.ListByProject(r.Context(), projectID)
+	project, err := h.projectService.GetByID(r.Context(), projectID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+		return
+	}
+
+	sessions, err := h.sessionService.ListByProject(r.Context(), project.Code)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_SESSIONS_ERROR")
 		return
@@ -52,7 +59,13 @@ func (h *SessionHandler) ListByProject(w http.ResponseWriter, r *http.Request) {
 func (h *SessionHandler) GetLatest(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 
-	session, err := h.sessionService.GetLatest(r.Context(), projectID)
+	project, err := h.projectService.GetByID(r.Context(), projectID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+		return
+	}
+
+	session, err := h.sessionService.GetLatest(r.Context(), project.Code)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "GET_LATEST_SESSION_ERROR")
 		return
@@ -64,12 +77,18 @@ func (h *SessionHandler) GetLatest(w http.ResponseWriter, r *http.Request) {
 func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 
-	session, err := h.sessionService.Create(r.Context(), projectID)
+	project, err := h.projectService.GetByID(r.Context(), projectID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+		return
+	}
+
+	session, err := h.sessionService.Create(r.Context(), project.Code)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "CREATE_SESSION_ERROR")
 		return
 	}
-	h.bus.Publish(events.Event{Type: "session.created", ProjectCode: projectID})
+	h.bus.Publish(events.Event{Type: "session.created", ProjectCode: project.Code})
 	middleware.WriteJSON(w, http.StatusCreated, session)
 }
 

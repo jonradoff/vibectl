@@ -422,7 +422,13 @@ func (h *FeedbackHandler) BulkReview(w http.ResponseWriter, r *http.Request) {
 func (h *FeedbackHandler) ListByProject(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 
-	items, err := h.feedbackService.ListByProject(r.Context(), projectID)
+	project, err := h.projectService.GetByID(r.Context(), projectID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+		return
+	}
+
+	items, err := h.feedbackService.ListByProject(r.Context(), project.Code)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_FEEDBACK_ERROR")
 		return

@@ -483,7 +483,7 @@ func main() {
 	issueHandler := handlers.NewIssueHandler(issueService, decisionService, vibectlMdService, activityLogService, commentService, webhookService, projectService, eventBus)
 	feedbackHandler := handlers.NewFeedbackHandler(feedbackService, issueService, triageAgent, themesAgent, decisionService, vibectlMdService, projectService, activityLogService, webhookService, eventBus)
 	settingsHandler := handlers.NewSettingsHandler(settingsService, cfg.DatabaseName, parseMongoUser(cfg.MongoDBURI))
-	sessionHandler := handlers.NewSessionHandler(sessionService, eventBus)
+	sessionHandler := handlers.NewSessionHandler(sessionService, projectService, eventBus)
 	dashboardHandler := handlers.NewDashboardHandler(projectService, issueService, sessionService, feedbackService, memberService, activityLogService, healthRecordService, codeDeltaService)
 
 	var ghSweeper *ingestion.GitHubSweeper
@@ -499,7 +499,7 @@ func main() {
 	agentHandler := handlers.NewAgentHandler(pmAgent, archAgent, ghSweeper, projectService, vibectlMdService, decisionService)
 	vibectlMdHandler := handlers.NewVibectlMdHandler(vibectlMdService, decisionService, projectService)
 	filesystemHandler := handlers.NewFilesystemHandler(projectService, activityLogService)
-	promptHandler := handlers.NewPromptHandler(promptService, activityLogService, memberService, eventBus)
+	promptHandler := handlers.NewPromptHandler(promptService, projectService, activityLogService, memberService, eventBus)
 	activityLogHandler := handlers.NewActivityLogHandler(activityLogService)
 	delegationHandler := handlers.NewDelegationHandler(delegationManager, settingsService, projectService)
 	cloneHandler := handlers.NewCloneHandler(cloneService, projectService)

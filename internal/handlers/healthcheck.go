@@ -78,7 +78,13 @@ func (h *HealthCheckHandler) Check(w http.ResponseWriter, r *http.Request) {
 func (h *HealthCheckHandler) History(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	records, err := h.healthRecordService.GetHistory(r.Context(), id, 24*time.Hour)
+	project, err := h.projectService.GetByID(r.Context(), id)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+		return
+	}
+
+	records, err := h.healthRecordService.GetHistory(r.Context(), project.Code, 24*time.Hour)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "HISTORY_ERROR")
 		return

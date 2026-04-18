@@ -69,6 +69,12 @@ func (h *IssueHandler) ProjectArchivedIssueRoutes() chi.Router {
 func (h *IssueHandler) ListByProject(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 
+	project, err := h.projectService.GetByID(r.Context(), projectID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+		return
+	}
+
 	filters := map[string]string{}
 	if v := r.URL.Query().Get("type"); v != "" {
 		filters["type"] = v
@@ -80,7 +86,7 @@ func (h *IssueHandler) ListByProject(w http.ResponseWriter, r *http.Request) {
 		filters["status"] = v
 	}
 
-	issues, err := h.issueService.ListByProject(r.Context(), projectID, filters)
+	issues, err := h.issueService.ListByProject(r.Context(), project.Code, filters)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_FAILED")
 		return
@@ -92,6 +98,12 @@ func (h *IssueHandler) ListByProject(w http.ResponseWriter, r *http.Request) {
 // Create creates a new issue within a project.
 func (h *IssueHandler) Create(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
+
+	project, err := h.projectService.GetByID(r.Context(), projectID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+		return
+	}
 
 	var req models.CreateIssueRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -116,7 +128,7 @@ func (h *IssueHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	issue, err := h.issueService.Create(r.Context(), projectID, &req)
+	issue, err := h.issueService.Create(r.Context(), project.Code, &req)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "CREATE_FAILED")
 		return
@@ -277,7 +289,13 @@ func (h *IssueHandler) PermanentDelete(w http.ResponseWriter, r *http.Request) {
 func (h *IssueHandler) ListArchived(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 
-	issues, err := h.issueService.ListArchived(r.Context(), projectID)
+	project, err := h.projectService.GetByID(r.Context(), projectID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+		return
+	}
+
+	issues, err := h.issueService.ListArchived(r.Context(), project.Code)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_FAILED")
 		return
@@ -294,9 +312,17 @@ func (h *IssueHandler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projectID := r.URL.Query().Get("projectId")
+	var projectCode string
+	if projectID := r.URL.Query().Get("projectId"); projectID != "" {
+		project, err := h.projectService.GetByID(r.Context(), projectID)
+		if err != nil {
+			middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+			return
+		}
+		projectCode = project.Code
+	}
 
-	issues, err := h.issueService.Search(r.Context(), query, projectID)
+	issues, err := h.issueService.Search(r.Context(), query, projectCode)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "SEARCH_FAILED")
 		return
