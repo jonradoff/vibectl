@@ -1070,7 +1070,7 @@ function NewIssueModal({ projectCode, onClose }: { projectCode: string; onClose:
   )
 }
 
-function ProjectIntentsTab({ projectId }: { projectCode: string }) {
+function ProjectIntentsTab({ projectId }: { projectId: string }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const queryClient = useQueryClient()
 

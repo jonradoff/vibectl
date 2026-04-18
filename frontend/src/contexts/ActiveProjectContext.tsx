@@ -53,7 +53,7 @@ export function ActiveProjectProvider({ children }: { children: ReactNode }) {
 
   const updateProjectStatus = useCallback((projectCode: string, status: ProjectStatus) => {
     setProjectStatuses((prev) => {
-      const existing = prev[projectId]
+      const existing = prev[projectCode]
       if (
         existing &&
         existing.terminalStatus === status.terminalStatus &&
@@ -66,7 +66,7 @@ export function ActiveProjectProvider({ children }: { children: ReactNode }) {
       ) {
         return prev
       }
-      return { ...prev, [projectId]: status }
+      return { ...prev, [projectCode]: status }
     })
   }, [])
 
