@@ -169,15 +169,44 @@ export default function FeedbackTab({ projectId, projectCode }: FeedbackTabProps
         />
       )}
 
-      {/* Feedback detail modal */}
+      {/* Feedback detail modal — continuous review mode */}
       {selectedItem && createPortal(
         <FeedbackDetailModal
           item={selectedItem}
           projectCode={projectCode}
           onClose={() => setSelectedItem(null)}
-          onAccept={(createIssue) => reviewMutation.mutate({ id: selectedItem.id, action: 'accept', createIssue })}
-          onDismiss={() => reviewMutation.mutate({ id: selectedItem.id, action: 'dismiss' })}
+          onAccept={(createIssue) => {
+            const currentId = selectedItem.id
+            reviewMutation.mutate({ id: currentId, action: 'accept', createIssue }, {
+              onSuccess: () => {
+                // Advance to next pending item
+                const remainingPending = pending.filter(i => i.id !== currentId)
+                if (remainingPending.length > 0) {
+                  setSelectedItem(remainingPending[0])
+                } else {
+                  setSelectedItem(null)
+                }
+              }
+            })
+          }}
+          onDismiss={() => {
+            const currentId = selectedItem.id
+            reviewMutation.mutate({ id: currentId, action: 'dismiss' }, {
+              onSuccess: () => {
+                const remainingPending = pending.filter(i => i.id !== currentId)
+                if (remainingPending.length > 0) {
+                  setSelectedItem(remainingPending[0])
+                } else {
+                  setSelectedItem(null)
+                }
+              }
+            })
+          }}
           isMutating={reviewMutation.isPending}
+          reviewProgress={(() => {
+            const idx = pending.findIndex(i => i.id === selectedItem.id)
+            return idx >= 0 ? { current: idx + 1, total: pending.length } : undefined
+          })()}
         />,
         document.body,
       )}
@@ -252,13 +281,14 @@ function FeedbackRow({ item, selected, onToggle, onClick, onTriage, isTriaging }
 
 // ─── Feedback Detail Modal ───────────────────────────────────────────────────
 
-function FeedbackDetailModal({ item, projectCode, onClose, onAccept, onDismiss, isMutating }: {
+function FeedbackDetailModal({ item, projectCode, onClose, onAccept, onDismiss, isMutating, reviewProgress }: {
   item: FeedbackItem
   projectCode: string
   onClose: () => void
   onAccept: (createIssue: boolean) => void
   onDismiss: () => void
   isMutating: boolean
+  reviewProgress?: { current: number; total: number }
 }) {
   const isPending = item.triageStatus === 'pending' || item.triageStatus === 'triaged'
   const proposal = item.aiAnalysis?.proposedIssue
@@ -275,6 +305,11 @@ function FeedbackDetailModal({ item, projectCode, onClose, onAccept, onDismiss, 
               'bg-amber-900/30 text-amber-400'
             }`}>{item.triageStatus}</span>
             <span className="rounded bg-gray-700 px-1.5 py-0.5 text-[10px] font-mono text-gray-400">{item.sourceType}</span>
+            {reviewProgress && (
+              <span className="text-[10px] text-gray-500">
+                Reviewing {reviewProgress.current} of {reviewProgress.total}
+              </span>
+            )}
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm">&times;</button>
         </div>
@@ -347,31 +382,40 @@ function FeedbackDetailModal({ item, projectCode, onClose, onAccept, onDismiss, 
           )}
         </div>
 
-        {/* Actions — only for pending items */}
-        {isPending && (
-          <div className="flex gap-2 pt-3 border-t border-gray-700/40">
-            <button
-              onClick={() => onAccept(true)}
-              disabled={isMutating}
-              className="rounded bg-green-700/60 px-3 py-1.5 text-xs text-green-200 hover:bg-green-700 disabled:opacity-50 transition-colors"
-            >
-              {isMutating ? 'Saving...' : 'Accept + Create Issue'}
-            </button>
-            <button
-              onClick={() => onAccept(false)}
-              disabled={isMutating}
-              className="rounded bg-green-900/40 px-3 py-1.5 text-xs text-green-300 hover:bg-green-900/60 disabled:opacity-50 transition-colors"
-            >
-              Accept
-            </button>
-            <button
-              onClick={onDismiss}
-              disabled={isMutating}
-              className="rounded bg-gray-700/50 px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-700 disabled:opacity-50 transition-colors ml-auto"
-            >
-              Dismiss
-            </button>
-          </div>
+        {/* Actions */}
+        <div className="flex gap-2 pt-3 border-t border-gray-700/40">
+          {isPending && (
+            <>
+              <button
+                onClick={() => onAccept(true)}
+                disabled={isMutating}
+                className="rounded bg-green-700/60 px-3 py-1.5 text-xs text-green-200 hover:bg-green-700 disabled:opacity-50 transition-colors"
+              >
+                {isMutating ? 'Saving...' : 'Accept + Issue'}
+              </button>
+              <button
+                onClick={() => onAccept(false)}
+                disabled={isMutating}
+                className="rounded bg-green-900/40 px-3 py-1.5 text-xs text-green-300 hover:bg-green-900/60 disabled:opacity-50 transition-colors"
+              >
+                Accept
+              </button>
+              <button
+                onClick={onDismiss}
+                disabled={isMutating}
+                className="rounded bg-gray-700/50 px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-700 disabled:opacity-50 transition-colors"
+              >
+                Dismiss
+              </button>
+            </>
+          )}
+          <button
+            onClick={onClose}
+            className="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-700 transition-colors ml-auto"
+          >
+            Exit Review
+          </button>
+        </div>
         )}
       </div>
     </div>
