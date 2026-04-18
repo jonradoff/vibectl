@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listIssues, updateProject, createIssue, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent } from '../../api/client'
+import { listIssues, updateProject, createIssue, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode } from '../../api/client'
 import type { Intent } from '../../types'
 import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, DeploymentConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ActivityLogEntry } from '../../types'
 import { priorityColors, typeColors } from '../../types'
@@ -1202,6 +1202,46 @@ function ProjectIntentsTab({ projectId }: { projectId: string }) {
   )
 }
 
+function ExportToRemoteButton({ projectCode }: { projectCode: string }) {
+  const { data: delegation } = useQuery({
+    queryKey: ['delegationStatus'],
+    queryFn: getDelegationStatus,
+    retry: 1,
+  })
+  const viewMode = getViewMode()
+  const exportMutation = useMutation({
+    mutationFn: () => exportProjectToRemote(projectCode),
+  })
+
+  // Only show when delegation is active and viewing local data
+  if (!delegation?.enabled || viewMode !== 'local') return null
+
+  return (
+    <div className="border-t border-gray-700/50 pt-2 mt-2">
+      <button
+        onClick={() => exportMutation.mutate()}
+        disabled={exportMutation.isPending}
+        className="rounded bg-cyan-800/40 border border-cyan-700/50 px-3 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-800/60 disabled:opacity-50 transition-colors"
+      >
+        {exportMutation.isPending ? 'Exporting...' : 'Export to Remote Server'}
+      </button>
+      {exportMutation.isSuccess && (
+        <span className="ml-2 text-[10px] text-green-400">
+          {(exportMutation.data as { message: string })?.message || 'Exported!'}
+        </span>
+      )}
+      {exportMutation.isError && (
+        <span className="ml-2 text-[10px] text-red-400">
+          {exportMutation.error instanceof Error ? exportMutation.error.message : 'Export failed'}
+        </span>
+      )}
+      <p className="text-[10px] text-gray-600 mt-1">
+        Creates this project on the remote server so it appears in Remote View.
+      </p>
+    </div>
+  )
+}
+
 function CompactSettings({ project, currentUserRole, onClone }: { project: ProjectSummary['project']; currentUserRole?: string; onClone?: () => void }) {
   const queryClient = useQueryClient()
   const [name, setName] = useState(project.name)
@@ -1582,6 +1622,9 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
           </div>
         </div>
       )}
+
+      {/* Export to Remote — only visible when delegation active + local view */}
+      <ExportToRemoteButton projectCode={project.code} />
 
       {/* Inactive toggle */}
       <div className="border-t border-gray-700/50 pt-2 mt-2">
