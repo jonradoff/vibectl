@@ -486,13 +486,13 @@ func (h *ProjectHandler) AttachUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ProjectID string `json:"projectId"`
+		ProjectCode string `json:"projectCode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		middleware.WriteError(w, http.StatusBadRequest, "invalid request body", "INVALID_BODY")
 		return
 	}
-	unitOID, err := bson.ObjectIDFromHex(req.ProjectID)
+	unitOID, err := bson.ObjectIDFromHex(req.ProjectCode)
 	if err != nil {
 		middleware.WriteError(w, http.StatusBadRequest, "invalid project ID", "INVALID_ID")
 		return

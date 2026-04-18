@@ -20,8 +20,8 @@ type ChatWSMessage struct {
 
 // ChatLaunchMessage carries parameters to start a chat session.
 type ChatLaunchMessage struct {
-	ProjectID string `json:"projectId"`
-	LocalPath string `json:"localPath"`
+	ProjectCode string `json:"projectCode"`
+	LocalPath   string `json:"localPath"`
 }
 
 // ChatUserMessage carries a user message to send to claude.
@@ -306,11 +306,11 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				continue
 			}
 
-			slog.Info("chat launch requested", "projectID", launch.ProjectID, "localPath", launch.LocalPath)
+			slog.Info("chat launch requested", "projectID", launch.ProjectCode, "localPath", launch.LocalPath)
 
 			// Skip role check for workspace session.
-			if h.RoleChecker != nil && launch.ProjectID != "__workspace__" {
-				role, err := h.RoleChecker(r.Context(), launch.ProjectID)
+			if h.RoleChecker != nil && launch.ProjectCode != "__workspace__" {
+				role, err := h.RoleChecker(r.Context(), launch.ProjectCode)
 				if err != nil || role == "none" {
 					errMsg := "insufficient permissions for project"
 					if err != nil {
@@ -325,9 +325,9 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			}
 
 			// Check for existing live session (reconnection).
-			if sess := h.manager.GetSession(launch.ProjectID); sess != nil && sess.IsAlive() {
-				slog.Info("reconnecting to existing chat session", "projectID", launch.ProjectID)
-				activeProjectID = launch.ProjectID
+			if sess := h.manager.GetSession(launch.ProjectCode); sess != nil && sess.IsAlive() {
+				slog.Info("reconnecting to existing chat session", "projectID", launch.ProjectCode)
+				activeProjectID = launch.ProjectCode
 
 				// Replay buffered messages.
 				for _, m := range sess.Messages() {
@@ -344,12 +344,12 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 
 			// Check for a resumable persisted session (from a previous server run).
 			if h.manager.ChatSessionService != nil {
-				state, dbErr := h.manager.ChatSessionService.GetResumable(r.Context(), launch.ProjectID)
+				state, dbErr := h.manager.ChatSessionService.GetResumable(r.Context(), launch.ProjectCode)
 				if dbErr != nil {
 					slog.Error("failed to check for resumable session", "error", dbErr)
 				} else if state != nil {
 					slog.Info("resuming persisted chat session",
-						"projectID", launch.ProjectID,
+						"projectID", launch.ProjectCode,
 						"claudeSessionID", state.ClaudeSessionID,
 					)
 
@@ -365,7 +365,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 						)
 						// Fall through to start a new session
 					} else {
-						activeProjectID = launch.ProjectID
+						activeProjectID = launch.ProjectCode
 
 						// Replay saved messages to the frontend
 						for _, m := range state.Messages {
@@ -383,14 +383,14 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			}
 
 			// Start new session.
-			sess, err := h.manager.StartSession(launch.ProjectID, launch.LocalPath)
+			sess, err := h.manager.StartSession(launch.ProjectCode, launch.LocalPath)
 			if err != nil {
 				slog.Error("failed to start chat session", "error", err)
 				sendJSON("error", map[string]string{"message": err.Error()})
 				continue
 			}
 
-			activeProjectID = launch.ProjectID
+			activeProjectID = launch.ProjectCode
 			sendStatus("started")
 			readerDone = startReader(sess)
 
@@ -611,7 +611,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			// Set a per-project Claude OAuth token and restart/launch the session with the new account.
 			var tokenMsg struct {
 				Token     string `json:"token"`
-				ProjectID string `json:"projectId"`
+				ProjectCode string `json:"projectCode"`
 				LocalPath string `json:"localPath"`
 			}
 			if err := json.Unmarshal(msg.Data, &tokenMsg); err != nil {
@@ -622,7 +622,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			// Determine which project this is for
 			pid := activeProjectID
 			if pid == "" {
-				pid = tokenMsg.ProjectID
+				pid = tokenMsg.ProjectCode
 			}
 			if pid == "" {
 				slog.Warn("set_project_token: no project ID available")
@@ -667,7 +667,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			// Start PKCE OAuth flow: generate params, open browser, return params to frontend.
 			// Does NOT touch the keychain — token is stored per-project in memory only.
 			var loginMsg struct {
-				ProjectID string `json:"projectId"`
+				ProjectCode string `json:"projectCode"`
 				LocalPath string `json:"localPath"`
 			}
 			if msg.Data != nil {
@@ -700,7 +700,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				CodeVerifier string `json:"codeVerifier"`
 				ClientID     string `json:"clientId"`
 				RedirectURI  string `json:"redirectUri"`
-				ProjectID    string `json:"projectId"`
+				ProjectCode  string `json:"projectCode"`
 				LocalPath    string `json:"localPath"`
 			}
 			if err := json.Unmarshal(msg.Data, &exchangeMsg); err != nil {
@@ -716,7 +716,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 
 			pid := activeProjectID
 			if pid == "" {
-				pid = exchangeMsg.ProjectID
+				pid = exchangeMsg.ProjectCode
 			}
 			if pid == "" {
 				sendJSON("login_status", map[string]string{"status": "error", "message": "No project context"})

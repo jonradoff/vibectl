@@ -230,15 +230,15 @@ func (h *WebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.Reque
 			}
 
 			slog.Info("launch requested",
-				"projectID", launch.ProjectID,
+				"projectID", launch.ProjectCode,
 				"projectCode", launch.ProjectCode,
 				"localPath", launch.LocalPath,
 			)
 
 			// Check for existing session (reconnection).
-			if sess := h.manager.GetSession(launch.ProjectID); sess != nil && sess.IsAlive() {
-				slog.Info("reconnecting to existing session", "projectID", launch.ProjectID)
-				activeProjectID = launch.ProjectID
+			if sess := h.manager.GetSession(launch.ProjectCode); sess != nil && sess.IsAlive() {
+				slog.Info("reconnecting to existing session", "projectID", launch.ProjectCode)
+				activeProjectID = launch.ProjectCode
 
 				// Replay buffered output.
 				buffered := sess.Buffer.Bytes()
@@ -256,14 +256,14 @@ func (h *WebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.Reque
 			}
 
 			// Start a new session.
-			sess, err := h.manager.StartSession(launch.ProjectID, launch.ProjectCode, launch.LocalPath, launch.Prompt)
+			sess, err := h.manager.StartSession(launch.ProjectCode, launch.ProjectCode, launch.LocalPath, launch.Prompt)
 			if err != nil {
 				slog.Error("failed to start session", "error", err)
 				sendMessage("error", map[string]string{"message": err.Error()})
 				continue
 			}
 
-			activeProjectID = launch.ProjectID
+			activeProjectID = launch.ProjectCode
 			sendStatus("started")
 			ptyReaderDone = startPtyReader(sess)
 
