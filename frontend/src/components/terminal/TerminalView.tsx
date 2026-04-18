@@ -22,7 +22,7 @@ interface WSMessage {
   data?: any
 }
 
-export default function TerminalView({ projectCode, projectCode, localPath, prompt, compact, onStatusChange, onActivityChange }: TerminalViewProps) {
+export default function TerminalView({ projectId, projectCode, localPath, prompt, compact, onStatusChange, onActivityChange }: TerminalViewProps) {
   // The terminal DOM node is created imperatively so React never unmounts it
   const termNodeRef = useRef<HTMLDivElement | null>(null)
   const inlineSlotRef = useRef<HTMLDivElement>(null)
@@ -142,7 +142,7 @@ export default function TerminalView({ projectCode, projectCode, localPath, prom
         ws.send(JSON.stringify({ type: 'input', data: { data } }))
       }
     })
-  }, [projectCode, projectCode, localPath, prompt, updateStatus, markActive])
+  }, [projectId, projectCode, localPath, prompt, updateStatus, markActive])
 
   // Create terminal once — imperatively, so React never unmounts it
   useEffect(() => {
@@ -208,7 +208,7 @@ export default function TerminalView({ projectCode, projectCode, localPath, prom
       termNodeRef.current = null
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectCode, projectCode, localPath, prompt])
+  }, [projectId, projectCode, localPath, prompt])
 
   // Move terminal node between inline and fullscreen slots
   useEffect(() => {

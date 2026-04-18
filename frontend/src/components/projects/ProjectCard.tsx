@@ -845,7 +845,7 @@ function TabIcon({ name }: { name: string }) {
   }
 }
 
-function CompactIssueList({ projectCode, projectCode }: { projectCode: string; projectCode: string }) {
+function CompactIssueList({ projectId, projectCode }: { projectId: string; projectCode: string }) {
   const [showNewIssue, setShowNewIssue] = useState(false)
   const { data: issues, isLoading } = useQuery({
     queryKey: ['issues', projectId],

@@ -17,7 +17,7 @@ type ViewTab = 'active' | 'archived';
 
 const priorityOrder: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3, P4: 4, P5: 5 };
 
-function IssueTable({ projectCode, projectCode }: IssueTableProps) {
+function IssueTable({ projectId, projectCode }: IssueTableProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [viewTab, setViewTab] = useState<ViewTab>('active');
