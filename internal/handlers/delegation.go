@@ -21,7 +21,6 @@ func NewDelegationHandler(m *delegation.Manager, ss *services.SettingsService) *
 
 func (h *DelegationHandler) Routes() chi.Router {
 	r := chi.NewRouter()
-	r.Use(middleware.RequireSuperAdmin)
 	r.Get("/status", h.Status)
 	r.Post("/test", h.Test)
 	r.Post("/enable", h.Enable)

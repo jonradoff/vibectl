@@ -18,6 +18,7 @@ import (
 	"github.com/jonradoff/vibectl/internal/agents"
 	vibectlclient "github.com/jonradoff/vibectl/internal/client"
 	"github.com/jonradoff/vibectl/internal/config"
+	"github.com/jonradoff/vibectl/internal/delegation"
 	"github.com/jonradoff/vibectl/internal/events"
 	"github.com/jonradoff/vibectl/internal/handlers"
 	"github.com/jonradoff/vibectl/internal/ingestion"
@@ -104,6 +105,16 @@ func main() {
 	adminService := services.NewAdminService(db) // legacy admin (CLI compat)
 
 	claudeUsageService := services.NewClaudeUsageService(db)
+
+	// Delegation manager
+	delegationManager := delegation.NewManager(eventBus)
+	if settings, err := settingsService.Get(context.Background()); err == nil && settings.DelegationEnabled && settings.DelegationURL != "" && settings.DelegationAPIKey != "" {
+		if err := delegationManager.Enable(settings.DelegationURL, settings.DelegationAPIKey, settings.DelegationUser); err != nil {
+			slog.Error("failed to restore delegation", "error", err)
+		} else {
+			slog.Info("delegation restored from settings", "url", settings.DelegationURL, "user", settings.DelegationUser)
+		}
+	}
 
 	// Multi-user services
 	userService := services.NewUserService(db, cfg.APIKeyEncryptionKey)
@@ -490,6 +501,7 @@ func main() {
 	filesystemHandler := handlers.NewFilesystemHandler(projectService, activityLogService)
 	promptHandler := handlers.NewPromptHandler(promptService, activityLogService, memberService, eventBus)
 	activityLogHandler := handlers.NewActivityLogHandler(activityLogService)
+	delegationHandler := handlers.NewDelegationHandler(delegationManager, settingsService)
 	cloneHandler := handlers.NewCloneHandler(cloneService, projectService)
 	clientInstanceHandler := handlers.NewClientInstanceHandler(clientInstanceService)
 	eventsHandler := handlers.NewEventsHandler(eventBus)
@@ -557,6 +569,7 @@ func main() {
 		// ---------------------------------------------------------------
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.UserAuth(userService, authSessionService, apiKeyService))
+			r.Use(delegationManager.ProxyMiddleware())
 
 			// Auth self-endpoints
 			r.Get("/auth/me", authHandler.Me)
@@ -655,6 +668,7 @@ func main() {
 			r.Mount("/uploads", uploadHandler.Routes())
 			r.Mount("/prompts", promptHandler.PromptRoutes())
 			r.Mount("/activity-log", activityLogHandler.Routes())
+			r.Mount("/delegation", delegationHandler.Routes())
 			r.Mount("/plans", planHandler.Routes())
 			r.Mount("/intents", intentHandler.Routes())
 			r.Mount("/settings", settingsHandler.Routes())
@@ -669,10 +683,11 @@ func main() {
 		// Mode info — public, no auth required, served locally even in client mode.
 		r.Get("/mode", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
-				"mode":    cfg.Mode,
-				"version": config.Version,
-				"baseURL": cfg.BaseURL,
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"mode":              cfg.Mode,
+				"version":           config.Version,
+				"baseURL":           cfg.BaseURL,
+				"delegationEnabled": delegationManager.IsEnabled(),
 			})
 		})
 	})
