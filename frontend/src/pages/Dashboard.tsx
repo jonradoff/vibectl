@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ResponsiveGridLayout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
-import { getGlobalDashboard, getBulkStartProdStreamUrl, getBulkRestartProdStreamUrl } from '../api/client'
+import { getGlobalDashboard, getBulkStartProdStreamUrl, getBulkRestartProdStreamUrl, getViewMode, setViewMode, getDelegationStatus } from '../api/client'
 import ProjectCard from '../components/projects/ProjectCard'
 import ProjectForm from '../components/projects/ProjectForm'
 import MissionControl from '../components/dashboard/MissionControl'
@@ -283,8 +283,10 @@ function Dashboard() {
     <div className="min-h-screen bg-gray-950 p-6">
       <div className="mb-6 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-        {isSuperAdmin && (
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
+          <DelegationViewToggle />
+          {isSuperAdmin && (
+            <>
             <button
               onClick={() => setBulkModal({ title: 'Start All Production', url: getBulkStartProdStreamUrl() })}
               className="rounded-lg bg-green-700 hover:bg-green-600 px-3 py-2 text-xs font-medium text-white transition-colors"
@@ -303,8 +305,9 @@ function Dashboard() {
             >
               + New Project
             </button>
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
 
       {bulkModal && createPortal(
@@ -550,6 +553,47 @@ function WorkspaceCard({ workspaceDir }: { workspaceDir: string }) {
       </div>
       <StaleProjectsModal />
     </div>
+  )
+}
+
+function DelegationViewToggle() {
+  const [viewMode, setMode] = useState(getViewMode())
+  const { data: delegation } = useQuery({
+    queryKey: ['delegationStatus'],
+    queryFn: getDelegationStatus,
+    refetchInterval: 30_000,
+    retry: 1,
+  })
+
+  // Re-read on change events
+  useEffect(() => {
+    const handler = () => setMode(getViewMode())
+    window.addEventListener('vibectl:viewmode-changed', handler)
+    return () => window.removeEventListener('vibectl:viewmode-changed', handler)
+  }, [])
+
+  if (!delegation?.enabled) return null
+
+  const toggle = () => {
+    const next = viewMode === 'local' ? 'auto' : 'local'
+    setViewMode(next)
+    setMode(next)
+    // Force refetch all queries
+    window.location.reload()
+  }
+
+  return (
+    <button
+      onClick={toggle}
+      className={`rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
+        viewMode === 'local'
+          ? 'bg-amber-700 hover:bg-amber-600 text-white'
+          : 'bg-cyan-700 hover:bg-cyan-600 text-white'
+      }`}
+      title={viewMode === 'local' ? 'Viewing local data — click to switch to remote' : 'Viewing remote data — click to switch to local'}
+    >
+      {viewMode === 'local' ? 'Local View' : 'Remote View'}
+    </button>
   )
 }
 

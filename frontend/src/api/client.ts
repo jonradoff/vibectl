@@ -38,10 +38,17 @@ export const getStoredToken = () => localStorage.getItem(TOKEN_KEY);
 export const setStoredToken = (t: string) => localStorage.setItem(TOKEN_KEY, t);
 export const clearStoredToken = () => localStorage.removeItem(TOKEN_KEY);
 
+// View mode: when delegation is active, "local" forces requests to local handlers
+const VIEW_MODE_KEY = 'vibectl_view_mode';
+export const getViewMode = (): 'auto' | 'local' => (localStorage.getItem(VIEW_MODE_KEY) as 'auto' | 'local') || 'auto';
+export const setViewMode = (mode: 'auto' | 'local') => { localStorage.setItem(VIEW_MODE_KEY, mode); window.dispatchEvent(new CustomEvent('vibectl:viewmode-changed')); };
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getStoredToken();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  // Inject view mode header when forcing local view
+  if (getViewMode() === 'local') headers['X-Vibectl-View'] = 'local';
   const res = await fetch(`${BASE}${path}`, {
     headers: { ...headers, ...(options?.headers as Record<string, string>) },
     ...options,
@@ -50,6 +57,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     if (res.status === 401) {
       clearStoredToken();
       window.dispatchEvent(new CustomEvent('vibectl:unauthorized'));
+    }
+    // Detect delegation permission errors
+    const delegationError = res.headers.get('X-Delegation-Error');
+    if (delegationError === 'permission_denied') {
+      const body = await res.json().catch(() => ({ error: 'Permission denied' }));
+      throw new Error(`Delegation permission denied: ${body.error || 'Your API key does not have sufficient permissions for this action. Check your project role on the remote server.'}`);
+    }
+    if (delegationError === 'auth_failed') {
+      throw new Error('Delegation API key rejected by remote server. Update your API key in Settings > Delegation.');
     }
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || res.statusText);
@@ -654,6 +670,8 @@ export const enableDelegation = (data: { url: string; apiKey: string }) =>
   request<{ status: string }>('/delegation/enable', { method: 'POST', body: JSON.stringify(data) });
 export const disableDelegation = () =>
   request<{ status: string }>('/delegation/disable', { method: 'POST' });
+export const exportProjectToRemote = (projectCode: string) =>
+  request<{ status: string; message: string }>('/delegation/export-project', { method: 'POST', body: JSON.stringify({ projectCode }) });
 
 // ---- Claude Usage ----
 export const getClaudeUsageSummary = () =>

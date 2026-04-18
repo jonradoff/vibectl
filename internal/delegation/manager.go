@@ -124,6 +124,13 @@ func (m *Manager) IsHealthy() bool {
 	return m.healthy
 }
 
+// GetAPIKey returns the stored API key (for making direct requests to the remote).
+func (m *Manager) GetAPIKey() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.apiKey
+}
+
 // GetStatus returns the current delegation status.
 func (m *Manager) GetStatus() Status {
 	m.mu.RLock()
@@ -150,6 +157,11 @@ func (m *Manager) ProxyMiddleware() func(http.Handler) http.Handler {
 			}
 			if IsLocalRoute(r.URL.Path) {
 				next.ServeHTTP(w, r) // local even in delegation
+				return
+			}
+			// Allow frontend to force local view with header
+			if r.Header.Get("X-Vibectl-View") == "local" {
+				next.ServeHTTP(w, r)
 				return
 			}
 			if !m.IsHealthy() {

@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jonradoff/vibectl/internal/delegation"
@@ -13,10 +16,11 @@ import (
 type DelegationHandler struct {
 	manager         *delegation.Manager
 	settingsService *services.SettingsService
+	projectService  *services.ProjectService
 }
 
-func NewDelegationHandler(m *delegation.Manager, ss *services.SettingsService) *DelegationHandler {
-	return &DelegationHandler{manager: m, settingsService: ss}
+func NewDelegationHandler(m *delegation.Manager, ss *services.SettingsService, ps *services.ProjectService) *DelegationHandler {
+	return &DelegationHandler{manager: m, settingsService: ss, projectService: ps}
 }
 
 func (h *DelegationHandler) Routes() chi.Router {
@@ -25,6 +29,7 @@ func (h *DelegationHandler) Routes() chi.Router {
 	r.Post("/test", h.Test)
 	r.Post("/enable", h.Enable)
 	r.Post("/disable", h.Disable)
+	r.Post("/export-project", h.ExportProject)
 	return r
 }
 
@@ -105,4 +110,68 @@ func (h *DelegationHandler) Disable(w http.ResponseWriter, r *http.Request) {
 	h.settingsService.Update(ctx, settings)
 
 	middleware.WriteJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
+}
+
+// ExportProject sends a local project to the remote server via the delegation proxy.
+func (h *DelegationHandler) ExportProject(w http.ResponseWriter, r *http.Request) {
+	if !h.manager.IsEnabled() {
+		middleware.WriteError(w, http.StatusBadRequest, "delegation is not active", "DELEGATION_INACTIVE")
+		return
+	}
+
+	var req struct {
+		ProjectCode string `json:"projectCode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ProjectCode == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "projectCode is required", "BAD_REQUEST")
+		return
+	}
+
+	// Look up local project
+	project, err := h.projectService.GetByCode(r.Context(), req.ProjectCode)
+	if err != nil || project == nil {
+		middleware.WriteError(w, http.StatusNotFound, "local project not found", "NOT_FOUND")
+		return
+	}
+
+	// Create on remote via the delegation proxy
+	status := h.manager.GetStatus()
+	createBody := map[string]interface{}{
+		"name":        project.Name,
+		"code":        project.Code,
+		"description": project.Description,
+		"goals":       project.Goals,
+	}
+	bodyBytes, _ := json.Marshal(createBody)
+
+	remoteReq, _ := http.NewRequestWithContext(r.Context(), "POST", status.URL+"/api/v1/projects", bytes.NewReader(bodyBytes))
+	remoteReq.Header.Set("Content-Type", "application/json")
+	remoteReq.Header.Set("Authorization", "Bearer "+h.manager.GetAPIKey())
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(remoteReq)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadGateway, "failed to reach remote: "+err.Error(), "REMOTE_ERROR")
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == 409 || resp.StatusCode == 400 {
+		// Project code likely already exists on remote
+		middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"status":  "already_exists",
+			"message": "Project with this code already exists on the remote server",
+		})
+		return
+	}
+	if resp.StatusCode != 201 && resp.StatusCode != 200 {
+		middleware.WriteError(w, resp.StatusCode, string(respBody), "REMOTE_ERROR")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "exported",
+		"message": "Project exported to remote server",
+	})
 }

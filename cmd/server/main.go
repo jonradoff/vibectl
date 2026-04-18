@@ -501,7 +501,7 @@ func main() {
 	filesystemHandler := handlers.NewFilesystemHandler(projectService, activityLogService)
 	promptHandler := handlers.NewPromptHandler(promptService, activityLogService, memberService, eventBus)
 	activityLogHandler := handlers.NewActivityLogHandler(activityLogService)
-	delegationHandler := handlers.NewDelegationHandler(delegationManager, settingsService)
+	delegationHandler := handlers.NewDelegationHandler(delegationManager, settingsService, projectService)
 	cloneHandler := handlers.NewCloneHandler(cloneService, projectService)
 	clientInstanceHandler := handlers.NewClientInstanceHandler(clientInstanceService)
 	eventsHandler := handlers.NewEventsHandler(eventBus)

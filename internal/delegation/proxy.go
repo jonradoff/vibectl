@@ -34,6 +34,9 @@ func NewDelegationProxy(remoteURL, apiKey string) (*httputil.ReverseProxy, error
 			resp.StatusCode = http.StatusBadGateway
 			resp.Header.Set("X-Delegation-Error", "auth_failed")
 		}
+		if resp.StatusCode == http.StatusForbidden {
+			resp.Header.Set("X-Delegation-Error", "permission_denied")
+		}
 		return nil
 	}
 
