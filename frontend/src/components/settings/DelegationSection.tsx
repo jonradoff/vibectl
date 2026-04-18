@@ -1,8 +1,14 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getDelegationStatus, testDelegation, enableDelegation, disableDelegation } from '../../api/client'
+import { useMode } from '../../contexts/ModeContext'
 
 export default function DelegationSection() {
+  const { isClientMode } = useMode()
+
+  // Only show in standalone mode — delegation makes no sense in client mode
+  // (client mode already proxies everything to the remote)
+  if (isClientMode) return null
   const queryClient = useQueryClient()
   const [url, setUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
@@ -42,9 +48,9 @@ export default function DelegationSection() {
 
   return (
     <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
-      <h3 className="text-sm font-semibold text-white mb-1">Delegation</h3>
+      <h3 className="text-sm font-semibold text-white mb-1">Delegation <span className="text-[10px] text-gray-500 font-normal">(Standalone Dev only)</span></h3>
       <p className="text-xs text-gray-400 mb-3">
-        Connect this instance to a remote VibeCtl server. Sessions and terminals stay local; projects, issues, and feedback are managed on the remote.
+        Connect this standalone instance to a remote VibeCtl server. Claude Code sessions and terminals stay local on your machine; projects, issues, feedback, and other shared data are managed on the remote server. This lets you develop locally while sharing project data with your team. Off by default.
       </p>
 
       {isActive ? (
