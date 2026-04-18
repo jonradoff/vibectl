@@ -50,7 +50,7 @@ export interface ChatSessionSnapshot {
 }
 
 interface ChatViewProps {
-  projectCode: string
+  projectId: string
   projectCode: string
   localPath?: string
   compact?: boolean
@@ -117,6 +117,7 @@ interface ToolUseBlock {
 type ContentBlock = TextBlock | ToolUseBlock
 
 export default function ChatView({
+  projectId,
   projectCode,
   localPath,
   compact,
