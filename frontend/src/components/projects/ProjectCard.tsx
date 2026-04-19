@@ -496,7 +496,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
             )
           }
 
-          if (hasGitHub || !isCloned) {
+          if (!isCloned) {
             return <SetLocalPathPanel project={project} onClone={handleClone} onPathSaved={() => queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })} />
           }
 
