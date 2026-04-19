@@ -92,7 +92,7 @@ func (h *DashboardHandler) GlobalDashboard(w http.ResponseWriter, r *http.Reques
 		totalOpenIssues += openCount
 
 		var lastSession *models.SessionLog
-		session, err := h.sessionService.GetLatest(ctx, project.ID.Hex())
+		session, err := h.sessionService.GetLatest(ctx, project.Code)
 		if err == nil {
 			lastSession = session
 		}
