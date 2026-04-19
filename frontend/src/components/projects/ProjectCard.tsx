@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listIssues, updateProject, createIssue, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode } from '../../api/client'
+import { listIssues, updateProject, createIssue, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode, checkDir } from '../../api/client'
 import type { Intent } from '../../types'
 import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, DeploymentConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ActivityLogEntry } from '../../types'
 import { priorityColors, typeColors } from '../../types'
@@ -496,22 +496,8 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
             )
           }
 
-          if (hasGitHub) {
-            return (
-              <div className="flex flex-col items-center justify-center h-full gap-4 text-center p-8">
-                <div className="text-gray-400 text-sm">
-                  <p className="text-white font-medium mb-1">No local copy yet</p>
-                  <p>Clone the repository to start a Claude Code session.</p>
-                  <p className="mt-1 font-mono text-xs text-gray-500">{project.links.githubUrl}</p>
-                </div>
-                {project.cloneStatus === 'error' && (
-                  <p className="text-red-400 text-xs">{project.cloneError}</p>
-                )}
-                <button onClick={handleClone} className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-2 px-6 rounded-lg text-sm transition-colors">
-                  Clone repository
-                </button>
-              </div>
-            )
+          if (hasGitHub || !isCloned) {
+            return <SetLocalPathPanel project={project} onClone={handleClone} onPathSaved={() => queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })} />
           }
 
           return (
@@ -843,6 +829,88 @@ function TabIcon({ name }: { name: string }) {
     default:
       return <span className="text-xs">{name}</span>
   }
+}
+
+function SetLocalPathPanel({ project, onClone, onPathSaved }: { project: Project; onClone: () => void; onPathSaved: () => void }) {
+  const [editPath, setEditPath] = useState(project.links.localPath || '')
+  const [checking, setChecking] = useState(false)
+  const [pathExists, setPathExists] = useState<boolean | null>(null)
+
+  const checkAndSave = async () => {
+    if (!editPath.trim()) return
+    setChecking(true)
+    try {
+      const res = await checkDir(editPath.trim())
+      if (res.exists) {
+        await updateProject(project.id, { links: { ...project.links, localPath: editPath.trim() } })
+        setPathExists(true)
+        onPathSaved()
+      } else {
+        setPathExists(false)
+      }
+    } catch {
+      setPathExists(false)
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-4 text-center p-8">
+      <div className="text-gray-400 text-sm">
+        <p className="text-white font-medium mb-1">No local copy configured</p>
+        <p>Set the local path to an existing repo, or clone from GitHub.</p>
+      </div>
+
+      {/* Current path display */}
+      {project.links.localPath && (
+        <div className="text-[10px] text-gray-500">
+          Current path: <span className="font-mono text-gray-400">{project.links.localPath}</span>
+          <span className="text-red-400 ml-1">(not found on disk)</span>
+        </div>
+      )}
+
+      {/* Editable path */}
+      <div className="w-full max-w-md">
+        <div className="flex gap-2">
+          <input
+            value={editPath}
+            onChange={(e) => { setEditPath(e.target.value); setPathExists(null) }}
+            onKeyDown={(e) => e.key === 'Enter' && checkAndSave()}
+            placeholder="/path/to/project"
+            className="flex-1 rounded border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-gray-200 font-mono focus:border-indigo-500 focus:outline-none"
+          />
+          <button
+            onClick={checkAndSave}
+            disabled={!editPath.trim() || checking}
+            className="rounded bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 transition-colors"
+          >
+            {checking ? 'Checking...' : 'Set Path'}
+          </button>
+        </div>
+        {pathExists === false && (
+          <p className="text-red-400 text-[10px] mt-1">Directory not found. Check the path and try again.</p>
+        )}
+        {pathExists === true && (
+          <p className="text-green-400 text-[10px] mt-1">Path verified and saved!</p>
+        )}
+      </div>
+
+      {/* Clone option */}
+      {project.links.githubUrl && (
+        <div className="border-t border-gray-700/50 pt-3 w-full max-w-md">
+          <p className="text-[10px] text-gray-500 mb-2">Or clone from GitHub:</p>
+          <p className="font-mono text-xs text-gray-500 mb-2">{project.links.githubUrl}</p>
+          {project.cloneStatus === 'error' && (
+            <p className="text-red-400 text-xs mb-2">{project.cloneError}</p>
+          )}
+          <button onClick={onClone} className="bg-gray-700 hover:bg-gray-600 text-white font-medium py-1.5 px-4 rounded text-xs transition-colors">
+            Clone Repository
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function CompactIssueList({ projectId, projectCode }: { projectId: string; projectCode: string }) {
