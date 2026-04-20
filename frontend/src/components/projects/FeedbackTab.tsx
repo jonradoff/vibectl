@@ -163,7 +163,7 @@ export default function FeedbackTab({ projectId, projectCode }: FeedbackTabProps
       {/* Add feedback modal */}
       {showAdd && (
         <AddFeedbackModal
-          projectId={projectCode}
+          projectCode={projectCode}
           onClose={() => setShowAdd(false)}
           onCreated={invalidate}
         />
@@ -281,7 +281,7 @@ function FeedbackRow({ item, selected, onToggle, onClick, onTriage, isTriaging }
 
 // ─── Feedback Detail Modal ───────────────────────────────────────────────────
 
-function FeedbackDetailModal({ item, projectCode, onClose, onAccept, onDismiss, isMutating, reviewProgress }: {
+export function FeedbackDetailModal({ item, projectCode, onClose, onAccept, onDismiss, isMutating, reviewProgress }: {
   item: FeedbackItem
   projectCode: string
   onClose: () => void

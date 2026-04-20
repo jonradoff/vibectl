@@ -1,8 +1,10 @@
 import { Fragment, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listFeedback, reviewFeedback, listProjects, triageAllPending } from '../api/client';
 import type { FeedbackItem, Project, TriageStatus } from '../types';
 import FeedbackForm from '../components/feedback/FeedbackForm';
+import { FeedbackDetailModal } from '../components/projects/FeedbackTab';
 
 const triageStatusColors: Record<TriageStatus, string> = {
   pending: 'bg-yellow-500 text-black',
@@ -38,6 +40,7 @@ export default function FeedbackPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | TriageStatus>('all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [selectedItem, setSelectedItem] = useState<FeedbackItem | null>(null);
   const [showSubmitForm, setShowSubmitForm] = useState(false);
 
   const feedbackParams: Record<string, string> = {};
@@ -58,8 +61,8 @@ export default function FeedbackPage() {
   const projectMap = new Map<string, Project>(projects.map((p) => [p.id, p]));
 
   const reviewMutation = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: string }) =>
-      reviewFeedback(id, action),
+    mutationFn: ({ id, action, createIssue }: { id: string; action: string; createIssue?: boolean }) =>
+      reviewFeedback(id, action, createIssue),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['feedback'] });
     },
@@ -176,9 +179,10 @@ export default function FeedbackPage() {
                   return (
                     <Fragment key={item.id}>
                       <tr
-                        className={`border-b border-gray-700/50 hover:bg-gray-700/30 ${
+                        className={`border-b border-gray-700/50 hover:bg-gray-700/30 cursor-pointer ${
                           isPending ? 'bg-yellow-900/10' : ''
                         }`}
+                        onClick={() => setSelectedItem(item)}
                       >
                         <td className="px-4 py-3">
                           <span
@@ -317,6 +321,40 @@ export default function FeedbackPage() {
           </div>
         )}
       </div>
+
+      {/* Feedback detail modal with continuous review */}
+      {selectedItem && createPortal(
+        <FeedbackDetailModal
+          item={selectedItem}
+          projectCode={selectedItem.projectCode ? (projectMap.get(selectedItem.projectCode)?.code || '') : ''}
+          onClose={() => setSelectedItem(null)}
+          onAccept={(createIssue) => {
+            const currentId = selectedItem.id;
+            reviewMutation.mutate({ id: currentId, action: 'accept', createIssue }, {
+              onSuccess: () => {
+                const pending = feedback.filter((i: FeedbackItem) => (i.triageStatus === 'pending' || i.triageStatus === 'triaged') && i.id !== currentId);
+                setSelectedItem(pending.length > 0 ? pending[0] : null);
+              }
+            });
+          }}
+          onDismiss={() => {
+            const currentId = selectedItem.id;
+            reviewMutation.mutate({ id: currentId, action: 'dismiss' }, {
+              onSuccess: () => {
+                const pending = feedback.filter((i: FeedbackItem) => (i.triageStatus === 'pending' || i.triageStatus === 'triaged') && i.id !== currentId);
+                setSelectedItem(pending.length > 0 ? pending[0] : null);
+              }
+            });
+          }}
+          isMutating={reviewMutation.isPending}
+          reviewProgress={(() => {
+            const pending = feedback.filter((i: FeedbackItem) => i.triageStatus === 'pending' || i.triageStatus === 'triaged');
+            const idx = pending.findIndex((i: FeedbackItem) => i.id === selectedItem.id);
+            return idx >= 0 ? { current: idx + 1, total: pending.length } : undefined;
+          })()}
+        />,
+        document.body,
+      )}
     </div>
   );
 }

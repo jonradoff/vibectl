@@ -21,9 +21,17 @@ var localPrefixes = []string{
 	"/api/v1/detect-start-sh",
 	"/api/v1/detect-deploy-sh",
 	"/api/v1/detect-project-scripts",
-	// Project and dashboard endpoints stay local — handlers merge remote data with local paths
-	"/api/v1/projects",
+	// Dashboard stays local — it builds ProjectSummary from local project data
 	"/api/v1/dashboard",
+}
+
+// localExactPaths are paths that match exactly (not as prefixes).
+// /api/v1/projects itself is local (for local paths), but /api/v1/projects/{id}/feedback etc. proxy to remote.
+var localExactPaths = []string{
+	"/api/v1/projects",       // project list
+	"/api/v1/projects/tags",
+	"/api/v1/projects/stale",
+	"/api/v1/projects/archived",
 }
 
 // localProjectSubPaths are project sub-routes that stay local (under /api/v1/projects/{id}/...).
@@ -33,6 +41,7 @@ var localProjectSubPaths = []string{
 	"files/list",
 	"files/read",
 	"files/write",
+	"feedback",
 }
 
 // IsLocalRoute returns true if the given path should be handled locally, even when delegation is active.
@@ -49,9 +58,23 @@ func IsLocalRoute(path string) bool {
 		}
 	}
 
-	// Check project sub-routes: /api/v1/projects/{id}/chat-session etc.
+	// Check exact local paths (e.g., /api/v1/projects but not /api/v1/projects/{id}/feedback)
+	for _, exact := range localExactPaths {
+		if path == exact || path == exact+"/" {
+			return true
+		}
+	}
+
+	// Check project sub-routes under /api/v1/projects/{id}/...
 	if strings.HasPrefix(path, "/api/v1/projects/") {
 		parts := strings.SplitN(path, "/", 6) // ["", "api", "v1", "projects", "{id}", "sub/path"]
+
+		// /api/v1/projects/{id} with no sub-path — local (project detail with local paths)
+		if len(parts) == 5 {
+			return true
+		}
+
+		// /api/v1/projects/{id}/sub-path — check if sub-path is local
 		if len(parts) >= 6 {
 			subPath := parts[5]
 			for _, local := range localProjectSubPaths {
