@@ -206,7 +206,7 @@ function ProjectPage() {
 
       {/* Tab content */}
       {activeTab === 'issues' && (
-        <IssueTable projectId={project.id} projectCode={project.code} />
+        <IssueTable projectCode={project.code} />
       )}
 
       {activeTab === 'terminal' && (
@@ -221,7 +221,7 @@ function ProjectPage() {
 
       {activeTab === 'ci' && (
         <CITab
-          projectId={project.id}
+          projectCode={project.code}
           hasLocalPath={!!project.links.localPath}
           hasGitHubUrl={!!project.links.githubUrl}
           hasDeployCmd={!!project.deployment?.deployProd}
@@ -240,7 +240,7 @@ function ProjectPage() {
   );
 }
 
-function FeedbackTab({ projectId }: { projectCode: string }) {
+function FeedbackTab({ projectId }: { projectId: string }) {
   const { data: feedback, isLoading, error } = useQuery({
     queryKey: ['projectFeedback', projectId],
     queryFn: () => listProjectFeedback(projectId),

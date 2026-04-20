@@ -131,6 +131,13 @@ func (m *Manager) GetAPIKey() string {
 	return m.apiKey
 }
 
+// GetRemoteURL returns the remote server URL.
+func (m *Manager) GetRemoteURL() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.remoteURL
+}
+
 // GetStatus returns the current delegation status.
 func (m *Manager) GetStatus() Status {
 	m.mu.RLock()

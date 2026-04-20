@@ -8,7 +8,6 @@ import '@xterm/xterm/css/xterm.css'
 
 interface TerminalViewProps {
   projectCode: string
-  projectCode: string
   localPath?: string
   prompt?: string
   compact?: boolean
@@ -22,7 +21,7 @@ interface WSMessage {
   data?: any
 }
 
-export default function TerminalView({ projectId, projectCode, localPath, prompt, compact, onStatusChange, onActivityChange }: TerminalViewProps) {
+export default function TerminalView({ projectCode, localPath, prompt, compact, onStatusChange, onActivityChange }: TerminalViewProps) {
   // The terminal DOM node is created imperatively so React never unmounts it
   const termNodeRef = useRef<HTMLDivElement | null>(null)
   const inlineSlotRef = useRef<HTMLDivElement>(null)
@@ -74,7 +73,6 @@ export default function TerminalView({ projectId, projectCode, localPath, prompt
       ws.send(JSON.stringify({
         type: 'launch',
         data: {
-          projectCode,
           projectCode,
           localPath: localPath || '',
           prompt: prompt || '',
@@ -142,7 +140,7 @@ export default function TerminalView({ projectId, projectCode, localPath, prompt
         ws.send(JSON.stringify({ type: 'input', data: { data } }))
       }
     })
-  }, [projectId, projectCode, localPath, prompt, updateStatus, markActive])
+  }, [projectCode, localPath, prompt, updateStatus, markActive])
 
   // Create terminal once — imperatively, so React never unmounts it
   useEffect(() => {
@@ -208,7 +206,7 @@ export default function TerminalView({ projectId, projectCode, localPath, prompt
       termNodeRef.current = null
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, projectCode, localPath, prompt])
+  }, [projectCode, localPath, prompt])
 
   // Move terminal node between inline and fullscreen slots
   useEffect(() => {

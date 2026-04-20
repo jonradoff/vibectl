@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 interface ServerEvent {
   type: string;
-  projectId?: string;
+  projectCode?: string;
 }
 
 // Maps server event types to the React Query keys that should be invalidated.

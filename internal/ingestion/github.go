@@ -1,6 +1,7 @@
 package ingestion
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,8 +13,15 @@ import (
 
 	"github.com/jonradoff/vibectl/internal/models"
 	"github.com/jonradoff/vibectl/internal/services"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+// DelegationChecker provides read-only access to delegation state for the sweeper.
+type DelegationChecker interface {
+	IsEnabled() bool
+	IsHealthy() bool
+	GetAPIKey() string
+	GetRemoteURL() string
+}
 
 // GitHubSweeper fetches issue/PR comments from GitHub repos linked to projects
 // and creates FeedbackItems for each new comment.
@@ -22,6 +30,7 @@ type GitHubSweeper struct {
 	feedbackService *services.FeedbackService
 	token           string
 	httpClient      *http.Client
+	delegation      DelegationChecker
 }
 
 func NewGitHubSweeper(ps *services.ProjectService, fs *services.FeedbackService, token string) *GitHubSweeper {
@@ -31,6 +40,11 @@ func NewGitHubSweeper(ps *services.ProjectService, fs *services.FeedbackService,
 		token:           token,
 		httpClient:      &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// SetDelegation sets the delegation checker for pushing feedback to the remote server.
+func (s *GitHubSweeper) SetDelegation(d DelegationChecker) {
+	s.delegation = d
 }
 
 // repoPattern extracts owner/repo from a GitHub URL.
@@ -55,7 +69,7 @@ func (s *GitHubSweeper) Sweep(ctx context.Context) (int, error) {
 		}
 		repo := strings.TrimSuffix(matches[1], ".git")
 
-		count, err := s.sweepRepo(ctx, p.ID, repo)
+		count, err := s.sweepRepo(ctx, p.Code, repo)
 		if err != nil {
 			slog.Error("github sweep failed for repo", "repo", repo, "error", err)
 			continue
@@ -75,7 +89,7 @@ type ghComment struct {
 	} `json:"user"`
 }
 
-func (s *GitHubSweeper) sweepRepo(ctx context.Context, projectID bson.ObjectID, repo string) (int, error) {
+func (s *GitHubSweeper) sweepRepo(ctx context.Context, projectCode string, repo string) (int, error) {
 	// Fetch comments from the last 24 hours.
 	since := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
 	url := fmt.Sprintf("https://api.github.com/repos/%s/issues/comments?since=%s&sort=created&direction=desc&per_page=100", repo, since)
@@ -116,9 +130,8 @@ func (s *GitHubSweeper) sweepRepo(ctx context.Context, projectID bson.ObjectID, 
 			continue
 		}
 
-		pid := projectID
 		feedbackReq := &models.CreateFeedbackRequest{
-			ProjectID:   pid.Hex(),
+			ProjectCode: projectCode,
 			SourceType:  "github",
 			SourceURL:   c.HTMLURL,
 			RawContent:  c.Body,
@@ -129,6 +142,10 @@ func (s *GitHubSweeper) sweepRepo(ctx context.Context, projectID bson.ObjectID, 
 			slog.Error("failed to create feedback from github comment", "url", c.HTMLURL, "error", err)
 			continue
 		}
+
+		// Push to remote server when delegation is active
+		s.pushToRemote(ctx, feedbackReq)
+
 		created++
 	}
 
@@ -136,4 +153,41 @@ func (s *GitHubSweeper) sweepRepo(ctx context.Context, projectID bson.ObjectID, 
 		slog.Info("github sweep imported comments", "repo", repo, "count", created)
 	}
 	return created, nil
+}
+
+// pushToRemote POSTs a feedback item to the remote server if delegation is active and healthy.
+func (s *GitHubSweeper) pushToRemote(ctx context.Context, req *models.CreateFeedbackRequest) {
+	if s.delegation == nil || !s.delegation.IsEnabled() || !s.delegation.IsHealthy() {
+		return
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		slog.Error("github sweep: marshal feedback for remote", "error", err)
+		return
+	}
+
+	remoteURL := s.delegation.GetRemoteURL() + "/api/v1/feedback"
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", remoteURL, bytes.NewReader(body))
+	if err != nil {
+		slog.Error("github sweep: create remote request", "error", err)
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+s.delegation.GetAPIKey())
+
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		slog.Warn("github sweep: push to remote failed", "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		// Duplicate on remote — that's fine
+		return
+	}
+	if resp.StatusCode >= 300 {
+		slog.Warn("github sweep: remote returned error", "status", resp.StatusCode)
+	}
 }

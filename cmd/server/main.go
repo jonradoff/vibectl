@@ -490,6 +490,7 @@ func main() {
 	var prSweeper *ingestion.PRSweeper
 	if cfg.GitHubToken != "" {
 		ghSweeper = ingestion.NewGitHubSweeper(projectService, feedbackService, cfg.GitHubToken)
+		ghSweeper.SetDelegation(delegationManager)
 		prSweeper = ingestion.NewPRSweeper(intentService, cfg.GitHubToken)
 	}
 

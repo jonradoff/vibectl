@@ -574,14 +574,6 @@ function DelegationViewToggle() {
 
   if (!delegation?.enabled) return null
 
-  const toggle = () => {
-    const next = viewMode === 'local' ? 'auto' : 'local'
-    setViewMode(next)
-    setMode(next)
-    // Force refetch all queries
-    window.location.reload()
-  }
-
   return (
     <div className="flex items-center gap-1.5 rounded-lg bg-gray-800 border border-gray-700 px-1 py-0.5">
       <span className="text-[10px] text-gray-500 pl-1.5">Viewing:</span>

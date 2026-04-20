@@ -42,7 +42,7 @@ export default function PlansPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['plans', filterProjectId, filterStatus, limit, offset],
     queryFn: () => listPlans({
-      projectCode: filterProjectId || undefined,
+      projectId: filterProjectId || undefined,
       status: filterStatus || undefined,
       limit,
       offset,

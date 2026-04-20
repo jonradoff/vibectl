@@ -214,7 +214,6 @@ export interface GlobalDashboard {
 export interface ProjectUniverseData {
   projectCode: string;
   projectName: string;
-  projectCode: string;
   activityByDay: number[];   // last 90 days, oldest first
   healthByDay: string[];     // last 7 days, oldest first: "up"|"down"|"degraded"|"unknown"
   openIssueCount: number;
@@ -391,7 +390,6 @@ export interface Intent {
 export interface IntentProductivityStats {
   projectCode: string;
   projectName?: string;
-  projectCode?: string;
   tags?: string[];
   pointsDelivered: number;
   intentCount: number;
@@ -575,6 +573,24 @@ export interface ClaudeUsageConfig {
   loginLabel: string;
   weeklyTokenLimit: number;
   alertThreshold: number;
+}
+
+// ---- Delegation ----
+
+export interface DelegationStatus {
+  enabled: boolean;
+  url?: string;
+  user?: string;
+  healthy: boolean;
+  verifiedAt?: string;
+}
+
+export interface DelegationTestResult {
+  valid: boolean;
+  userName?: string;
+  userEmail?: string;
+  serverVersion?: string;
+  error?: string;
 }
 
 // ---- Color maps

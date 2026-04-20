@@ -37,8 +37,8 @@ export default function CITab({ projectCode, hasLocalPath, hasGitHubUrl, hasDepl
   };
 
   const { data: ciStatus, isLoading, refetch } = useQuery<CIStatus>({
-    queryKey: ['ciStatus', projectId],
-    queryFn: () => getCIStatus(projectId),
+    queryKey: ['ciStatus', projectCode],
+    queryFn: () => getCIStatus(projectCode),
     refetchInterval: 60_000,
     enabled: hasGitHubUrl,
   });
@@ -71,17 +71,17 @@ export default function CITab({ projectCode, hasLocalPath, hasGitHubUrl, hasDepl
       {env === 'prod' && (
         <div className="space-y-6">
           {/* Pause toggle */}
-          <PauseToggle projectId={projectCode} paused={!!paused} onPausedChange={onPausedChange} />
+          <PauseToggle projectCode={projectCode} paused={!!paused} onPausedChange={onPausedChange} />
 
           {/* Aggregate deploy */}
-          <DeployAllCard projectId={projectCode} hasLocalPath={hasLocalPath} hasGitHubUrl={hasGitHubUrl} hasDeployCmd={hasDeployCmd} />
+          <DeployAllCard projectCode={projectCode} hasLocalPath={hasLocalPath} hasGitHubUrl={hasGitHubUrl} hasDeployCmd={hasDeployCmd} />
 
           {/* Individual prod actions */}
           {(hasDeployCmd || hasStartProdCmd || hasRestartProdCmd) && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {hasDeployCmd && <DeployCard projectId={projectCode} appendLog={appendLog} />}
-              {hasStartProdCmd && <StartProdCard projectId={projectCode} appendLog={appendLog} />}
-              {hasRestartProdCmd && <RestartProdCard projectId={projectCode} appendLog={appendLog} />}
+              {hasDeployCmd && <DeployCard projectCode={projectCode} appendLog={appendLog} />}
+              {hasStartProdCmd && <StartProdCard projectCode={projectCode} appendLog={appendLog} />}
+              {hasRestartProdCmd && <RestartProdCard projectCode={projectCode} appendLog={appendLog} />}
             </div>
           )}
         </div>
@@ -91,7 +91,7 @@ export default function CITab({ projectCode, hasLocalPath, hasGitHubUrl, hasDepl
         <div className="space-y-6">
           {/* Restart Dev — primary action */}
           {hasStartDevCmd && (
-            <RestartDevCard projectId={projectCode} appendLog={appendLog} />
+            <RestartDevCard projectCode={projectCode} appendLog={appendLog} />
           )}
           {!hasStartDevCmd && (
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
@@ -106,8 +106,8 @@ export default function CITab({ projectCode, hasLocalPath, hasGitHubUrl, hasDepl
             {hasGitHubUrl && (
               <CloneCard isCloned={!!isCloned} cloneStreaming={!!cloneStreaming} cloneLog={cloneLog} hasGitHubPAT={hasGitHubPAT} onClone={onClone} onPull={onPull} />
             )}
-            <CommitCard projectId={projectCode} hasLocalPath={hasLocalPath} />
-            <PushCard projectId={projectCode} hasLocalPath={hasLocalPath} hasGitHubUrl={hasGitHubUrl} />
+            <CommitCard projectCode={projectCode} hasLocalPath={hasLocalPath} />
+            <PushCard projectCode={projectCode} hasLocalPath={hasLocalPath} hasGitHubUrl={hasGitHubUrl} />
           </div>
         </div>
       )}
@@ -443,7 +443,7 @@ function PushCard({ projectCode, hasLocalPath, hasGitHubUrl }: { projectCode: st
   const run = async () => {
     setError(''); setOutput(''); setWarning(''); setBusy(true);
     try {
-      const res = await ciPush(projectId);
+      const res = await ciPush(projectCode);
       setOutput(res.output || res.status);
       if (res.githubWarning) setWarning(res.githubWarning);
     } catch (e) {
@@ -490,7 +490,7 @@ function DeployCard({ projectCode, appendLog }: { projectCode: string; appendLog
     setBusy(true);
     appendLog('Deploy', 'Deploying to production...');
     try {
-      const res = await ciDeploy(projectId);
+      const res = await ciDeploy(projectCode);
       appendLog('Deploy', res.output || res.status || 'Done');
     } catch (e) {
       appendLog('Deploy', e instanceof Error ? e.message : 'Failed', true);
@@ -537,7 +537,7 @@ function RestartDevCard({ projectCode, appendLog }: { projectCode: string; appen
   const run = () => {
     setError(''); setDone(false); setStreaming(true);
     appendLog('Restart Dev', 'Starting dev server...');
-    const es = new EventSource(getRestartDevStreamUrl(projectId));
+    const es = new EventSource(getRestartDevStreamUrl(projectCode));
     es.onmessage = (e) => {
       const line = e.data as string;
       if (line === 'DONE') {
@@ -590,7 +590,7 @@ function RestartProdCard({ projectCode, appendLog }: { projectCode: string; appe
     setBusy(true);
     appendLog('Restart Prod', 'Restarting production...');
     try {
-      const res = await ciRestartProd(projectId);
+      const res = await ciRestartProd(projectCode);
       appendLog('Restart Prod', res.output || res.status || 'Done');
     } catch (e) {
       appendLog('Restart Prod', e instanceof Error ? e.message : 'Failed', true);
@@ -636,7 +636,7 @@ function StartProdCard({ projectCode, appendLog }: { projectCode: string; append
     setBusy(true);
     appendLog('Start Prod', 'Starting production...');
     try {
-      const res = await ciStartProd(projectId);
+      const res = await ciStartProd(projectCode);
       appendLog('Start Prod', res.output || res.status || 'Done');
     } catch (e) {
       appendLog('Start Prod', e instanceof Error ? e.message : 'Failed', true);

@@ -8,7 +8,6 @@ import StatusBadge from './StatusBadge';
 
 interface IssueTableProps {
   projectCode: string;
-  projectCode: string;
 }
 
 type SortField = 'issueKey' | 'title' | 'type' | 'priority' | 'status' | 'dueDate' | 'createdAt';
@@ -17,19 +16,19 @@ type ViewTab = 'active' | 'archived';
 
 const priorityOrder: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3, P4: 4, P5: 5 };
 
-function IssueTable({ projectId, projectCode }: IssueTableProps) {
+function IssueTable({ projectCode }: IssueTableProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [viewTab, setViewTab] = useState<ViewTab>('active');
 
   const { data: issues, isLoading, error } = useQuery({
-    queryKey: ['issues', projectId],
-    queryFn: () => listIssues(projectId),
+    queryKey: ['issues', projectCode],
+    queryFn: () => listIssues(projectCode),
   });
 
   const { data: archivedIssues, isLoading: archivedLoading } = useQuery({
-    queryKey: ['issues-archived', projectId],
-    queryFn: () => listArchivedIssues(projectId),
+    queryKey: ['issues-archived', projectCode],
+    queryFn: () => listArchivedIssues(projectCode),
     enabled: viewTab === 'archived',
   });
 
@@ -79,7 +78,7 @@ function IssueTable({ projectId, projectCode }: IssueTableProps) {
     setBulkLoading(true);
     try {
       await Promise.all([...selectedKeys].map((k) => updateIssue(k, { priority })));
-      queryClient.invalidateQueries({ queryKey: ['issues', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['issues', projectCode] });
       setSelectedKeys(new Set());
     } finally {
       setBulkLoading(false);
@@ -90,8 +89,8 @@ function IssueTable({ projectId, projectCode }: IssueTableProps) {
     setBulkLoading(true);
     try {
       await Promise.all([...selectedKeys].map((k) => deleteIssue(k)));
-      queryClient.invalidateQueries({ queryKey: ['issues', projectId] });
-      queryClient.invalidateQueries({ queryKey: ['issues-archived', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['issues', projectCode] });
+      queryClient.invalidateQueries({ queryKey: ['issues-archived', projectCode] });
       setSelectedKeys(new Set());
     } finally {
       setBulkLoading(false);
@@ -363,13 +362,12 @@ function IssueTable({ projectId, projectCode }: IssueTableProps) {
         </>
       ) : (
         <ArchivedIssueList
-          projectId={projectCode}
           projectCode={projectCode}
           issues={archivedIssues ?? []}
           isLoading={archivedLoading}
           onMutate={() => {
-            queryClient.invalidateQueries({ queryKey: ['issues-archived', projectId] });
-            queryClient.invalidateQueries({ queryKey: ['issues', projectId] });
+            queryClient.invalidateQueries({ queryKey: ['issues-archived', projectCode] });
+            queryClient.invalidateQueries({ queryKey: ['issues', projectCode] });
           }}
         />
       )}
@@ -383,7 +381,6 @@ function ArchivedIssueList({
   isLoading,
   onMutate,
 }: {
-  projectCode: string;
   projectCode: string;
   issues: Issue[];
   isLoading: boolean;

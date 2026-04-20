@@ -281,9 +281,10 @@ function FeedbackRow({ item, selected, onToggle, onClick, onTriage, isTriaging }
 
 // ─── Feedback Detail Modal ───────────────────────────────────────────────────
 
-export function FeedbackDetailModal({ item, projectCode, onClose, onAccept, onDismiss, isMutating, reviewProgress }: {
+export function FeedbackDetailModal({ item, projectCode, projectName, onClose, onAccept, onDismiss, isMutating, reviewProgress }: {
   item: FeedbackItem
   projectCode: string
+  projectName?: string
   onClose: () => void
   onAccept: (createIssue: boolean) => void
   onDismiss: () => void
@@ -305,6 +306,11 @@ export function FeedbackDetailModal({ item, projectCode, onClose, onAccept, onDi
               'bg-amber-900/30 text-amber-400'
             }`}>{item.triageStatus}</span>
             <span className="rounded bg-gray-700 px-1.5 py-0.5 text-[10px] font-mono text-gray-400">{item.sourceType}</span>
+            {(projectName || projectCode) && (
+              <span className="rounded bg-indigo-900/40 px-1.5 py-0.5 text-[10px] font-medium text-indigo-300">
+                {projectName || projectCode}
+              </span>
+            )}
             {reviewProgress && (
               <span className="text-[10px] text-gray-500">
                 Reviewing {reviewProgress.current} of {reviewProgress.total}

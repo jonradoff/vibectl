@@ -59,7 +59,7 @@ export default function UserShellView({ projectCode, compact, onStatusChange }: 
     }
     getLocalPaths()
       .then(paths => {
-        const p = paths[projectId]
+        const p = paths[projectCode]
         if (p) {
           setWorkDir(p)
           setSetupInput(p)
@@ -95,7 +95,7 @@ export default function UserShellView({ projectCode, compact, onStatusChange }: 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wdParam = currentWorkDir ? `&workDir=${encodeURIComponent(currentWorkDir)}` : ''
     const ws = new WebSocket(
-      `${protocol}//${window.location.host}/ws/shell?token=${encodeURIComponent(token)}&projectId=${encodeURIComponent(projectId)}${wdParam}`
+      `${protocol}//${window.location.host}/ws/shell?token=${encodeURIComponent(token)}&projectId=${encodeURIComponent(projectCode)}${wdParam}`
     )
     wsRef.current = ws
 

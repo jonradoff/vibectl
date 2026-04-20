@@ -133,8 +133,8 @@ function ProjectsTab({ days, sortField, sortDir, onSort, tagFilter, onTagFilter,
   const handleSort = onSort
 
   const handleRowClick = (projectCode: string) => {
-    openProject(projectId)
-    setActiveProjectId(projectId)
+    openProject(projectCode)
+    setActiveProjectId(projectCode)
     if (location.pathname !== '/') navigate('/')
     setTimeout(() => {
       const el = document.querySelector(`[data-project-id="${projectCode}"]`)
@@ -840,8 +840,8 @@ export function CodeDeltaTab({ tagFilter, onTagFilter: _onTagFilter, days }: { t
   }
 
   const handleRowClick = (projectCode: string) => {
-    openProject(projectId)
-    setActiveProjectId(projectId)
+    openProject(projectCode)
+    setActiveProjectId(projectCode)
     if (location.pathname !== '/') navigate('/')
   }
 

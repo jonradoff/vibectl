@@ -45,11 +45,11 @@ const PINNED_INITIALIZED_PREFIX = 'vibectl-pinned-init-'
 
 function loadPinnedFiles(projectCode: string): Set<string> {
   try {
-    const raw = localStorage.getItem(PINNED_KEY_PREFIX + projectId)
+    const raw = localStorage.getItem(PINNED_KEY_PREFIX + projectCode)
     if (raw) {
       const saved = new Set<string>(JSON.parse(raw))
       // On first load after feature addition, merge defaults
-      if (!localStorage.getItem(PINNED_INITIALIZED_PREFIX + projectId)) {
+      if (!localStorage.getItem(PINNED_INITIALIZED_PREFIX + projectCode)) {
         for (const d of DEFAULT_PINNED) saved.add(d)
         localStorage.setItem(PINNED_INITIALIZED_PREFIX + projectCode, '1')
         localStorage.setItem(PINNED_KEY_PREFIX + projectCode, JSON.stringify([...saved]))
@@ -119,7 +119,7 @@ function formatModTime(iso?: string): string {
 export default function FilesBrowser({ projectCode, localPath, githubUrl, onClone }: FilesBrowserProps) {
   const [currentPath, setCurrentPath] = useState('.')
   const [editingFile, setEditingFile] = useState<string | null>(null)
-  const [pinnedFiles, setPinnedFiles] = useState(() => loadPinnedFiles(projectId))
+  const [pinnedFiles, setPinnedFiles] = useState(() => loadPinnedFiles(projectCode))
   const [sortField, setSortField] = useState<SortField>('name')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
 
@@ -162,7 +162,7 @@ export default function FilesBrowser({ projectCode, localPath, githubUrl, onClon
       savePinnedFiles(projectCode, next)
       return next
     })
-  }, [projectId])
+  }, [projectCode])
 
   const navigateUp = useCallback(() => {
     if (currentPath === '.') return
@@ -360,7 +360,7 @@ export default function FilesBrowser({ projectCode, localPath, githubUrl, onClon
       {/* File editor modal — portaled to body to escape transform containment */}
       {editingFile && createPortal(
         <FileEditorModal
-          projectId={projectCode}
+          projectCode={projectCode}
           filePath={editingFile}
           onClose={() => setEditingFile(null)}
         />,
@@ -370,7 +370,7 @@ export default function FilesBrowser({ projectCode, localPath, githubUrl, onClon
       {/* Create file prompt — portaled to body */}
       {createPrompt && createPortal(
         <CreateFilePrompt
-          projectId={projectCode}
+          projectCode={projectCode}
           fileName={createPrompt.name}
           filePath={createPrompt.path}
           onCreated={(path) => {
@@ -418,12 +418,12 @@ function CreateFilePrompt({
     try {
       if (isVibectlMd) {
         // Generate VIBECTL.md via the dedicated endpoint
-        await generateVibectlMd(projectId)
+        await generateVibectlMd(projectCode)
       } else {
         // Create an empty file
         await writeFile(projectCode, filePath, '')
       }
-      queryClient.invalidateQueries({ queryKey: ['files', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['files', projectCode] })
       onCreated(filePath)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create file')
@@ -608,7 +608,7 @@ function FileEditorModal({ projectCode, filePath, onClose }: { projectCode: stri
       setIsDirty(false)
       setSaved(true)
       queryClient.invalidateQueries({ queryKey: ['fileContent', projectCode, filePath] })
-      queryClient.invalidateQueries({ queryKey: ['files', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['files', projectCode] })
       setTimeout(() => setSaved(false), 2000)
     },
   })

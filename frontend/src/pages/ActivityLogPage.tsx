@@ -44,7 +44,7 @@ export default function ActivityLogPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['activity-log', filterProjectId, filterType, limit, offset],
     queryFn: () => listActivityLog({
-      projectCode: filterProjectId || undefined,
+      projectId: filterProjectId || undefined,
       type: filterType || undefined,
       limit,
       offset,

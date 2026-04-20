@@ -11,7 +11,7 @@ interface FeedbackFormProps {
 export default function FeedbackForm({ open, onClose, projects }: FeedbackFormProps) {
   const queryClient = useQueryClient();
 
-  const [projectCode, setProjectId] = useState('');
+  const [projectCode, setProjectCode] = useState('');
   const [sourceType, setSourceType] = useState('manual');
   const [rawContent, setRawContent] = useState('');
   const [submittedBy, setSubmittedBy] = useState('');
@@ -21,7 +21,7 @@ export default function FeedbackForm({ open, onClose, projects }: FeedbackFormPr
   const mutation = useMutation({
     mutationFn: () =>
       createFeedback({
-        ...(projectId ? { projectId } : {}),
+        ...(projectCode ? { projectCode } : {}),
         sourceType,
         rawContent,
         ...(submittedBy ? { submittedBy } : {}),
@@ -40,7 +40,7 @@ export default function FeedbackForm({ open, onClose, projects }: FeedbackFormPr
   });
 
   function resetForm() {
-    setProjectId('');
+    setProjectCode('');
     setSourceType('manual');
     setRawContent('');
     setSubmittedBy('');
@@ -79,7 +79,7 @@ export default function FeedbackForm({ open, onClose, projects }: FeedbackFormPr
             <label className="mb-1 block text-sm font-medium text-gray-300">Project</label>
             <select
               value={projectCode}
-              onChange={(e) => setProjectId(e.target.value)}
+              onChange={(e) => setProjectCode(e.target.value)}
               className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-gray-100 focus:border-blue-500 focus:outline-none"
             >
               <option value="">Unassigned</option>

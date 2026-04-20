@@ -454,7 +454,6 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
 
           const isCloned = project.cloneStatus === 'cloned' || !!project.links.localPath
           const isCloning = project.cloneStatus === 'cloning' || cloneStreaming
-          const hasGitHub = !!project.links.githubUrl
 
           if (isCloned && !cloneStreaming) {
             return (
@@ -514,27 +513,27 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
           )
         })()}
         {activeTab === 'shell' && (
-          <UserShellView projectId={project.id} compact={true} />
+          <UserShellView projectCode={project.code} compact={true} />
         )}
         {activeTab === 'issues' && (
           <CompactIssueList projectId={project.id} projectCode={project.code} />
         )}
         {activeTab === 'files' && (
           <FilesBrowser
-            projectId={project.id}
+            projectCode={project.code}
             localPath={project.links.localPath}
             githubUrl={project.links.githubUrl}
             onClone={handleClone}
           />
         )}
         {activeTab === 'history' && (
-          <ChatHistoryTab projectId={project.id} currentSession={currentSession} />
+          <ChatHistoryTab projectCode={project.code} currentSession={currentSession} />
         )}
         {activeTab === 'health' && (
           <CompactHealthChecks project={project} results={healthResults} />
         )}
         {activeTab === 'log' && (
-          <CompactActivityLog projectId={project.id} />
+          <CompactActivityLog projectCode={project.code} />
         )}
         {activeTab === 'settings' && (
           <CompactSettings project={project} currentUserRole={summary.currentUserRole} onClone={handleClone} />
@@ -548,7 +547,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
         {activeTab === 'ci' && (
           <div className="p-3 overflow-y-auto h-full">
             <CITab
-              projectId={project.id}
+              projectCode={project.code}
               hasLocalPath={!!project.links.localPath}
               hasGitHubUrl={!!project.links.githubUrl}
               hasDeployCmd={!!project.deployment?.deployProd}
@@ -973,7 +972,7 @@ function CompactIssueList({ projectId, projectCode }: { projectId: string; proje
 
       {showNewIssue && (
         <NewIssueModal
-          projectId={projectCode}
+          projectCode={projectCode}
           onClose={() => setShowNewIssue(false)}
         />
       )}
@@ -993,7 +992,7 @@ function NewIssueModal({ projectCode, onClose }: { projectCode: string; onClose:
   const mutation = useMutation({
     mutationFn: (data: Partial<Issue>) => createIssue(projectCode, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['issues', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['issues', projectCode] })
       queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
       onClose()
     },
@@ -1144,7 +1143,7 @@ function ProjectIntentsTab({ projectId }: { projectId: string }) {
 
   const { data: intents = [], isLoading } = useQuery({
     queryKey: ['intents', projectId],
-    queryFn: () => listIntents({ projectCode, limit: 100 }),
+    queryFn: () => listIntents({ projectId, limit: 100 }),
     refetchInterval: 30_000,
   })
 
@@ -1752,8 +1751,8 @@ function ChatHistoryTab({ projectCode, currentSession }: { projectCode: string; 
   const [viewingCurrent, setViewingCurrent] = useState(false)
 
   const { data: history, isLoading } = useQuery({
-    queryKey: ['chatHistory', projectId],
-    queryFn: () => listChatHistory(projectId),
+    queryKey: ['chatHistory', projectCode],
+    queryFn: () => listChatHistory(projectCode),
   })
 
   const { data: entry, isLoading: entryLoading } = useQuery({
@@ -2356,10 +2355,10 @@ function formatLogTime(iso: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function CompactActivityLog({ projectId }: { projectCode: string }) {
+function CompactActivityLog({ projectCode }: { projectCode: string }) {
   const { data, isLoading } = useQuery({
-    queryKey: ['activity-log', projectId],
-    queryFn: () => listActivityLog({ projectCode, limit: 50 }),
+    queryKey: ['activity-log', projectCode],
+    queryFn: () => listActivityLog({ projectId: projectCode, limit: 50 }),
     refetchInterval: 15000,
   })
 

@@ -58,7 +58,7 @@ export default function FeedbackPage() {
     queryFn: listProjects,
   });
 
-  const projectMap = new Map<string, Project>(projects.map((p) => [p.id, p]));
+  const projectByCode = new Map<string, Project>(projects.map((p) => [p.code, p]));
 
   const reviewMutation = useMutation({
     mutationFn: ({ id, action, createIssue }: { id: string; action: string; createIssue?: boolean }) =>
@@ -174,7 +174,7 @@ export default function FeedbackPage() {
                 {feedback.map((item: FeedbackItem) => {
                   const isPending = item.triageStatus === 'pending';
                   const isExpanded = expandedId === item.id;
-                  const project = item.projectCode ? projectMap.get(item.projectCode) : null;
+                  const project = item.projectCode ? projectByCode.get(item.projectCode) : null;
 
                   return (
                     <Fragment key={item.id}>
@@ -217,7 +217,7 @@ export default function FeedbackPage() {
                           {formatDate(item.submittedAt)}
                         </td>
                         <td className="px-4 py-3 text-gray-300">
-                          {project ? project.name : '--'}
+                          {project ? project.name : item.projectCode || '--'}
                         </td>
                         <td className="px-4 py-3">
                           <span
@@ -326,7 +326,8 @@ export default function FeedbackPage() {
       {selectedItem && createPortal(
         <FeedbackDetailModal
           item={selectedItem}
-          projectCode={selectedItem.projectCode ? (projectMap.get(selectedItem.projectCode)?.code || '') : ''}
+          projectCode={selectedItem.projectCode || ''}
+          projectName={selectedItem.projectCode ? (projectByCode.get(selectedItem.projectCode)?.name || selectedItem.projectCode) : ''}
           onClose={() => setSelectedItem(null)}
           onAccept={(createIssue) => {
             const currentId = selectedItem.id;

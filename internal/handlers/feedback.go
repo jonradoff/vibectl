@@ -152,6 +152,15 @@ func (h *FeedbackHandler) Create(w http.ResponseWriter, r *http.Request) {
 		req.ProjectID = proj.ID.Hex()
 	}
 
+	// Deduplicate by sourceUrl if provided
+	if req.SourceURL != "" {
+		existing, _ := h.feedbackService.FindBySourceURL(r.Context(), req.SourceURL)
+		if existing != nil {
+			middleware.WriteJSON(w, http.StatusConflict, existing)
+			return
+		}
+	}
+
 	if req.SourceType == "" {
 		req.SourceType = "feedback_api"
 	}
