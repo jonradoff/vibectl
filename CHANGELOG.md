@@ -3,6 +3,26 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.12.1 (2026-04-20) — Delegation & Feedback
+
+### Added
+- **Delegation model**: Standalone instances can proxy shared data (issues, feedback, intents) to a remote production server while keeping local data (sessions, terminals, chat history) local. Configurable via Settings with test connection, health monitoring, and event relay.
+- **View toggle**: "Remote / Local" segmented control in dashboard header when delegation is active. Local view sends `X-Vibectl-View: local` header to bypass the proxy.
+- **Export to Remote**: One-click button in project Settings to create a project on the remote server when delegation is enabled.
+- **GitHub sweeper remote push**: When delegation is active, feedback collected from GitHub comments is automatically pushed to the remote server. Deduplication via sourceURL prevents duplicates.
+- **Feedback detail modal**: Clicking any feedback item opens a full-detail modal with content, metadata, AI analysis, and accept/dismiss actions. Continuous review mode advances to the next pending item.
+- **Feedback API**: External products submit end-user feedback via REST with API key auth, XSS protection, LLM injection isolation, metadata support, deduplication, and webhooks.
+- **Project code migration**: All project foreign keys migrated from MongoDB ObjectIDs to portable project code strings, enabling cross-instance project sharing.
+- **Feedback project attribution**: Feedback list and detail modal now display the project name/code.
+
+### Fixed
+- Session cleanup no longer kills resumable sessions on restart (only marks stale active sessions as dead).
+- Local path panel shows correctly when path is missing instead of blank screen.
+- ~30 `projectId`→`projectCode` migration mismatches across frontend components that broke the production build.
+- Feedback sourceURL deduplication in the Create handler (returns 409 on duplicate).
+
+---
+
 ## v0.12.0 (2026-04-13) — Intent-Oriented Productivity
 
 ### Added
