@@ -583,17 +583,21 @@ function DelegationViewToggle() {
   }
 
   return (
-    <button
-      onClick={toggle}
-      className={`rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
-        viewMode === 'local'
-          ? 'bg-amber-700 hover:bg-amber-600 text-white'
-          : 'bg-cyan-700 hover:bg-cyan-600 text-white'
-      }`}
-      title={viewMode === 'local' ? 'Viewing local data — click to switch to remote' : 'Viewing remote data — click to switch to local'}
-    >
-      {viewMode === 'local' ? 'Local View' : 'Remote View'}
-    </button>
+    <div className="flex items-center gap-1.5 rounded-lg bg-gray-800 border border-gray-700 px-1 py-0.5">
+      <span className="text-[10px] text-gray-500 pl-1.5">Viewing:</span>
+      <button
+        onClick={() => { if (viewMode !== 'auto') { setViewMode('auto'); setMode('auto'); window.location.reload() } }}
+        className={`rounded px-2 py-1 text-[10px] font-medium transition-colors ${
+          viewMode === 'auto' ? 'bg-cyan-700 text-white' : 'text-gray-500 hover:text-gray-300'
+        }`}
+      >Remote</button>
+      <button
+        onClick={() => { if (viewMode !== 'local') { setViewMode('local'); setMode('local'); window.location.reload() } }}
+        className={`rounded px-2 py-1 text-[10px] font-medium transition-colors ${
+          viewMode === 'local' ? 'bg-amber-700 text-white' : 'text-gray-500 hover:text-gray-300'
+        }`}
+      >Local</button>
+    </div>
   )
 }
 

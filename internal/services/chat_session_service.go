@@ -96,11 +96,12 @@ func (s *ChatSessionService) GetResumable(ctx context.Context, projectCode strin
 	return &state, nil
 }
 
-// CleanupStale marks sessions older than maxAge as dead to prevent indefinite accumulation.
+// CleanupStale marks ACTIVE sessions older than maxAge as dead.
+// Resumable sessions are preserved — they represent saved context the user may want to resume.
 func (s *ChatSessionService) CleanupStale(ctx context.Context, maxAge time.Duration) (int64, error) {
 	cutoff := time.Now().UTC().Add(-maxAge)
 	filter := bson.D{
-		{Key: "status", Value: bson.D{{Key: "$in", Value: bson.A{"resumable", "active"}}}},
+		{Key: "status", Value: "active"}, // only kill active sessions, not resumable
 		{Key: "updatedAt", Value: bson.D{{Key: "$lt", Value: cutoff}}},
 	}
 	update := bson.D{{Key: "$set", Value: bson.D{
