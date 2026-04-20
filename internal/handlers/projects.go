@@ -26,6 +26,8 @@ type ProjectHandler struct {
 	activityLogService *services.ActivityLogService
 	memberService      *services.ProjectMemberService
 	bus                *events.Bus
+	// RemoteProjectFetcher is set when delegation is active — fetches projects from remote
+	RemoteProjectFetcher func(ctx context.Context, apiKey string) ([]models.Project, error)
 }
 
 func NewProjectHandler(

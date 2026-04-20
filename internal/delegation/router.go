@@ -21,6 +21,9 @@ var localPrefixes = []string{
 	"/api/v1/detect-start-sh",
 	"/api/v1/detect-deploy-sh",
 	"/api/v1/detect-project-scripts",
+	// Project and dashboard endpoints stay local — handlers merge remote data with local paths
+	"/api/v1/projects",
+	"/api/v1/dashboard",
 }
 
 // localProjectSubPaths are project sub-routes that stay local (under /api/v1/projects/{id}/...).
