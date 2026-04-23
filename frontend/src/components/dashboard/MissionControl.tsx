@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation } from 'react-router-dom'
 import React from 'react'
-import { getUniverseData, listArchivedProjects, unarchiveProject, deleteProject, listUnits, getClaudeUsageSummary, updateClaudeUsageConfig, getSubscriptionUsage, getProductivity, getIntentProductivity, getIntentInsights, backfillIntents, getBackfillCount, listAllTags } from '../../api/client'
+import { getUniverseData, listArchivedProjects, unarchiveProject, deleteProject, listUnits, getClaudeUsageSummary, updateClaudeUsageConfig, getSubscriptionUsage, getProductivity, getIntentProductivity, getIntentInsights, backfillIntents, getBackfillCount, listAllTags, listUsersDirectory } from '../../api/client'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, AreaChart, Area, ResponsiveContainer } from 'recharts'
 import type { ProductivityEntry } from '../../api/client'
 import type { ProjectUniverseData, Project, ClaudeUsageSummary, ClaudeUsageConfig } from '../../types'
@@ -13,7 +13,7 @@ import { useActiveProject } from '../../contexts/ActiveProjectContext'
 
 const STATE_KEY = 'vibectl-mission-control-v3'
 
-interface MCState { tab: string; days: number; sortField?: string; sortDir?: string; tagFilter?: string; productivityTag?: string; showInactive?: boolean }
+interface MCState { tab: string; days: number; sortField?: string; sortDir?: string; tagFilter?: string; productivityTag?: string; showInactive?: boolean; devFilter?: string }
 
 function loadState(): MCState {
   try {
@@ -590,18 +590,18 @@ function UsageDetailModal({ summary, onClose, onConfigSave }: {
 
 // ─── Productivity tab (Intent-oriented, high-level) ──────────────────────────
 
-function ProductivityTab({ tagFilter, onTagFilter, days }: { tagFilter: string; onTagFilter: (tag: string) => void; days: number }) {
+function ProductivityTab({ tagFilter, onTagFilter, days, devFilter }: { tagFilter: string; onTagFilter: (tag: string) => void; days: number; devFilter?: string }) {
   const queryClient = useQueryClient()
 
   const { data: stats = [], isLoading } = useQuery({
-    queryKey: ['intentProductivity', days],
-    queryFn: () => getIntentProductivity(days),
+    queryKey: ['intentProductivity', days, devFilter],
+    queryFn: () => getIntentProductivity(days, devFilter || undefined),
     refetchInterval: 30_000,
   })
 
   const { data: _insights } = useQuery({
-    queryKey: ['intentInsights', days],
-    queryFn: () => getIntentInsights({ days }),
+    queryKey: ['intentInsights', days, devFilter],
+    queryFn: () => getIntentInsights({ days, userId: devFilter || undefined }),
     refetchInterval: 60_000,
   })
 
@@ -971,13 +971,13 @@ function renderDonutLabel({ cx, cy, midAngle, outerRadius, name, value, percent 
   )
 }
 
-function AnalyticsTab({ tagFilter, days: parentDays }: { tagFilter: string; days: number }) {
+function AnalyticsTab({ tagFilter, days: parentDays, devFilter }: { tagFilter: string; days: number; devFilter?: string }) {
   const [customFrom, _setCustomFrom] = useState('')
   const useCustom = customFrom !== ''
 
   const queryParams = useCustom
-    ? { since: customFrom, ...(tagFilter ? { tag: tagFilter } : {}) }
-    : { days: parentDays, ...(tagFilter ? { tag: tagFilter } : {}) }
+    ? { since: customFrom, ...(tagFilter ? { tag: tagFilter } : {}), ...(devFilter ? { userId: devFilter } : {}) }
+    : { days: parentDays, ...(tagFilter ? { tag: tagFilter } : {}), ...(devFilter ? { userId: devFilter } : {}) }
 
   const { data: insights, isLoading } = useQuery({
     queryKey: ['intentInsights', queryParams],
@@ -1326,6 +1326,13 @@ export default function MissionControl() {
     refetchInterval: 30_000,
   })
 
+  // Users directory — for developer filter on Productivity/Analytics tabs
+  const { data: allUsers = [] } = useQuery({
+    queryKey: ['usersDirectory'],
+    queryFn: listUsersDirectory,
+    staleTime: 60_000,
+  })
+
   // Subscription usage alert — badge on Usage tab when any bucket >= 75%
   const { data: subUsage } = useQuery({
     queryKey: ['subscriptionUsage'],
@@ -1411,6 +1418,18 @@ export default function MissionControl() {
               )}
             </>
           )}
+          {['productivity', 'analytics'].includes(state.tab) && allUsers.length > 1 && (
+            <select
+              value={state.devFilter || ''}
+              onChange={e => updateState({ devFilter: e.target.value || undefined })}
+              className="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[10px] text-gray-300 cursor-pointer"
+            >
+              <option value="">All Developers</option>
+              {allUsers.map(u => (
+                <option key={u.id} value={u.id}>{u.displayName || u.email}</option>
+              ))}
+            </select>
+          )}
           <button
             onClick={() => updateState({ showInactive: !state.showInactive })}
             className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors cursor-pointer ${state.showInactive ? 'bg-gray-600/30 text-gray-300' : 'text-gray-600 hover:text-gray-400'}`}
@@ -1433,8 +1452,8 @@ export default function MissionControl() {
       {/* Tab content */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {state.tab === 'projects' && <ProjectsTab days={state.days} sortField={sortField} sortDir={sortDir} onSort={handleSort} tagFilter={state.tagFilter || ''} onTagFilter={(tag) => updateState({ tagFilter: tag })} showInactive={!!state.showInactive} />}
-        {state.tab === 'productivity' && <ProductivityTab tagFilter={state.tagFilter || ''} onTagFilter={(tag) => updateState({ tagFilter: tag })} days={state.days} />}
-        {state.tab === 'analytics' && <AnalyticsTab tagFilter={state.tagFilter || ''} days={state.days} />}
+        {state.tab === 'productivity' && <ProductivityTab tagFilter={state.tagFilter || ''} onTagFilter={(tag) => updateState({ tagFilter: tag })} days={state.days} devFilter={state.devFilter} />}
+        {state.tab === 'analytics' && <AnalyticsTab tagFilter={state.tagFilter || ''} days={state.days} devFilter={state.devFilter} />}
         {state.tab === 'usage' && <UsageTab />}
         {state.tab === 'archived' && <ArchivedTab />}
       </div>

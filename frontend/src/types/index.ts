@@ -365,6 +365,8 @@ export interface Plan {
 export interface Intent {
   id: string;
   projectCode: string;
+  userId?: string;
+  userName?: string;
   sessionIds: string[];
   title: string;
   description: string;

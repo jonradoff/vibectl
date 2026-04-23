@@ -323,9 +323,14 @@ export const listIntents = (params?: { projectId?: string; status?: string; cate
   ).toString() : '';
   return request<import('../types').Intent[]>(`/intents${qs}`);
 };
-export const getIntentProductivity = (days?: number) =>
-  request<import('../types').IntentProductivityStats[]>(`/intents/productivity${days ? `?days=${days}` : ''}`);
-export const getIntentInsights = (params?: { days?: number; since?: string; tag?: string }) => {
+export const getIntentProductivity = (days?: number, userId?: string) => {
+  const params: Record<string, string> = {};
+  if (days) params.days = String(days);
+  if (userId) params.userId = userId;
+  const qs = Object.keys(params).length ? '?' + new URLSearchParams(params).toString() : '';
+  return request<import('../types').IntentProductivityStats[]>(`/intents/productivity${qs}`);
+};
+export const getIntentInsights = (params?: { days?: number; since?: string; tag?: string; userId?: string }) => {
   const qs = params ? '?' + new URLSearchParams(
     Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])
   ).toString() : '';

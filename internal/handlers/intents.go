@@ -33,6 +33,7 @@ func (h *IntentHandler) Routes() chi.Router {
 	r.Get("/insights", h.Insights)
 	r.Post("/backfill", h.Backfill)
 	r.Get("/backfill-count", h.BackfillCount)
+	r.Post("/ingest", h.Ingest)
 	r.Get("/{id}", h.GetByID)
 	r.Patch("/{id}", h.PatchIntent)
 	r.Post("/{id}/link-pr", h.LinkPR)
@@ -43,6 +44,7 @@ func (h *IntentHandler) List(w http.ResponseWriter, r *http.Request) {
 	projectID := r.URL.Query().Get("projectId")
 	status := r.URL.Query().Get("status")
 	category := r.URL.Query().Get("category")
+	userID := r.URL.Query().Get("userId")
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	sinceStr := r.URL.Query().Get("since")
 	var since time.Time
@@ -56,7 +58,7 @@ func (h *IntentHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	intents, err := h.intentService.List(r.Context(), projectID, status, category, since, limit)
+	intents, err := h.intentService.List(r.Context(), projectID, status, category, userID, since, limit)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "LIST_FAILED")
 		return
@@ -119,9 +121,10 @@ func (h *IntentHandler) Productivity(w http.ResponseWriter, r *http.Request) {
 	if days <= 0 {
 		days = 7
 	}
+	userID := r.URL.Query().Get("userId")
 	since := time.Now().UTC().AddDate(0, 0, -days)
 
-	intents, err := h.intentService.List(r.Context(), "", "", "", since, 500)
+	intents, err := h.intentService.List(r.Context(), "", "", "", userID, since, 500)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "QUERY_FAILED")
 		return
@@ -170,6 +173,7 @@ func (h *IntentHandler) Productivity(w http.ResponseWriter, r *http.Request) {
 func (h *IntentHandler) Insights(w http.ResponseWriter, r *http.Request) {
 	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
 	tag := r.URL.Query().Get("tag")
+	userID := r.URL.Query().Get("userId")
 	var since time.Time
 	if sinceStr := r.URL.Query().Get("since"); sinceStr != "" {
 		since, _ = time.Parse("2006-01-02", sinceStr)
@@ -196,7 +200,7 @@ func (h *IntentHandler) Insights(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	allIntents, err := h.intentService.List(r.Context(), "", "", "", since, 1000)
+	allIntents, err := h.intentService.List(r.Context(), "", "", "", userID, since, 1000)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "QUERY_FAILED")
 		return
@@ -422,4 +426,32 @@ func (h *IntentHandler) Backfill(w http.ResponseWriter, r *http.Request) {
 		"remaining":  remaining,
 		"message":    fmt.Sprintf("backfilled %d sessions (%d remaining)", processed, remaining),
 	})
+}
+
+// Ingest accepts an intent pushed from a delegated instance. Deduplicates by sessionIDs.
+func (h *IntentHandler) Ingest(w http.ResponseWriter, r *http.Request) {
+	var intent models.Intent
+	if err := json.NewDecoder(r.Body).Decode(&intent); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid JSON", "INVALID_JSON")
+		return
+	}
+	if len(intent.SessionIDs) == 0 {
+		middleware.WriteError(w, http.StatusBadRequest, "sessionIds required", "VALIDATION_ERROR")
+		return
+	}
+	// Deduplicate: if any sessionID already exists in an intent, skip
+	for _, sid := range intent.SessionIDs {
+		existing, _ := h.intentService.GetBySessionID(r.Context(), sid)
+		if len(existing) > 0 {
+			middleware.WriteJSON(w, http.StatusConflict, map[string]string{"status": "duplicate"})
+			return
+		}
+	}
+	// Clear the ID so MongoDB generates a new one
+	intent.ID = bson.ObjectID{}
+	if err := h.intentService.Create(r.Context(), &intent); err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "INGEST_FAILED")
+		return
+	}
+	middleware.WriteJSON(w, http.StatusCreated, intent)
 }

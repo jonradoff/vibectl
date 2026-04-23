@@ -257,7 +257,7 @@ func (b *MongoBackend) ListIntents(ctx context.Context, projectID, status, categ
 	if days > 0 {
 		since = time.Now().UTC().AddDate(0, 0, -days)
 	}
-	return b.intents.List(ctx, projectID, status, category, since, limit)
+	return b.intents.List(ctx, projectID, status, category, "", since, limit)
 }
 
 func (b *MongoBackend) GetIntentByID(ctx context.Context, id string) (*models.Intent, error) {

@@ -18,6 +18,8 @@ type CodeDelta struct {
 	ID           bson.ObjectID  `json:"id" bson:"_id,omitempty"`
 	ProjectCode  string         `json:"projectCode,omitempty" bson:"projectCode,omitempty"`
 	SessionID    string         `json:"sessionId,omitempty" bson:"sessionId,omitempty"`
+	UserID       *bson.ObjectID `json:"userId,omitempty" bson:"userId,omitempty"`
+	UserName     string         `json:"userName,omitempty" bson:"userName,omitempty"`
 	LinesAdded   int64          `json:"linesAdded" bson:"linesAdded"`
 	LinesRemoved int64          `json:"linesRemoved" bson:"linesRemoved"`
 	BytesDelta   int64          `json:"bytesDelta" bson:"bytesDelta"`

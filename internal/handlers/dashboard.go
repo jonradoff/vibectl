@@ -277,7 +277,8 @@ func (h *DashboardHandler) Productivity(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	stats, err := h.codeDeltaService.GetProductivity(r.Context(), since)
+	userID := r.URL.Query().Get("userId")
+	stats, err := h.codeDeltaService.GetProductivity(r.Context(), since, userID)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "PRODUCTIVITY_FAILED")
 		return

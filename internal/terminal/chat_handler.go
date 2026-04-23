@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/jonradoff/vibectl/internal/models"
 )
 
 // ChatWSMessage is the envelope for chat WebSocket messages.
@@ -53,6 +54,10 @@ type ChatWebSocketHandler struct {
 	planResponseLogger PlanResponseLogger
 	codeDeltaSnapshot  CodeDeltaSnapshot
 	codeDeltaRecord    CodeDeltaRecord
+	// TokenVerifier verifies the ?token= query param on the WebSocket connection.
+	// When set, the user identity is threaded through to sessions and intents.
+	// Leave nil for standalone mode (user identity will be nil).
+	TokenVerifier TokenVerifier
 	// RoleChecker is an optional function called before starting a new chat session.
 	// If it returns role "none" or an error, the launch is rejected.
 	// Leave nil to skip the check (standalone mode).
@@ -102,10 +107,28 @@ func (h *ChatWebSocketHandler) SetCodeDeltaCallbacks(snapshot CodeDeltaSnapshot,
 
 // HandleConnection upgrades to WebSocket and handles chat I/O.
 func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.Request) {
+	// Optionally authenticate via ?token= query param for user attribution.
+	var connUser *models.User
+	if h.TokenVerifier != nil {
+		if token := r.URL.Query().Get("token"); token != "" {
+			u, err := h.TokenVerifier.Verify(r.Context(), token)
+			if err == nil && u != nil {
+				connUser = u
+			}
+		}
+	}
+
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error("chat websocket upgrade failed", "error", err)
 		return
+	}
+
+	// tagSession sets user identity on a newly created session for attribution.
+	tagSession := func(sess *ChatSession) {
+		if connUser != nil {
+			sess.SetUser(&connUser.ID, connUser.DisplayName)
+		}
 	}
 
 	slog.Info("chat websocket connection established", "remote", r.RemoteAddr)
@@ -365,6 +388,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 						)
 						// Fall through to start a new session
 					} else {
+						tagSession(sess)
 						activeProjectID = launch.ProjectCode
 
 						// Replay saved messages to the frontend
@@ -389,6 +413,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				sendJSON("error", map[string]string{"message": err.Error()})
 				continue
 			}
+			tagSession(sess)
 
 			activeProjectID = launch.ProjectCode
 			sendStatus("started")
@@ -519,6 +544,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				activeProjectID = ""
 				continue
 			}
+			tagSession(newSess)
 
 			sendStatus("restarted")
 			readerDone = startReader(newSess)
@@ -564,6 +590,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				activeProjectID = ""
 				continue
 			}
+			tagSession(newSess)
 
 			sendStatus("restarted")
 			readerDone = startReader(newSess)
@@ -659,6 +686,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				activeProjectID = ""
 				continue
 			}
+			tagSession(newSess)
 			activeProjectID = pid
 			sendStatus("restarted")
 			readerDone = startReader(newSess)
@@ -750,6 +778,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				activeProjectID = ""
 				continue
 			}
+			tagSession(newSess)
 			activeProjectID = pid
 			readerDone = startReader(newSess)
 			sendJSON("login_status", map[string]string{"status": "success", "message": "Logged in successfully"})

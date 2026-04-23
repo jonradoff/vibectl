@@ -27,6 +27,7 @@ func NewIntentService(db *mongo.Database) *IntentService {
 func (s *IntentService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "projectCode", Value: 1}, {Key: "completedAt", Value: -1}}},
+		{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "completedAt", Value: -1}}},
 		{Keys: bson.D{{Key: "status", Value: 1}}},
 		{Keys: bson.D{{Key: "category", Value: 1}}},
 		{Keys: bson.D{{Key: "extractedAt", Value: -1}}},
@@ -98,7 +99,7 @@ func (s *IntentService) ListByProject(ctx context.Context, projectCode string, s
 	return results, nil
 }
 
-func (s *IntentService) List(ctx context.Context, projectCode, status, category string, since time.Time, limit int) ([]models.Intent, error) {
+func (s *IntentService) List(ctx context.Context, projectCode, status, category, userID string, since time.Time, limit int) ([]models.Intent, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -115,6 +116,11 @@ func (s *IntentService) List(ctx context.Context, projectCode, status, category 
 	}
 	if category != "" {
 		filter = append(filter, bson.E{Key: "category", Value: category})
+	}
+	if userID != "" {
+		if oid, err := bson.ObjectIDFromHex(userID); err == nil {
+			filter = append(filter, bson.E{Key: "userId", Value: oid})
+		}
 	}
 	if !since.IsZero() {
 		filter = append(filter, bson.E{Key: "completedAt", Value: bson.D{{Key: "$gte", Value: since}}})

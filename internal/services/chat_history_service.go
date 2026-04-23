@@ -34,7 +34,7 @@ func (s *ChatHistoryService) EnsureIndexes(ctx context.Context) error {
 }
 
 // Archive stores a completed chat session in history.
-func (s *ChatHistoryService) Archive(ctx context.Context, projectCode, claudeSessionID string, messages []json.RawMessage, startedAt time.Time) error {
+func (s *ChatHistoryService) Archive(ctx context.Context, projectCode, claudeSessionID string, messages []json.RawMessage, startedAt time.Time, userID *bson.ObjectID, userName string) error {
 	if len(messages) == 0 {
 		return nil // nothing to archive
 	}
@@ -42,6 +42,8 @@ func (s *ChatHistoryService) Archive(ctx context.Context, projectCode, claudeSes
 	entry := models.ChatHistoryEntry{
 		ProjectCode:     projectCode,
 		ClaudeSessionID: claudeSessionID,
+		UserID:          userID,
+		UserName:        userName,
 		Messages:        messages,
 		MessageCount:    len(messages),
 		StartedAt:       startedAt,

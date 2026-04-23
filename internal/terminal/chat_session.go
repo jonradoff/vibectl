@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jonradoff/vibectl/internal/models"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // ChatSessionPersister is the persistence interface for active chat session state.
@@ -33,7 +34,7 @@ type ChatSessionPersister interface {
 
 // ChatHistoryArchiver is the persistence interface for completed chat session history.
 type ChatHistoryArchiver interface {
-	Archive(ctx context.Context, projectID, claudeSessionID string, messages []json.RawMessage, startedAt time.Time) error
+	Archive(ctx context.Context, projectID, claudeSessionID string, messages []json.RawMessage, startedAt time.Time, userID *bson.ObjectID, userName string) error
 }
 
 // ChatSession represents a claude code process running in stream-json mode.
@@ -41,8 +42,10 @@ type ChatSession struct {
 	ID          string
 	ProjectCode string
 	LocalPath   string
-	SessionID   string // Claude session ID from init event
-	TokenHash   string // SHA256 of OAuth token used — stable identity per login
+	SessionID   string         // Claude session ID from init event
+	TokenHash   string         // SHA256 of OAuth token used — stable identity per login
+	UserID      *bson.ObjectID // vibectl user who owns this session (nil in standalone)
+	UserName    string
 	StartedAt   time.Time
 	Cmd         *exec.Cmd
 	stdin       io.WriteCloser
@@ -281,6 +284,16 @@ func (m *ChatManager) SetSkipPermissions(skip bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.skipPermissions = skip
+}
+
+// GetSessionUser returns the userId and userName for an active session, or nil/"" if not found.
+func (m *ChatManager) GetSessionUser(projectID string) (*bson.ObjectID, string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if sess, ok := m.sessions[projectID]; ok {
+		return sess.UserID, sess.UserName
+	}
+	return nil, ""
 }
 
 // RemoveSession removes a session from the manager without killing or marking dead.
@@ -647,7 +660,7 @@ func (m *ChatManager) archiveSession(sess *ChatSession) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := m.ChatHistoryService.Archive(ctx, sess.ProjectCode, sess.SessionID, msgs, sess.StartedAt); err != nil {
+	if err := m.ChatHistoryService.Archive(ctx, sess.ProjectCode, sess.SessionID, msgs, sess.StartedAt, sess.UserID, sess.UserName); err != nil {
 		slog.Error("failed to archive chat session", "projectCode", sess.ProjectCode, "error", err)
 	} else {
 		slog.Info("chat session archived to history", "projectCode", sess.ProjectCode, "messages", len(msgs))
@@ -656,6 +669,8 @@ func (m *ChatManager) archiveSession(sess *ChatSession) {
 			entry := &models.ChatHistoryEntry{
 				ProjectCode:     sess.ProjectCode,
 				ClaudeSessionID: sess.SessionID,
+				UserID:          sess.UserID,
+				UserName:        sess.UserName,
 				Messages:        msgs,
 				MessageCount:    len(msgs),
 				StartedAt:       sess.StartedAt,
@@ -694,6 +709,12 @@ func (m *ChatManager) StartSession(projectID, localPath string) (*ChatSession, e
 
 	time.Sleep(100 * time.Millisecond)
 	return sess, nil
+}
+
+// SetUser associates a vibectl user with this session for attribution in intents/analytics.
+func (s *ChatSession) SetUser(userID *bson.ObjectID, userName string) {
+	s.UserID = userID
+	s.UserName = userName
 }
 
 // ResumeSession spawns a claude process that resumes a previous session by ID.

@@ -219,6 +219,7 @@ func main() {
 	if cfg.AnthropicKey != "" {
 		aiClient := agents.NewAIClient(cfg.AnthropicKey)
 		intentExtractor = services.NewIntentExtractor(intentService, codeDeltaService, claudeUsageService, aiClient)
+		intentExtractor.SetDelegation(delegationManager)
 	}
 
 	vibectlMdService := services.NewVibectlMdService(projectService, issueService, feedbackService, sessionService, decisionService, healthRecordService, config.Version)
@@ -286,6 +287,7 @@ func main() {
 		meta := bson.M{"fullText": text}
 		activityLogService.LogAsync("prompt_sent", "Sent prompt to Claude Code", projectID, snippet, meta)
 	})
+	chatWSHandler.TokenVerifier = authSessionService
 	chatWSHandler.SetPlanLoggers(
 		func(projectID, requestID, planText string) {
 			plan := &models.Plan{
@@ -449,9 +451,12 @@ func main() {
 				}
 			}
 
+			userID, userName := chatManager.GetSessionUser(projectID)
 			delta := &models.CodeDelta{
 				ProjectCode:  projectID,
 				SessionID:    sessionID,
+				UserID:       userID,
+				UserName:     userName,
 				LinesAdded:   totalAdded,
 				LinesRemoved: totalRemoved,
 				BytesDelta:   (totalAdded - totalRemoved) * 40,

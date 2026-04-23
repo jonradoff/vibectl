@@ -292,7 +292,8 @@ export default function ChatView({
   useEffect(() => {
     let aborted = false
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/ws/chat`
+    const token = getStoredToken()
+    const wsUrl = `${protocol}//${window.location.host}/ws/chat${token ? `?token=${encodeURIComponent(token)}` : ''}`
 
     const connect = () => {
       if (aborted) return

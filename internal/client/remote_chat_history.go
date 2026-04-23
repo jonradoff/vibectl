@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // RemoteChatHistoryService implements terminal.ChatHistoryArchiver by calling
@@ -25,11 +27,17 @@ func NewRemoteChatHistoryService(baseURL, apiKey string) *RemoteChatHistoryServi
 	}
 }
 
-func (s *RemoteChatHistoryService) Archive(ctx context.Context, projectID, claudeSessionID string, messages []json.RawMessage, startedAt time.Time) error {
+func (s *RemoteChatHistoryService) Archive(ctx context.Context, projectID, claudeSessionID string, messages []json.RawMessage, startedAt time.Time, userID *bson.ObjectID, userName string) error {
 	payload := map[string]any{
 		"claudeSessionId": claudeSessionID,
 		"messages":        messages,
 		"startedAt":       startedAt.UTC().Format(time.RFC3339),
+	}
+	if userID != nil {
+		payload["userId"] = userID.Hex()
+	}
+	if userName != "" {
+		payload["userName"] = userName
 	}
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(payload); err != nil {

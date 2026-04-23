@@ -1212,6 +1212,7 @@ function ProjectIntentsTab({ projectId }: { projectId: string }) {
                 <span className="text-[11px]">{statusIcons[intent.status] || ''}</span>
                 <span className="font-medium text-gray-300 flex-1 truncate">{intent.title}</span>
                 <span className={`rounded px-1 py-0 text-[9px] font-medium ${categoryColors[intent.category] || 'bg-gray-700/50 text-gray-400'}`}>{intent.category}</span>
+                {intent.userName && <span className="rounded bg-cyan-900/30 px-1 py-0 text-[9px] text-cyan-400">{intent.userName}</span>}
                 <span className="text-[10px] font-mono text-gray-500">{intent.size} ({intent.sizePoints}pt)</span>
               </button>
               {expandedId === intent.id && (

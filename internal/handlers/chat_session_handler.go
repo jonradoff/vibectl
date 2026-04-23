@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jonradoff/vibectl/internal/middleware"
 	"github.com/jonradoff/vibectl/internal/services"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // ChatSessionHandler exposes chat session state endpoints so client-mode instances
@@ -104,7 +105,15 @@ func (h *ChatSessionHandler) Archive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.chs.Archive(r.Context(), projectID, req.ClaudeSessionID, req.Messages, startedAt); err != nil {
+	// Extract user from auth context for attribution
+	var userID *bson.ObjectID
+	var userName string
+	if u := middleware.GetCurrentUser(r); u != nil {
+		userID = &u.ID
+		userName = u.DisplayName
+	}
+
+	if err := h.chs.Archive(r.Context(), projectID, req.ClaudeSessionID, req.Messages, startedAt, userID, userName); err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "ARCHIVE_ERROR")
 		return
 	}

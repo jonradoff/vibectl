@@ -1,10 +1,12 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -19,11 +21,20 @@ type AICompleter interface {
 	CompleteWithModel(ctx context.Context, prompt string, model string) (string, error)
 }
 
+// IntentDelegationPusher provides read-only delegation state for pushing intents to remote.
+type IntentDelegationPusher interface {
+	IsEnabled() bool
+	IsHealthy() bool
+	GetAPIKey() string
+	GetRemoteURL() string
+}
+
 type IntentExtractor struct {
 	intentService    *IntentService
 	codeDeltaService *CodeDeltaService
 	usageService     *ClaudeUsageService
 	aiClient         AICompleter
+	delegation       IntentDelegationPusher
 }
 
 func NewIntentExtractor(is *IntentService, cds *CodeDeltaService, us *ClaudeUsageService, ai AICompleter) *IntentExtractor {
@@ -32,6 +43,40 @@ func NewIntentExtractor(is *IntentService, cds *CodeDeltaService, us *ClaudeUsag
 		codeDeltaService: cds,
 		usageService:     us,
 		aiClient:         ai,
+	}
+}
+
+// SetDelegation sets the delegation pusher for sending intents to the remote server.
+func (e *IntentExtractor) SetDelegation(d IntentDelegationPusher) {
+	e.delegation = d
+}
+
+// pushIntentToRemote POSTs an intent to the remote server if delegation is active.
+func (e *IntentExtractor) pushIntentToRemote(intent *models.Intent) {
+	if e.delegation == nil || !e.delegation.IsEnabled() || !e.delegation.IsHealthy() {
+		return
+	}
+	body, err := json.Marshal(intent)
+	if err != nil {
+		slog.Error("intent push: marshal failed", "error", err)
+		return
+	}
+	remoteURL := e.delegation.GetRemoteURL() + "/api/v1/intents/ingest"
+	req, err := http.NewRequest("POST", remoteURL, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+e.delegation.GetAPIKey())
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Warn("intent push: remote request failed", "error", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		slog.Warn("intent push: remote returned error", "status", resp.StatusCode)
 	}
 }
 
@@ -80,6 +125,8 @@ func (e *IntentExtractor) ExtractFromSession(ctx context.Context, entry *models.
 		// Create a minimal intent to mark this session as analyzed so it's not re-processed
 		skip := &models.Intent{
 			ProjectCode: entry.ProjectCode,
+			UserID:      entry.UserID,
+			UserName:    entry.UserName,
 			SessionIDs:  []string{entry.ClaudeSessionID},
 			Title:      "(no extractable content)",
 			Status:     "abandoned",
@@ -178,6 +225,8 @@ func (e *IntentExtractor) ExtractFromSession(ctx context.Context, entry *models.
 
 		intent := &models.Intent{
 			ProjectCode:    entry.ProjectCode,
+			UserID:         entry.UserID,
+			UserName:       entry.UserName,
 			SessionIDs:     []string{entry.ClaudeSessionID},
 			Title:          ei.Title,
 			Description:    ei.Description,
@@ -201,6 +250,8 @@ func (e *IntentExtractor) ExtractFromSession(ctx context.Context, entry *models.
 		}
 		if err := e.intentService.Create(ctx, intent); err != nil {
 			slog.Error("failed to store intent", "title", ei.Title, "error", err)
+		} else {
+			go e.pushIntentToRemote(intent)
 		}
 	}
 

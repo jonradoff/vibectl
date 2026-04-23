@@ -23,6 +23,7 @@ func NewCodeDeltaService(db *mongo.Database) *CodeDeltaService {
 func (s *CodeDeltaService) EnsureIndexes(ctx context.Context) error {
 	_, err := s.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "projectCode", Value: 1}, {Key: "recordedAt", Value: -1}}},
+		{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "recordedAt", Value: -1}}},
 		{Keys: bson.D{{Key: "recordedAt", Value: -1}}},
 	})
 	return err
@@ -56,11 +57,17 @@ type ProjectProductivity struct {
 }
 
 // GetProductivity returns aggregated code delta stats per project for the given time range.
-func (s *CodeDeltaService) GetProductivity(ctx context.Context, since time.Time) ([]ProjectProductivity, error) {
+func (s *CodeDeltaService) GetProductivity(ctx context.Context, since time.Time, userID string) ([]ProjectProductivity, error) {
+	matchFilter := bson.D{
+		{Key: "recordedAt", Value: bson.D{{Key: "$gte", Value: since}}},
+	}
+	if userID != "" {
+		if oid, err := bson.ObjectIDFromHex(userID); err == nil {
+			matchFilter = append(matchFilter, bson.E{Key: "userId", Value: oid})
+		}
+	}
 	pipeline := bson.A{
-		bson.D{{Key: "$match", Value: bson.D{
-			{Key: "recordedAt", Value: bson.D{{Key: "$gte", Value: since}}},
-		}}},
+		bson.D{{Key: "$match", Value: matchFilter}},
 		bson.D{{Key: "$group", Value: bson.D{
 			{Key: "_id", Value: "$projectCode"},
 			{Key: "linesAdded", Value: bson.D{{Key: "$sum", Value: "$linesAdded"}}},

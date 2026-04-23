@@ -23,6 +23,9 @@ var localPrefixes = []string{
 	"/api/v1/detect-project-scripts",
 	// Dashboard stays local — it builds ProjectSummary from local project data
 	"/api/v1/dashboard",
+	// Intents stay local — extraction runs locally from chat sessions.
+	// Extracted intents are pushed to remote separately for team aggregation.
+	"/api/v1/intents",
 }
 
 // localExactPaths are paths that match exactly (not as prefixes).
