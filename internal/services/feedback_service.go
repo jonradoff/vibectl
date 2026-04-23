@@ -206,10 +206,14 @@ func (s *FeedbackService) Review(ctx context.Context, id string, req *models.Rev
 	}
 
 	now := time.Now().UTC()
-	update := bson.D{{Key: "$set", Value: bson.D{
+	setFields := bson.D{
 		{Key: "triageStatus", Value: status},
 		{Key: "reviewedAt", Value: now},
-	}}}
+	}
+	if req.DeveloperComment != "" {
+		setFields = append(setFields, bson.E{Key: "developerComment", Value: req.DeveloperComment})
+	}
+	update := bson.D{{Key: "$set", Value: setFields}}
 
 	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
 	var item models.FeedbackItem

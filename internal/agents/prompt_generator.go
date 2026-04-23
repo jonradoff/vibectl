@@ -27,6 +27,10 @@ func GeneratePrompt(projectName, projectCode string, items []models.FeedbackItem
 		b.WriteString(item.RawContent)
 		b.WriteString("\n</user-content>\n")
 
+		if item.DeveloperComment != "" {
+			b.WriteString(fmt.Sprintf("- Developer notes: %s\n", item.DeveloperComment))
+		}
+
 		if item.AIAnalysis != nil {
 			if item.AIAnalysis.Reasoning != "" {
 				b.WriteString(fmt.Sprintf("- AI Assessment: %s\n", item.AIAnalysis.Reasoning))

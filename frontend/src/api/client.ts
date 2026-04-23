@@ -427,7 +427,7 @@ export const reviewFeedback = (
   id: string,
   action: string,
   createIssue = false,
-  extras?: { issueTitle?: string; issueDescription?: string; issueType?: string; issuePriority?: string }
+  extras?: { issueTitle?: string; issueDescription?: string; issueType?: string; issuePriority?: string; developerComment?: string }
 ) =>
   request<FeedbackItem>(`/feedback/${id}/review`, {
     method: 'PATCH',

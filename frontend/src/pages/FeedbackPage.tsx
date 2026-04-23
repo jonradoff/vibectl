@@ -73,8 +73,8 @@ export default function FeedbackPage() {
   const projectByCode = new Map<string, Project>(projects.map((p) => [p.code, p]));
 
   const reviewMutation = useMutation({
-    mutationFn: ({ id, action, createIssue }: { id: string; action: string; createIssue?: boolean }) =>
-      reviewFeedback(id, action, createIssue),
+    mutationFn: ({ id, action, createIssue, developerComment }: { id: string; action: string; createIssue?: boolean; developerComment?: string }) =>
+      reviewFeedback(id, action, createIssue, developerComment ? { developerComment } : undefined),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['feedback'] });
     },
@@ -474,6 +474,15 @@ export default function FeedbackPage() {
           projectCode={selectedItem.projectCode || ''}
           projectName={selectedItem.projectCode ? (projectByCode.get(selectedItem.projectCode)?.name || selectedItem.projectCode) : ''}
           onClose={() => setSelectedItem(null)}
+          onAcceptWithComment={(comment, createIssue) => {
+            const currentId = selectedItem.id;
+            reviewMutation.mutate({ id: currentId, action: 'accept', createIssue, developerComment: comment }, {
+              onSuccess: () => {
+                const pending = feedback.filter((i: FeedbackItem) => (i.triageStatus === 'pending' || i.triageStatus === 'triaged') && i.id !== currentId);
+                setSelectedItem(pending.length > 0 ? pending[0] : null);
+              }
+            });
+          }}
           onAccept={(createIssue) => {
             const currentId = selectedItem.id;
             reviewMutation.mutate({ id: currentId, action: 'accept', createIssue }, {

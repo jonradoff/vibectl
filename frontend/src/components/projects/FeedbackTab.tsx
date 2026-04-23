@@ -29,8 +29,8 @@ export default function FeedbackTab({ projectId, projectCode }: FeedbackTabProps
   }
 
   const reviewMutation = useMutation({
-    mutationFn: ({ id, action, createIssue }: { id: string; action: string; createIssue?: boolean }) =>
-      reviewFeedback(id, action, createIssue ?? false),
+    mutationFn: ({ id, action, createIssue, extras }: { id: string; action: string; createIssue?: boolean; extras?: { developerComment?: string } }) =>
+      reviewFeedback(id, action, createIssue ?? false, extras),
     onSuccess: () => { invalidate(); setSelectedItem(null) },
   })
 
@@ -206,6 +206,15 @@ export default function FeedbackTab({ projectId, projectCode }: FeedbackTabProps
           item={selectedItem}
           projectCode={projectCode}
           onClose={() => setSelectedItem(null)}
+          onAcceptWithComment={(comment, createIssue) => {
+            const currentId = selectedItem.id
+            reviewMutation.mutate({ id: currentId, action: 'accept', createIssue, extras: { developerComment: comment } }, {
+              onSuccess: () => {
+                const remainingPending = pending.filter(i => i.id !== currentId)
+                setSelectedItem(remainingPending.length > 0 ? remainingPending[0] : null)
+              }
+            })
+          }}
           onAccept={(createIssue) => {
             const currentId = selectedItem.id
             reviewMutation.mutate({ id: currentId, action: 'accept', createIssue }, {
@@ -315,16 +324,19 @@ function FeedbackRow({ item, selected, onToggle, onClick, onTriage, isTriaging }
 
 // ─── Feedback Detail Modal ───────────────────────────────────────────────────
 
-export function FeedbackDetailModal({ item, projectCode, projectName, onClose, onAccept, onDismiss, isMutating, reviewProgress }: {
+export function FeedbackDetailModal({ item, projectCode, projectName, onClose, onAccept, onAcceptWithComment, onDismiss, isMutating, reviewProgress }: {
   item: FeedbackItem
   projectCode: string
   projectName?: string
   onClose: () => void
   onAccept: (createIssue: boolean) => void
+  onAcceptWithComment?: (comment: string, createIssue: boolean) => void
   onDismiss: () => void
   isMutating: boolean
   reviewProgress?: { current: number; total: number }
 }) {
+  const [showCommentInput, setShowCommentInput] = useState(false)
+  const [comment, setComment] = useState('')
   const isPending = item.triageStatus === 'pending' || item.triageStatus === 'triaged'
   const proposal = item.aiAnalysis?.proposedIssue
 
@@ -403,6 +415,16 @@ export function FeedbackDetailModal({ item, projectCode, projectName, onClose, o
             </div>
           )}
 
+          {/* Developer Comment */}
+          {item.developerComment && (
+            <div>
+              <label className="text-[10px] text-gray-500 uppercase tracking-wider">Developer Notes</label>
+              <div className="mt-1 rounded bg-cyan-900/20 border border-cyan-700/30 p-3 text-xs text-cyan-200 whitespace-pre-wrap">
+                {item.developerComment}
+              </div>
+            </div>
+          )}
+
           {/* AI Analysis */}
           {proposal && (
             <div>
@@ -422,7 +444,45 @@ export function FeedbackDetailModal({ item, projectCode, projectName, onClose, o
           )}
         </div>
 
+        {/* Comment input (shown when "Accept with Comments" is clicked) */}
+        {showCommentInput && (
+          <div className="pt-3 border-t border-gray-700/40 space-y-2">
+            <label className="text-[10px] text-gray-400 uppercase tracking-wider">Developer Notes</label>
+            <textarea
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder="Add context, clarification, or implementation hints for Claude Code..."
+              className="w-full bg-gray-800/60 border border-gray-700/40 rounded p-2 text-xs text-gray-200 resize-none focus:outline-none focus:border-cyan-600/50"
+              rows={3}
+              autoFocus
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={() => { onAcceptWithComment?.(comment, true); setShowCommentInput(false) }}
+                disabled={isMutating || !comment.trim()}
+                className="rounded bg-green-700/60 px-3 py-1.5 text-xs text-green-200 hover:bg-green-700 disabled:opacity-50 transition-colors"
+              >
+                {isMutating ? 'Saving...' : 'Accept + Issue'}
+              </button>
+              <button
+                onClick={() => { onAcceptWithComment?.(comment, false); setShowCommentInput(false) }}
+                disabled={isMutating || !comment.trim()}
+                className="rounded bg-green-900/40 px-3 py-1.5 text-xs text-green-300 hover:bg-green-900/60 disabled:opacity-50 transition-colors"
+              >
+                Accept
+              </button>
+              <button
+                onClick={() => { setShowCommentInput(false); setComment('') }}
+                className="rounded bg-gray-700/50 px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Actions */}
+        {!showCommentInput && (
         <div className="flex gap-2 pt-3 border-t border-gray-700/40">
           {isPending && (
             <>
@@ -441,6 +501,13 @@ export function FeedbackDetailModal({ item, projectCode, projectName, onClose, o
                 Accept
               </button>
               <button
+                onClick={() => setShowCommentInput(true)}
+                disabled={isMutating}
+                className="rounded bg-cyan-900/40 px-3 py-1.5 text-xs text-cyan-300 hover:bg-cyan-900/60 disabled:opacity-50 transition-colors"
+              >
+                Accept with Comments
+              </button>
+              <button
                 onClick={onDismiss}
                 disabled={isMutating}
                 className="rounded bg-gray-700/50 px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-700 disabled:opacity-50 transition-colors"
@@ -456,6 +523,7 @@ export function FeedbackDetailModal({ item, projectCode, projectName, onClose, o
             Exit Review
           </button>
         </div>
+        )}
       </div>
     </div>
   )

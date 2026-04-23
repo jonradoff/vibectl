@@ -181,6 +181,7 @@ export interface FeedbackItem {
   linkedIssueKey?: string;
   metadata?: Record<string, unknown>;
   submittedViaKey?: string;
+  developerComment?: string;
   promptSubmittedAt?: string;
   promptBatchId?: string;
 }

@@ -46,6 +46,7 @@ type FeedbackItem struct {
 	LinkedIssueKey    string                 `json:"linkedIssueKey,omitempty" bson:"linkedIssueKey,omitempty"`
 	Metadata          map[string]interface{} `json:"metadata,omitempty" bson:"metadata,omitempty"`       // structured context from external apps
 	SubmittedViaKey   string                 `json:"submittedViaKey,omitempty" bson:"submittedViaKey,omitempty"` // API key name that authorized this submission
+	DeveloperComment  string                 `json:"developerComment,omitempty" bson:"developerComment,omitempty"`   // developer notes added during accept-with-comments
 	PromptSubmittedAt *time.Time             `json:"promptSubmittedAt,omitempty" bson:"promptSubmittedAt,omitempty"` // when feedback was dispatched to Claude Code
 	PromptBatchID     string                 `json:"promptBatchId,omitempty" bson:"promptBatchId,omitempty"`        // links to the prompt batch that included this item
 }
@@ -62,8 +63,9 @@ type CreateFeedbackRequest struct {
 }
 
 type ReviewFeedbackRequest struct {
-	Action      string `json:"action"` // "accept" or "dismiss"
-	CreateIssue bool   `json:"createIssue,omitempty"`
+	Action           string `json:"action"` // "accept" or "dismiss"
+	CreateIssue      bool   `json:"createIssue,omitempty"`
+	DeveloperComment string `json:"developerComment,omitempty"` // developer notes to include in prompt
 	// Manual overrides when no AI proposal exists
 	IssueTitle       string `json:"issueTitle,omitempty"`
 	IssueDescription string `json:"issueDescription,omitempty"`
