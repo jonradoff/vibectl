@@ -39,9 +39,11 @@ The default mode. Everything runs on one machine against one MongoDB instance. Y
 
 ### Server (Multi-User)
 
-A production deployment (typically on Fly.io or similar) that multiple team members connect to via the web UI. Supports GitHub OAuth for team login, per-project role-based access, and shared data across all users.
+A production deployment (typically on Fly.io or similar) that multiple team members connect to via the web UI. Supports GitHub OAuth for team login, per-project role-based access, and shared data across all users. Handles issue tracking, feedback, health monitoring, analytics, and project management.
 
-**Best for:** Teams where everyone accesses the same VibeCtl instance through a browser. Claude Code sessions run on the server.
+**Note:** Claude Code sessions do not run on the server — they require local filesystem access. When accessing the server directly, the Claude Code tab on project cards explains how to set up a local client instance that connects to the server. Use **client mode** or **dev standalone with delegation** for Claude Code access.
+
+**Best for:** Central hub for team project data, issue tracking, feedback triage, and analytics. Team members connect local instances for Claude Code.
 
 **Setup:** Deploy to Fly.io (or any Docker host), configure `MONGODB_URI`, `BASE_URL`, GitHub OAuth credentials, and `ANTHROPIC_API_KEY`.
 
@@ -73,8 +75,8 @@ When delegation is off, the instance is fully isolated — identical to standalo
 
 | Capability | Standalone | Server | Client | Dev Standalone + Delegation |
 |-----------|-----------|--------|--------|---------------------------|
-| Local Claude Code sessions | Yes | Yes (on server) | Yes | Yes |
-| Local filesystem access | Yes | No (server fs) | Yes | Yes |
+| Local Claude Code sessions | Yes | No (use client mode) | Yes | Yes |
+| Local filesystem access | Yes | No | Yes | Yes |
 | Shared team data | No | Yes | Yes | Yes (when delegation on) |
 | Works offline | Yes | No | No | Yes (delegation off) |
 | Own database | Yes | Yes | No | Yes |
