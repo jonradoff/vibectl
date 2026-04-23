@@ -92,16 +92,16 @@ export default function FeedbackPage() {
     onSuccess: (data) => setPromptData(data),
   });
 
-  // Compute which projects have accepted-unsubmitted feedback
+  // Compute which projects have accepted-unsubmitted feedback (from full list, not filtered view)
   const projectsWithAccepted = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const f of feedback) {
+    for (const f of rawFeedback) {
       if (f.triageStatus === 'accepted' && !f.promptSubmittedAt && f.projectCode) {
         counts.set(f.projectCode, (counts.get(f.projectCode) || 0) + 1);
       }
     }
     return counts;
-  }, [feedback]);
+  }, [rawFeedback]);
 
   const totalAcceptedUnsubmitted = Array.from(projectsWithAccepted.values()).reduce((a, b) => a + b, 0);
 

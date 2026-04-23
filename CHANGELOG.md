@@ -9,7 +9,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Feedback page defaults to "Needs Review"**: Only shows pending and triaged items by default, acting as an actionable review queue rather than a full history dump. "All Statuses" and individual status filters still available in the dropdown.
 
 ### Fixed
-- **Fullscreen Claude Code output continuity**: Toggling fullscreen during active streaming no longer loses scroll position or stops auto-scrolling. Output continues seamlessly as the DOM re-parents via `createPortal`.
+- **Fullscreen WebSocket persistence**: Toggling fullscreen no longer kills the Claude Code WebSocket connection. WebSocket connections are cached at module level and reattached on remount, preserving streaming output and session state.
+- **Feedback prompt visibility in chat**: Prompts dispatched from the feedback pipeline now reliably appear in the chat message history. Fixed race condition where the message was sent to Claude but not rendered in the UI due to replay timing. External messages now check replay state before sending, and the queue flush path adds messages to the display array.
+- **Generate Prompt button with default filter**: Button now counts accepted-unsubmitted items from the full feedback list, not the filtered view, so it appears even when the "Needs Review" filter is active.
 
 ---
 

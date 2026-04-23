@@ -116,6 +116,10 @@ interface ToolUseBlock {
 
 type ContentBlock = TextBlock | ToolUseBlock
 
+// Persist WebSocket connections across fullscreen remounts so they don't disconnect.
+// Keyed by projectCode. Cleaned up only when the WS closes naturally.
+const persistentWs = new Map<string, WebSocket>()
+
 export default function ChatView({
   projectId,
   projectCode,
@@ -296,23 +300,53 @@ export default function ChatView({
     }
   }, [awaitingResult, onActivityChange])
 
-  // WebSocket connection
+  // WebSocket connection — persists across fullscreen remounts via module-level cache.
   useEffect(() => {
     let aborted = false
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const token = getStoredToken()
     const wsUrl = `${protocol}//${window.location.host}/ws/chat${token ? `?token=${encodeURIComponent(token)}` : ''}`
 
-    const connect = () => {
+    // Reattach handlers to an existing WS if it survived a fullscreen remount
+    const existingWs = persistentWs.get(projectCode)
+    if (existingWs && existingWs.readyState === WebSocket.OPEN) {
+      wsRef.current = existingWs
+      // Reattach message handler (the old one was from the previous mount)
+      existingWs.onmessage = (event) => {
+        if (aborted) return
+        try { handleEvent(JSON.parse(event.data)) } catch { /* ignore */ }
+      }
+      existingWs.onclose = () => {
+        if (aborted) return
+        persistentWs.delete(projectCode)
+        setStatus('disconnected')
+        onStatusChange?.('disconnected')
+        onActivityChange?.(false)
+        reconnectTimer.current = setTimeout(connect, 3000)
+      }
+      existingWs.onerror = () => {
+        if (aborted) return
+        setStatus('error')
+        onStatusChange?.('error')
+      }
+      // Don't clear messages — they're still valid from before the remount
+      return () => {
+        aborted = true
+        // Don't close — just detach. The WS stays in persistentWs for reattach.
+      }
+    }
+
+    function connect() {
       if (aborted) return
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
+      persistentWs.set(projectCode, ws)
 
       setStatus('connecting')
       onStatusChange?.('connecting')
 
       ws.onopen = () => {
-        if (aborted) { ws.close(); return }
+        if (aborted) { ws.close(); persistentWs.delete(projectCode); return }
         // Suppress scroll during replay
         isReplayingRef.current = true
         sessionStartedAtRef.current = new Date().toISOString()
@@ -342,6 +376,7 @@ export default function ChatView({
       }
 
       ws.onclose = () => {
+        persistentWs.delete(projectCode)
         if (aborted) return
         setStatus('disconnected')
         onStatusChange?.('disconnected')
@@ -361,10 +396,8 @@ export default function ChatView({
     return () => {
       aborted = true
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
-      }
+      // Don't close the WS on unmount — keep it in persistentWs for reattach.
+      // It will be cleaned up when it closes naturally or on a new connect().
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectCode, localPath])
@@ -392,10 +425,13 @@ export default function ChatView({
             const queued = pendingExternalRef.current.splice(0)
             setTimeout(() => {
               for (const text of queued) {
+                setMessages((prev) => [...prev, { role: 'user' as const, text }])
                 if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                   wsRef.current.send(JSON.stringify({ type: 'user_message', data: { text } }))
                 }
               }
+              userScrolledUpRef.current = false
+              scrollToBottom(true)
             }, 300)
           }
         }
@@ -891,22 +927,26 @@ export default function ChatView({
   }, [inputText, executeSlashCommand])
 
   // Listen for external "send to this project" events (from feedback prompt dispatch, Modules tab post-op)
+  // Always queue — the flush happens after session startup/replay completes, ensuring the
+  // message appears in the right place and doesn't get cleared by replay.
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { projectCode: string; text: string }
       if (detail.projectCode !== projectId) return
-      // Inject as a user message
-      setMessages((prev) => [...prev, { role: 'user', text: detail.text }])
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      // If session is fully ready (not replaying), send immediately
+      if (!isReplayingRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        setMessages((prev) => [...prev, { role: 'user', text: detail.text }])
         wsRef.current.send(JSON.stringify({ type: 'user_message', data: { text: detail.text } }))
+        userScrolledUpRef.current = false
+        requestAnimationFrame(() => scrollToBottom(true))
       } else {
-        // Queue for when WS connects (e.g., project card just opened)
+        // Queue for after replay completes
         pendingExternalRef.current.push(detail.text)
       }
     }
     window.addEventListener('vibectl:send-to-project', handler)
     return () => window.removeEventListener('vibectl:send-to-project', handler)
-  }, [projectId])
+  }, [projectId, scrollToBottom])
 
   const handlePlanResponse = useCallback((requestId: string, accept: boolean, feedback?: string) => {
     const response = accept

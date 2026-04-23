@@ -591,6 +591,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
     </div>
   )
 
+  // Fullscreen uses a portal to escape the grid's CSS transform containment.
   return (
     <>
       {isFullscreen ? createPortal(cardContent, document.body) : cardContent}
