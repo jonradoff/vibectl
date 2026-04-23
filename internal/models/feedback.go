@@ -43,9 +43,11 @@ type FeedbackItem struct {
 	AIAnalysis      *AIAnalysis            `json:"aiAnalysis,omitempty" bson:"aiAnalysis,omitempty"`
 	TriagedAt       *time.Time             `json:"triagedAt,omitempty" bson:"triagedAt,omitempty"`
 	ReviewedAt      *time.Time             `json:"reviewedAt,omitempty" bson:"reviewedAt,omitempty"`
-	LinkedIssueKey  string                 `json:"linkedIssueKey,omitempty" bson:"linkedIssueKey,omitempty"`
-	Metadata        map[string]interface{} `json:"metadata,omitempty" bson:"metadata,omitempty"`       // structured context from external apps
-	SubmittedViaKey string                 `json:"submittedViaKey,omitempty" bson:"submittedViaKey,omitempty"` // API key name that authorized this submission
+	LinkedIssueKey    string                 `json:"linkedIssueKey,omitempty" bson:"linkedIssueKey,omitempty"`
+	Metadata          map[string]interface{} `json:"metadata,omitempty" bson:"metadata,omitempty"`       // structured context from external apps
+	SubmittedViaKey   string                 `json:"submittedViaKey,omitempty" bson:"submittedViaKey,omitempty"` // API key name that authorized this submission
+	PromptSubmittedAt *time.Time             `json:"promptSubmittedAt,omitempty" bson:"promptSubmittedAt,omitempty"` // when feedback was dispatched to Claude Code
+	PromptBatchID     string                 `json:"promptBatchId,omitempty" bson:"promptBatchId,omitempty"`        // links to the prompt batch that included this item
 }
 
 type CreateFeedbackRequest struct {

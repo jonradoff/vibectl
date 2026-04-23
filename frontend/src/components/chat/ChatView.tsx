@@ -211,6 +211,7 @@ export default function ChatView({
   const [creatingDir, setCreatingDir] = useState(false)
 
   const wsRef = useRef<WebSocket | null>(null)
+  const pendingExternalRef = useRef<string[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const loginPkceRef = useRef<{ authUrl: string; codeVerifier: string; clientId: string; redirectUri: string; state: string } | null>(null)
@@ -379,6 +380,17 @@ export default function ChatView({
           compactingRef.current = false
           setExitError(null)
           setReplayDone(n => n + 1)
+          // Flush any externally queued messages (e.g., from feedback prompt dispatch)
+          if (pendingExternalRef.current.length > 0) {
+            const queued = pendingExternalRef.current.splice(0)
+            setTimeout(() => {
+              for (const text of queued) {
+                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(JSON.stringify({ type: 'user_message', data: { text } }))
+                }
+              }
+            }, 300)
+          }
         }
         if (s === 'exited') {
           onActivityChange?.(false)
@@ -871,7 +883,7 @@ export default function ChatView({
     inputRef.current?.focus()
   }, [inputText, executeSlashCommand])
 
-  // Listen for external "send to this project" events (from Modules tab post-op)
+  // Listen for external "send to this project" events (from feedback prompt dispatch, Modules tab post-op)
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { projectCode: string; text: string }
@@ -880,6 +892,9 @@ export default function ChatView({
       setMessages((prev) => [...prev, { role: 'user', text: detail.text }])
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: 'user_message', data: { text: detail.text } }))
+      } else {
+        // Queue for when WS connects (e.g., project card just opened)
+        pendingExternalRef.current.push(detail.text)
       }
     }
     window.addEventListener('vibectl:send-to-project', handler)

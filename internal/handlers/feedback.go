@@ -25,6 +25,7 @@ type FeedbackHandler struct {
 	projectService     *services.ProjectService
 	activityLogService *services.ActivityLogService
 	webhookService     *services.WebhookService
+	promptBatchService *services.PromptBatchService
 	bus                *events.Bus
 }
 
@@ -38,6 +39,7 @@ func NewFeedbackHandler(
 	ps *services.ProjectService,
 	als *services.ActivityLogService,
 	ws *services.WebhookService,
+	pbs *services.PromptBatchService,
 	bus *events.Bus,
 ) *FeedbackHandler {
 	return &FeedbackHandler{
@@ -50,6 +52,7 @@ func NewFeedbackHandler(
 		projectService:     ps,
 		activityLogService: als,
 		webhookService:     ws,
+		promptBatchService: pbs,
 		bus:                bus,
 	}
 }
@@ -64,6 +67,8 @@ func (h *FeedbackHandler) FeedbackRoutes() chi.Router {
 	r.Post("/{id}/triage", h.TriggerTriage)
 	r.Post("/triage-batch", h.TriggerTriageBatch)
 	r.Patch("/{id}/review", h.Review)
+	r.Post("/generate-prompt", h.GeneratePrompt)
+	r.Post("/submit-prompt", h.SubmitPrompt)
 	return r
 }
 
@@ -516,4 +521,112 @@ func (h *FeedbackHandler) createIssueFromFeedback(ctx context.Context, item *mod
 	_ = h.feedbackService.LinkToIssue(ctx, item.ID.Hex(), issue.IssueKey)
 
 	return issue
+}
+
+// GeneratePrompt compiles accepted-but-unsubmitted feedback for a project into a structured prompt.
+func (h *FeedbackHandler) GeneratePrompt(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ProjectCode string `json:"projectCode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ProjectCode == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "projectCode is required", "VALIDATION_ERROR")
+		return
+	}
+
+	project, err := h.projectService.GetByCode(r.Context(), req.ProjectCode)
+	if err != nil || project == nil {
+		middleware.WriteError(w, http.StatusNotFound, "project not found", "PROJECT_NOT_FOUND")
+		return
+	}
+
+	items, err := h.feedbackService.ListAcceptedUnsubmitted(r.Context(), req.ProjectCode)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "QUERY_FAILED")
+		return
+	}
+	if len(items) == 0 {
+		middleware.WriteError(w, http.StatusBadRequest, "no accepted feedback to compile", "NO_ITEMS")
+		return
+	}
+
+	// Create the prompt batch record
+	feedbackIDs := make([]string, len(items))
+	for i, item := range items {
+		feedbackIDs[i] = item.ID.Hex()
+	}
+
+	batch := &models.PromptBatch{
+		ProjectCode: req.ProjectCode,
+		FeedbackIDs: feedbackIDs,
+		Status:      "dispatched",
+	}
+	if u := middleware.GetCurrentUser(r); u != nil {
+		batch.CreatedBy = u.DisplayName
+	}
+	if err := h.promptBatchService.Create(r.Context(), batch); err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "BATCH_CREATE_FAILED")
+		return
+	}
+
+	// Generate the prompt
+	promptText := agents.GeneratePrompt(project.Name, project.Code, items, batch.ID.Hex())
+	batch.PromptText = promptText
+
+	// Safety scan the raw feedback content
+	var allContent strings.Builder
+	for _, item := range items {
+		allContent.WriteString(item.RawContent)
+		allContent.WriteString("\n")
+	}
+	warnings := agents.ScanPrompt(allContent.String())
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"prompt":      promptText,
+		"warnings":    warnings,
+		"feedbackIds": feedbackIDs,
+		"batchId":     batch.ID.Hex(),
+	})
+}
+
+// SubmitPrompt marks feedback items as submitted and finalizes the prompt batch.
+func (h *FeedbackHandler) SubmitPrompt(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		BatchID     string `json:"batchId"`
+		ProjectCode string `json:"projectCode"`
+		PromptText  string `json:"promptText"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.BatchID == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "batchId is required", "VALIDATION_ERROR")
+		return
+	}
+
+	batch, err := h.promptBatchService.GetByID(r.Context(), req.BatchID)
+	if err != nil || batch == nil {
+		middleware.WriteError(w, http.StatusNotFound, "batch not found", "BATCH_NOT_FOUND")
+		return
+	}
+
+	// Mark all feedback items in this batch as submitted
+	count, err := h.feedbackService.MarkPromptSubmitted(r.Context(), batch.FeedbackIDs, req.BatchID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "SUBMIT_FAILED")
+		return
+	}
+
+	// Activity log
+	if h.activityLogService != nil {
+		u := middleware.GetCurrentUser(r)
+		msg := fmt.Sprintf("Dispatched %d feedback items to Claude Code", count)
+		if u != nil {
+			h.activityLogService.LogAsyncWithUser("feedback_prompt_dispatched", msg, batch.ProjectCode, &u.ID, u.DisplayName, "", nil)
+		} else {
+			h.activityLogService.LogAsync("feedback_prompt_dispatched", msg, batch.ProjectCode, "", nil)
+		}
+	}
+
+	h.bus.Publish(events.Event{Type: "feedback.prompt_submitted", ProjectCode: batch.ProjectCode})
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"submitted": count,
+	})
 }

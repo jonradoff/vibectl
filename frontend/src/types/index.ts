@@ -181,6 +181,21 @@ export interface FeedbackItem {
   linkedIssueKey?: string;
   metadata?: Record<string, unknown>;
   submittedViaKey?: string;
+  promptSubmittedAt?: string;
+  promptBatchId?: string;
+}
+
+export interface SafetyWarning {
+  severity: 'caution' | 'danger';
+  pattern: string;
+  description: string;
+}
+
+export interface GeneratePromptResponse {
+  prompt: string;
+  warnings: SafetyWarning[];
+  feedbackIds: string[];
+  batchId: string;
 }
 
 export interface SessionLog {

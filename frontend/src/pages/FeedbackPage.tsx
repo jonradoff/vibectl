@@ -1,9 +1,10 @@
 import { Fragment, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { listFeedback, reviewFeedback, listProjects, triageAllPending } from '../api/client';
-import type { FeedbackItem, Project, TriageStatus } from '../types';
+import { listFeedback, reviewFeedback, listProjects, triageAllPending, generateFeedbackPrompt } from '../api/client';
+import type { FeedbackItem, Project, TriageStatus, GeneratePromptResponse } from '../types';
 import FeedbackForm from '../components/feedback/FeedbackForm';
+import PromptReviewModal from '../components/feedback/PromptReviewModal';
 import { FeedbackDetailModal } from '../components/projects/FeedbackTab';
 
 const triageStatusColors: Record<TriageStatus, string> = {
@@ -42,6 +43,7 @@ export default function FeedbackPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<FeedbackItem | null>(null);
   const [showSubmitForm, setShowSubmitForm] = useState(false);
+  const [promptData, setPromptData] = useState<GeneratePromptResponse | null>(null);
 
   const feedbackParams: Record<string, string> = {};
   if (projectFilter !== 'all') feedbackParams.projectCode = projectFilter;
@@ -75,6 +77,15 @@ export default function FeedbackPage() {
     },
   });
 
+  const generatePromptMutation = useMutation({
+    mutationFn: () => generateFeedbackPrompt(projectFilter),
+    onSuccess: (data) => setPromptData(data),
+  });
+
+  const acceptedUnsubmitted = feedback.filter(
+    (f: FeedbackItem) => f.triageStatus === 'accepted' && !f.promptSubmittedAt
+  );
+
   const sourceTypes = [...new Set(feedback.map((f) => f.sourceType))];
 
   return (
@@ -102,6 +113,15 @@ export default function FeedbackPage() {
           >
             {triageMutation.isPending ? 'Analyzing...' : 'Analyze All Pending'}
           </button>
+          {projectFilter !== 'all' && acceptedUnsubmitted.length > 0 && (
+            <button
+              onClick={() => generatePromptMutation.mutate()}
+              disabled={generatePromptMutation.isPending}
+              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-500 text-sm font-medium disabled:opacity-50"
+            >
+              {generatePromptMutation.isPending ? 'Generating...' : `Generate Prompt (${acceptedUnsubmitted.length})`}
+            </button>
+          )}
           </div>
         </div>
 
@@ -323,6 +343,20 @@ export default function FeedbackPage() {
       </div>
 
       {/* Feedback detail modal with continuous review */}
+      {promptData && projectFilter !== 'all' && (
+        <PromptReviewModal
+          prompt={promptData.prompt}
+          warnings={promptData.warnings}
+          feedbackIds={promptData.feedbackIds}
+          batchId={promptData.batchId}
+          projectCode={projectFilter}
+          projectId={projectByCode.get(projectFilter)?.id || ''}
+          projectName={projectByCode.get(projectFilter)?.name || projectFilter}
+          onClose={() => setPromptData(null)}
+          onSubmitted={() => queryClient.invalidateQueries({ queryKey: ['feedback'] })}
+        />
+      )}
+
       {selectedItem && createPortal(
         <FeedbackDetailModal
           item={selectedItem}

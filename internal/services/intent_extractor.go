@@ -96,6 +96,7 @@ type sessionSummary struct {
 	HasPR          bool     `json:"hasPR"`
 	BranchName     string   `json:"branchName"`
 	PromptCount    int      `json:"promptCount"`
+	PromptBatchID  string   `json:"-"` // extracted from <!-- prompt-batch:ID --> marker in user messages
 }
 
 // extractedIntent is the JSON structure expected from Haiku.
@@ -244,6 +245,7 @@ func (e *IntentExtractor) ExtractFromSession(ctx context.Context, entry *models.
 			WallClockSecs:  wallClock,
 			CommitCount:    boolToInt(summary.HasCommits),
 			BranchName:     summary.BranchName,
+			PromptBatchID:  summary.PromptBatchID,
 			AnalysisModel:  "claude-haiku-4-5-20251001",
 			StartedAt:      entry.StartedAt,
 			CompletedAt:    entry.EndedAt,
@@ -320,6 +322,15 @@ func (e *IntentExtractor) buildSummary(ctx context.Context, entry *models.ChatHi
 					if tc.Type == "text" && tc.Text != "" {
 						s.UserPrompts = append(s.UserPrompts, truncate(tc.Text, 500))
 						s.PromptCount++
+						// Detect feedback prompt batch marker
+						if s.PromptBatchID == "" {
+							if idx := strings.Index(tc.Text, "<!-- prompt-batch:"); idx >= 0 {
+								start := idx + len("<!-- prompt-batch:")
+								if end := strings.Index(tc.Text[start:], " -->"); end >= 0 {
+									s.PromptBatchID = tc.Text[start : start+end]
+								}
+							}
+						}
 					}
 				}
 			}

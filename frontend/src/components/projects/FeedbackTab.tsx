@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { listProjectFeedback, createFeedback, reviewFeedback, bulkReviewFeedback, triggerTriage, triggerTriageBatch } from '../../api/client'
-import type { FeedbackItem } from '../../types'
+import { listProjectFeedback, createFeedback, reviewFeedback, bulkReviewFeedback, triggerTriage, triggerTriageBatch, generateFeedbackPrompt } from '../../api/client'
+import type { FeedbackItem, GeneratePromptResponse } from '../../types'
+import PromptReviewModal from '../feedback/PromptReviewModal'
 
 interface FeedbackTabProps {
   projectId: string
@@ -14,6 +15,7 @@ export default function FeedbackTab({ projectId, projectCode }: FeedbackTabProps
   const [showAdd, setShowAdd] = useState(false)
   const [selectedItem, setSelectedItem] = useState<FeedbackItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [promptData, setPromptData] = useState<GeneratePromptResponse | null>(null)
 
   const { data: items = [], isLoading } = useQuery({
     queryKey: ['feedback', projectId],
@@ -47,8 +49,14 @@ export default function FeedbackTab({ projectId, projectCode }: FeedbackTabProps
     onSuccess: invalidate,
   })
 
+  const generatePromptMutation = useMutation({
+    mutationFn: () => generateFeedbackPrompt(projectCode),
+    onSuccess: (data) => setPromptData(data),
+  })
+
   const pending = items.filter((i) => i.triageStatus === 'pending' || i.triageStatus === 'triaged')
   const accepted = items.filter((i) => i.triageStatus === 'accepted')
+  const acceptedUnsubmitted = accepted.filter((i) => !i.promptSubmittedAt)
   const dismissed = items.filter((i) => i.triageStatus === 'dismissed')
 
   const toggleSelect = (id: string) => {
@@ -90,6 +98,15 @@ export default function FeedbackTab({ projectId, projectCode }: FeedbackTabProps
             className="rounded bg-purple-700/50 px-2 py-0.5 text-[10px] text-purple-300 hover:bg-purple-700 disabled:opacity-50 transition-colors"
           >
             {triageBatchMutation.isPending ? 'Triaging...' : `AI Triage All (${pending.length})`}
+          </button>
+        )}
+        {acceptedUnsubmitted.length > 0 && (
+          <button
+            onClick={() => generatePromptMutation.mutate()}
+            disabled={generatePromptMutation.isPending}
+            className="rounded bg-green-700/50 px-2 py-0.5 text-[10px] text-green-300 hover:bg-green-700 disabled:opacity-50 transition-colors"
+          >
+            {generatePromptMutation.isPending ? 'Generating...' : `Generate Prompt (${acceptedUnsubmitted.length})`}
           </button>
         )}
         {selectedIds.size > 0 && (
@@ -170,6 +187,20 @@ export default function FeedbackTab({ projectId, projectCode }: FeedbackTabProps
       )}
 
       {/* Feedback detail modal — continuous review mode */}
+      {promptData && (
+        <PromptReviewModal
+          prompt={promptData.prompt}
+          warnings={promptData.warnings}
+          feedbackIds={promptData.feedbackIds}
+          batchId={promptData.batchId}
+          projectCode={projectCode}
+          projectId={projectId}
+          projectName={projectCode}
+          onClose={() => setPromptData(null)}
+          onSubmitted={invalidate}
+        />
+      )}
+
       {selectedItem && createPortal(
         <FeedbackDetailModal
           item={selectedItem}
@@ -260,6 +291,9 @@ function FeedbackRow({ item, selected, onToggle, onClick, onTriage, isTriaging }
           )}
           {item.linkedIssueKey && (
             <span className="inline-block mt-0.5 text-[10px] text-indigo-400 font-mono">{item.linkedIssueKey}</span>
+          )}
+          {item.promptSubmittedAt && (
+            <span className="inline-block mt-0.5 ml-1 rounded bg-cyan-900/30 px-1 text-[9px] text-cyan-400">sent</span>
           )}
         </div>
       </div>

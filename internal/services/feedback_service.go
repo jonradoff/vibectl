@@ -30,6 +30,7 @@ func (s *FeedbackService) EnsureIndexes(ctx context.Context) error {
 		{Keys: bson.D{{Key: "projectCode", Value: 1}}},
 		{Keys: bson.D{{Key: "triageStatus", Value: 1}}},
 		{Keys: bson.D{{Key: "sourceUrl", Value: 1}}},
+		{Keys: bson.D{{Key: "projectCode", Value: 1}, {Key: "triageStatus", Value: 1}, {Key: "promptSubmittedAt", Value: 1}}},
 	})
 	return err
 }
@@ -290,4 +291,54 @@ func (s *FeedbackService) LinkToIssue(ctx context.Context, id, issueKey string) 
 		return fmt.Errorf("link feedback to issue: %w", err)
 	}
 	return nil
+}
+
+// ListAcceptedUnsubmitted returns accepted feedback items that haven't been dispatched to Claude Code yet.
+func (s *FeedbackService) ListAcceptedUnsubmitted(ctx context.Context, projectCode string) ([]models.FeedbackItem, error) {
+	filter := bson.D{
+		{Key: "projectCode", Value: projectCode},
+		{Key: "triageStatus", Value: models.TriageStatusAccepted},
+		{Key: "promptSubmittedAt", Value: bson.D{{Key: "$exists", Value: false}}},
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "submittedAt", Value: -1}}).SetLimit(20)
+	cursor, err := s.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("list accepted unsubmitted: %w", err)
+	}
+	defer cursor.Close(ctx)
+	var items []models.FeedbackItem
+	if err := cursor.All(ctx, &items); err != nil {
+		return nil, fmt.Errorf("decode accepted unsubmitted: %w", err)
+	}
+	if items == nil {
+		items = []models.FeedbackItem{}
+	}
+	return items, nil
+}
+
+// MarkPromptSubmitted sets promptSubmittedAt and promptBatchId on the given feedback IDs.
+// Uses a guard filter to prevent double-submission.
+func (s *FeedbackService) MarkPromptSubmitted(ctx context.Context, ids []string, batchID string) (int64, error) {
+	oids := make([]bson.ObjectID, 0, len(ids))
+	for _, id := range ids {
+		oid, err := bson.ObjectIDFromHex(id)
+		if err != nil {
+			continue
+		}
+		oids = append(oids, oid)
+	}
+	now := time.Now().UTC()
+	filter := bson.D{
+		{Key: "_id", Value: bson.D{{Key: "$in", Value: oids}}},
+		{Key: "promptSubmittedAt", Value: bson.D{{Key: "$exists", Value: false}}},
+	}
+	update := bson.D{{Key: "$set", Value: bson.D{
+		{Key: "promptSubmittedAt", Value: now},
+		{Key: "promptBatchId", Value: batchID},
+	}}}
+	result, err := s.collection.UpdateMany(ctx, filter, update)
+	if err != nil {
+		return 0, fmt.Errorf("mark prompt submitted: %w", err)
+	}
+	return result.ModifiedCount, nil
 }

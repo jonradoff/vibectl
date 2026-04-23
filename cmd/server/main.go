@@ -486,7 +486,8 @@ func main() {
 
 	projectHandler := handlers.NewProjectHandler(projectService, issueService, sessionService, feedbackService, activityLogService, memberService, eventBus)
 	issueHandler := handlers.NewIssueHandler(issueService, decisionService, vibectlMdService, activityLogService, commentService, webhookService, projectService, eventBus)
-	feedbackHandler := handlers.NewFeedbackHandler(feedbackService, issueService, triageAgent, themesAgent, decisionService, vibectlMdService, projectService, activityLogService, webhookService, eventBus)
+	promptBatchService := services.NewPromptBatchService(db)
+	feedbackHandler := handlers.NewFeedbackHandler(feedbackService, issueService, triageAgent, themesAgent, decisionService, vibectlMdService, projectService, activityLogService, webhookService, promptBatchService, eventBus)
 	settingsHandler := handlers.NewSettingsHandler(settingsService, cfg.DatabaseName, parseMongoUser(cfg.MongoDBURI))
 	sessionHandler := handlers.NewSessionHandler(sessionService, projectService, eventBus)
 	dashboardHandler := handlers.NewDashboardHandler(projectService, issueService, sessionService, feedbackService, memberService, activityLogService, healthRecordService, codeDeltaService)

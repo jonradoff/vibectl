@@ -45,4 +45,5 @@ type Intent struct {
 	BranchName     string        `json:"branchName,omitempty" bson:"branchName,omitempty"`
 	MergeCount     int           `json:"mergeCount,omitempty" bson:"mergeCount,omitempty"`
 	MergedAt       *time.Time    `json:"mergedAt,omitempty" bson:"mergedAt,omitempty"`
+	PromptBatchID  string        `json:"promptBatchId,omitempty" bson:"promptBatchId,omitempty"` // links to originating feedback prompt batch
 }

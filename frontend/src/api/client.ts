@@ -700,6 +700,14 @@ export const triageFeedback = (id: string) =>
   request<AIAnalysis>(`/feedback/${id}/triage`, { method: 'POST' });
 export const triageAllPending = () =>
   request<{ triaged: number }>('/feedback/triage-batch', { method: 'POST' });
+export const generateFeedbackPrompt = (projectCode: string) =>
+  request<import('../types').GeneratePromptResponse>('/feedback/generate-prompt', {
+    method: 'POST', body: JSON.stringify({ projectCode }),
+  });
+export const submitFeedbackPrompt = (batchId: string, projectCode: string, promptText: string) =>
+  request<{ submitted: number }>('/feedback/submit-prompt', {
+    method: 'POST', body: JSON.stringify({ batchId, projectCode, promptText }),
+  });
 export const runPMReview = (projectId: string) =>
   request<PMReviewResult>(`/agents/pm-review/${projectId}`, { method: 'POST' });
 
