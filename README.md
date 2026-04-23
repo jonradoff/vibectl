@@ -2,7 +2,7 @@
 
 **Command-and-control for the agentic coding era.**
 
-VibeCtl is a self-hosted project management system built for the way software is actually made today: AI agents doing the coding, humans directing strategy. It unifies issue tracking, deployment management, health monitoring, and product feedback into one integrated workflow designed around Claude Code and similar agentic tools.
+VibeCtl is a self-hosted project management system built for the way software is actually made today: AI agents doing the coding, humans directing strategy. It unifies issue tracking, deployment management, health monitoring, productivity analytics, and product feedback into one integrated workflow designed around Claude Code.
 
 > *We're entering software's creator era — where the gap between idea and working product has collapsed. VibeCtl is the cockpit for that new reality.*
 
@@ -17,75 +17,82 @@ Modern agentic development creates a new coordination problem: you're running mu
 VibeCtl provides:
 - A **VIBECTL.md** file per project — the single source of truth that agents read before every session
 - An **MCP server** that agents use directly, without leaving Claude Code
-- A **CLI** for terminal-native workflows and automation
-- A **web UI** for visual project management and monitoring
+- **Productivity analytics** that measure developer output by intent, not lines of code — with per-developer attribution
+- A **feedback pipeline** that converts user reports into triaged issues via Claude
+- **Delegation** so dev standalones can share data with a central team server
 - **Health checks** that know the difference between "frontend is down" and "backend /healthz is degraded"
-- **Feedback triage** backed by Claude — user reports automatically convert to issues
-- **Team access** via GitHub OAuth — pre-authorize team members by GitHub username, role-based per project
+- **Multi-user access** via GitHub OAuth with role-based permissions per project
 
 ---
 
 ## Features
 
+### Mission Control Dashboard
+- Unified grid view: Mission Control, workspace card, and project cards in a draggable/resizable layout
+- **Projects tab**: Activity sparklines, health timelines, issue/feedback counts, last prompt timestamps
+- **Productivity tab**: Points delivered, intent counts, tokens consumed, and wall-clock time — per project and per developer
+- **Analytics tab**: Donut charts (points by category, investment by project), stacked area chart (points over time), tokens-per-point efficiency bars, delivery funnel
+- **Usage tab**: Claude API token consumption per login identity with weekly limits and alert thresholds
+- Tag-based filtering, time range selection (7d/30d/60d/90d/365d), developer filter
+- Progressive loading: grid renders instantly, data fills in progressively
+
+### Intent-Oriented Productivity
+- **Zero-input tracking**: When a Claude Code session ends, Haiku automatically analyzes the conversation and extracts developer intents — what was done, categorized and sized
+- Each intent has: title, description, category (UI/API/infra/data/test/docs/bugfix/refactor), size (S/M/L/XL with point values), delivery status, tech tags, UX judgment level
+- **Per-developer attribution**: Every intent, code delta, and chat history entry tracks which developer did the work
+- **Tokens-per-point**: The novel metric — measures AI efficiency by category, revealing where Claude Code adds the most value
+- Backfill endpoint for analyzing historical sessions
+- Human review: developers confirm delivery via "Mark Complete" in the project card
+
 ### Projects & Issues
 - Projects with codes (`LCMS`, `MYAPP`, etc.), goals, links, and deployment config
 - Issues with types (bug / feature / idea), priorities (P0–P5), and type-specific status workflows
-- Issue comments / thread for discussion on each issue
-- Bulk operations: change priority or archive multiple issues at once
-- Full-text global search across all issues
+- Issue comments, bulk operations (priority change, archive), full-text global search
 - Decision audit log — every status change is recorded
+- Project tags for portfolio filtering
 
 ### Health Monitoring
 - Per-project health check endpoints (dev + prod URLs for frontend and backend)
 - Backend uses the [VibeCtl Health Check Protocol](#health-check-protocol) (`/healthz`)
-- Frontend uses simple 200-response check (no /healthz required)
 - 24-hour uptime timeline, 7-day history stored in MongoDB
-- Auto-polls every 10 minutes in the background
-- Webhook alerts when a service goes down or comes back up
+- Auto-polls every 10 minutes; webhook alerts when services go down or recover
 
-### VIBECTL.md Generation
-- Auto-generates a structured markdown file in your project directory
-- Contains: open issues by priority, deployment info, recent decisions, architecture summary
-- Claude Code reads this on startup — `include: VIBECTL.md` in `settings.json`
-- Configurable auto-regen schedule (hourly / daily / weekly) in Settings
-
-### Webhooks
-- Per-project webhook endpoints (any number of URLs per project)
-- HMAC-SHA256 signature on every payload (`X-Vibectl-Signature: sha256=...`)
-- Events: `p0_issue_created`, `health_check_down`, `health_check_up`, `feedback_triaged`
-- See [API docs](docs/api.md) for payload format and signature verification
-
-### Feedback Queue
-- Collect feedback from GitHub comments, manual input, or API
-- Quick ad-hoc feedback from the project card — no need to leave the dashboard
-- AI triage with Claude: analyzes feedback and proposes issue title, type, priority, and repro steps
-- Three-column review panel (Pending | Accepted | Dismissed) directly in each project card
-- Accept → automatically creates an issue using the AI proposal; linked issue key shown inline
+### Feedback Pipeline
+- Collect feedback from **GitHub comments** (auto-sweep every 15 min), **manual input**, or the **REST API**
+- **AI triage**: Claude analyzes feedback and proposes issue title, type, priority, and repro steps
+- **Detail modal**: Full content, metadata, AI analysis, and accept/dismiss — with continuous review mode that advances to the next pending item
+- Accept → automatically creates a linked issue using the AI proposal
 - Bulk accept/dismiss and batch AI triage for high-volume feedback
-- Pending feedback badge on each project card for at-a-glance review status
-- Recurring theme detection across feedback
-- Webhook fires after each AI triage completes
+- **External product integration**: `POST /api/v1/feedback` with API key auth, XSS protection, LLM injection isolation, metadata support, and sourceURL deduplication
+- Pending feedback badge on each project card; dedicated Feedback page for cross-project review
 
-### Sessions & Activity
-- Work session tracking — log what was worked on, summaries
-- Activity log for all significant events
-- Chat history for Claude Code sessions
+### Delegation Model
+- **Standalone (default)**: Everything runs locally against local MongoDB
+- **Delegated**: Claude Code sessions, chat history, and terminals stay local. Issues, feedback, intents, and other shared data proxy to a remote production server via API key
+- "Remote / Local" view toggle in the dashboard header
+- GitHub feedback and extracted intents are automatically pushed to the remote for team aggregation
+- Export projects to the remote server with one click
+
+### Claude Code Integration
+- **Embedded terminal**: Claude Code runs in stream-json mode directly in each project card
+- **Plan mode**: Claude's plan mode renders inline as markdown with approve/reject controls
+- **Session resume**: `/compact` reloads MCPs and resumes context; `/fresh` starts clean
+- **Slash commands**: `/mcp`, `/reload`, `/fresh`, `/usage`, `/permissions`
+- **VIBECTL.md generation**: Auto-generated context file with open issues, deployment info, decisions, and architecture summary — Claude Code reads this on startup
 
 ### Multi-user Access
 - Admin signs in with password; team members sign in via **GitHub OAuth**
 - Admin pre-authorizes users by GitHub username and global role
-- Unauthorized GitHub accounts get a clear "ask your admin" screen
 - Per-project roles: owner, devops, developer, contributor, reporter, viewer
 - API keys for CLI/MCP access (named tokens, revocable)
 
 ### CLI (`vibectl`)
 - Full project management from the terminal
-- Auth token stored in `~/.vibectl/token`
+- Auth, projects, issues, health, sessions, prompts, decisions, feedback, dashboard
 - `--format json` for scripting
 
 ### MCP Server
-- Local stdio transport — no HTTP, no port, works directly with Claude Code
-- 24 tools covering projects, issues, sessions, health, prompts, decisions, and **feedback**
+- 24 tools covering projects, issues, sessions, health, prompts, decisions, and feedback
 - Agents can capture, triage, and resolve feedback without leaving Claude Code
 - See [skill.md](skill.md) for full tool reference
 
@@ -101,7 +108,7 @@ VibeCtl provides:
 
 ### 1. Get MongoDB
 
-**Option A — MongoDB Atlas (recommended for first-timers)**
+**Option A — MongoDB Atlas (recommended)**
 1. Sign up at [cloud.mongodb.com](https://cloud.mongodb.com) — free tier is sufficient
 2. Create a cluster, then click **Connect → Drivers** and copy the connection string
 3. It looks like: `mongodb+srv://username:password@cluster0.xxxxx.mongodb.net/`
@@ -130,28 +137,48 @@ make dev          # builds + runs backend on :4380
 make frontend-dev # in another terminal — Vite dev server on :4370 with HMR
 ```
 
-Open [http://localhost:4370](http://localhost:4370) (or :4380 for the production build).
+Open [http://localhost:4370](http://localhost:4370).
 
 On first launch with no users in the database, VibeCtl runs in **open mode** — no login required. Use `vibectl admin set-password` to set a password and enable the auth gate.
 
-### 4. (Optional) Enable GitHub OAuth for team access
+### 4. Configure AI features
 
-This lets team members sign in with their GitHub accounts instead of needing a shared password.
+AI-powered features (intent extraction, feedback triage, PM review) require an Anthropic API key:
+
+```bash
+# Add to .env
+ANTHROPIC_API_KEY=sk-ant-api03-...
+```
+
+This enables:
+- **Intent extraction** — automatic analysis of chat sessions into sized, categorized developer intents
+- **Feedback AI triage** — Claude proposes issue title, type, priority, and repro steps from raw feedback
+- **PM review agent** — on-demand project health assessment
+- **Architecture agent** — code architecture analysis
+
+Without this key, VibeCtl works fully — you just won't get AI-powered analysis.
+
+### 5. (Optional) Enable GitHub integration
+
+**GitHub OAuth** lets team members sign in with GitHub:
 
 1. Go to **GitHub → Settings → Developer settings → OAuth Apps → New OAuth App**
-2. Fill in:
-   - **Homepage URL**: `http://localhost:4380` (your server URL)
-   - **Authorization callback URL**: `http://localhost:4380/api/v1/auth/github/callback`
-3. Copy the **Client ID** and generate a **Client Secret**
-4. Add to `.env`:
+2. Set **Authorization callback URL**: `http://localhost:4380/api/v1/auth/github/callback`
+3. Add to `.env`:
    ```
    GITHUB_CLIENT_ID=your_client_id
    GITHUB_CLIENT_SECRET=your_client_secret
    ```
-5. Restart the server
-6. In VibeCtl → **Users**, click **Pre-authorize user** and enter their GitHub username
+4. In VibeCtl → **Users**, click **Pre-authorize user** and enter their GitHub username
 
-Team members navigate to VibeCtl, click **Continue with GitHub**, and are in. Users not pre-authorized see an "access denied" screen with instructions to ask the admin.
+**GitHub comment sweeper** auto-imports issue/PR comments as feedback:
+
+```bash
+# Add to .env
+GITHUB_TOKEN=ghp_...
+```
+
+Link a GitHub repo URL in each project's Settings tab. VibeCtl sweeps new comments every 15 minutes.
 
 ---
 
@@ -176,7 +203,7 @@ fly secrets set \
 fly deploy
 ```
 
-**For GitHub OAuth in production**, update your GitHub OAuth App's callback URL to:
+Update your GitHub OAuth App's callback URL to:
 `https://your-app-name.fly.dev/api/v1/auth/github/callback`
 
 ### fly.toml reference
@@ -187,12 +214,43 @@ primary_region = "iad"
 
 [env]
   PORT = "4380"
-  DATABASE_NAME = "vibectl-prod"   # override per-environment
+  DATABASE_NAME = "vibectl-prod"
 
 [http_service]
   internal_port = 4380
   force_https = true
 ```
+
+---
+
+## Feedback API
+
+External products can submit end-user feedback via REST. Feedback enters the same pipeline as manual and GitHub-sourced feedback: AI triage, human review, issue creation.
+
+```bash
+POST /api/v1/feedback
+Authorization: Bearer vk_YOUR_API_KEY
+Content-Type: application/json
+
+{
+  "projectCode": "MYAPP",
+  "rawContent": "The export button doesn't work on Safari",
+  "sourceType": "feedback_api",
+  "submittedBy": "user@example.com",
+  "metadata": {
+    "browser": "Safari 17.4",
+    "page": "/dashboard/reports"
+  }
+}
+```
+
+Create API keys in VibeCtl under your user profile. Keys are prefixed with `vk_` and used as Bearer tokens.
+
+**Batch submission**: `POST /api/v1/feedback/batch` accepts an array.
+
+**Security**: HTML stripping (XSS), LLM injection isolation (`<user-content>` tags), sourceURL deduplication, API key identity recording.
+
+**Webhooks**: `feedback_created` and `feedback_triaged` events fire on configured webhook URLs.
 
 ---
 
@@ -236,17 +294,11 @@ vibectl health MYAPP              # Current health check
 vibectl health history MYAPP      # 24-hour uptime history
 ```
 
-### Sessions & Prompts
+### Sessions, Prompts & Decisions
 
 ```bash
 vibectl sessions MYAPP --limit 5
 vibectl prompts list MYAPP
-vibectl prompts get <id>
-```
-
-### Dashboard & Decisions
-
-```bash
 vibectl dashboard
 vibectl decisions MYAPP --limit 10
 vibectl generate-md MYAPP
@@ -258,8 +310,6 @@ vibectl generate-md --all
 ```
 --format json      Output raw JSON (for scripting)
 ```
-
-### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -298,7 +348,7 @@ Or with Atlas:
 }
 ```
 
-**Privacy Policy:** VibeCtl's MCP server connects directly to your local MongoDB instance. No data is sent to external servers by the MCP server itself. See [https://www.metavert.io/privacy-policy](https://www.metavert.io/privacy-policy) for full details.
+**Privacy Policy:** VibeCtl's MCP server connects directly to your local MongoDB instance. No data is sent to external servers by the MCP server itself. See [https://www.metavert.io/privacy-policy](https://www.metavert.io/privacy-policy).
 
 ---
 
@@ -311,62 +361,22 @@ Or with Atlas:
 | `PORT` | No | `4380` | HTTP port |
 | `BASE_URL` | No | `http://localhost:4380` | Public server URL (used for OAuth callbacks) |
 | `ALLOWED_ORIGINS` | No | `http://localhost:4370` | CORS + OAuth redirect origin |
-| `ANTHROPIC_API_KEY` | No | — | Enables AI triage, PM review, architecture agents |
-| `GITHUB_TOKEN` | No | — | Enables GitHub comment sweeper |
-| `GITHUB_CLIENT_ID` | No | — | GitHub OAuth App client ID |
+| `ANTHROPIC_API_KEY` | No | — | Enables AI triage, intent extraction, PM review, architecture agents |
+| `GITHUB_TOKEN` | No | — | Enables GitHub comment sweeper (auto-imports issue/PR comments as feedback) |
+| `GITHUB_CLIENT_ID` | No | — | GitHub OAuth App client ID (for team login) |
 | `GITHUB_CLIENT_SECRET` | No | — | GitHub OAuth App client secret |
-| `API_KEY_ENCRYPTION_KEY` | No | — | 32-char key for encrypting stored API keys |
+| `API_KEY_ENCRYPTION_KEY` | No | — | 32-char key for encrypting stored API keys (AES-256-GCM) |
+| `REPOS_DIR` | No | `/data/repos` | Directory for cloned project repositories |
 
----
+### Delegation mode (advanced)
 
-## MCP Working Examples
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VIBECTL_MODE` | `standalone` | Set to `client` for delegation to a remote server |
+| `REMOTE_SERVER_URL` | — | URL of the remote VibeCtl server |
+| `REMOTE_API_KEY` | — | API key for machine-to-machine ops |
 
-The MCP server provides 20 tools for Claude Code. Here are 5 working examples:
-
-### 1. Get project status before starting work
-
-```
-Use vibectl MCP tool: get_vibectl_md(projectCode: "LCMS")
-```
-
-Returns the full VIBECTL.md — open issues by priority, deployment commands, recent decisions, architecture summary, and goals. Claude Code should read this at the start of every session.
-
-### 2. Create a bug after finding a regression
-
-```
-Use vibectl MCP tool: create_issue(
-  projectCode: "LCMS",
-  title: "Upload fails when filename contains spaces",
-  description: "File upload returns 400 when the original filename has spaces.",
-  type: "bug",
-  priority: "P1",
-  reproSteps: "1. Pick a file named 'my document.pdf'\n2. Click Upload\n3. See 400"
-)
-```
-
-### 3. Search for existing issues before filing a new one
-
-```
-Use vibectl MCP tool: search_issues(query: "upload filename spaces", projectCode: "LCMS")
-```
-
-### 4. Close an issue and log the decision
-
-```
-Use vibectl MCP tool: update_issue_status(issueKey: "LCMS-0017", newStatus: "fixed")
-Use vibectl MCP tool: record_decision(
-  projectCode: "LCMS",
-  summary: "Fixed upload filename handling by URL-encoding in the storage layer.",
-  issueKey: "LCMS-0017"
-)
-```
-
-### 5. Check what's broken in production
-
-```
-Use vibectl MCP tool: get_deployment_info(projectCode: "LCMS")
-Use vibectl MCP tool: get_health_status(projectCode: "LCMS")
-```
+Delegation can also be configured via the Settings page (super_admin only).
 
 ---
 
@@ -433,43 +443,22 @@ cmd/
 internal/
   agents/     Claude-backed AI agents (triage, PM review, architecture)
   config/     Environment config loader
+  delegation/ Delegation model (proxy, routing, health check)
   handlers/   HTTP request handlers
+  ingestion/  GitHub comment sweeper, PR state tracker
   middleware/ Auth, CORS, logging
   models/     MongoDB data models
   mcp/        MCP server + tool handlers
-  services/   Business logic layer
-  terminal/   PTY + WebSocket handlers
+  services/   Business logic (intents, feedback, issues, code deltas, usage)
+  terminal/   PTY + WebSocket handlers (chat, shell)
 
 pkg/
   healthz/    Health check protocol implementation (reusable)
 
 frontend/
-  src/        React + TypeScript + Vite app
+  src/        React + TypeScript + Vite + Tailwind CSS app
 ```
 
 ---
 
-## Roadmap
-
-### v0.9 (current)
-- Project, issue, feedback management with AI triage
-- Issue comments and bulk operations
-- VIBECTL.md generation with configurable auto-regen schedule
-- Claude Code MCP integration (20 tools)
-- Health check monitoring with webhook alerting
-- Multi-user access: GitHub OAuth, role-based permissions (project + global), API keys
-- CI tab: commit, push, deploy actions per project
-- Admin auth gate: bcrypt password, 30-day token expiry, auto-logout on 401
-- Webhooks: HMAC-signed HTTP POST for P0 issues, health transitions, feedback triage
-- Global search across all issues
-- Settings page
-- CLI with full feature parity
-- Fly.io one-command deployment
-
-### Next
-- Scheduled PM reviews
-- Mobile-friendly PWA
-
----
-
-*VibeCtl is built for solo developers and small teams managing multiple AI-assisted projects. It runs entirely on-premise — your data never leaves your infrastructure.*
+*VibeCtl is built for solo developers and small teams managing multiple AI-assisted projects. It runs entirely on your infrastructure — your data never leaves your control.*

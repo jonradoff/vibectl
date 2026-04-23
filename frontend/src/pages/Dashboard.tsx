@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ResponsiveGridLayout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
-import { getGlobalDashboard, getBulkStartProdStreamUrl, getBulkRestartProdStreamUrl, getViewMode, setViewMode, getDelegationStatus } from '../api/client'
+import { getGlobalDashboard, getBulkStartProdStreamUrl, getBulkRestartProdStreamUrl, getViewMode, setViewMode, getDelegationStatus, listProjects } from '../api/client'
 import ProjectCard from '../components/projects/ProjectCard'
 import ProjectForm from '../components/projects/ProjectForm'
 import MissionControl from '../components/dashboard/MissionControl'
@@ -13,6 +13,7 @@ import ChatView from '../components/chat/ChatView'
 import { useActiveProject } from '../contexts/ActiveProjectContext'
 import { useAuth } from '../contexts/AuthContext'
 import type { Layout, LayoutItem } from 'react-grid-layout'
+import type { ProjectSummary } from '../types'
 
 // Permanent grid slots
 const MC_KEY = '__mission_control__'
@@ -176,10 +177,21 @@ function Dashboard() {
 
   const workspaceDir = currentUser?.workspaceDir || ''
 
-  const { data: dashboard, isLoading, error } = useQuery({
+  // Phase 1: Fast project list — renders grid shell immediately
+  const { data: projects, isLoading: projectsLoading, error: projectsError } = useQuery({
+    queryKey: ['projects'],
+    queryFn: listProjects,
+    staleTime: 10_000,
+  })
+
+  // Phase 2: Rich dashboard data — enriches summaries progressively
+  const { data: dashboard, error: dashboardError } = useQuery({
     queryKey: ['globalDashboard'],
     queryFn: getGlobalDashboard,
   })
+
+  const error = projectsError || dashboardError
+  const isLoading = projectsLoading // only block on fast query
 
   useEffect(() => {
     if (error && (error as Error).message?.toLowerCase().includes('authentication')) {
@@ -258,9 +270,25 @@ function Dashboard() {
     )
   }
 
-  if (!dashboard) return null
+  if (!projects) return null
 
-  const { projectSummaries } = dashboard
+  // Build summaries: use rich dashboard data when available, placeholder otherwise
+  const dashboardMap = new Map(
+    (dashboard?.projectSummaries ?? []).map((s) => [s.project.id, s])
+  )
+  const projectSummaries = projects.map((project): ProjectSummary => {
+    const rich = dashboardMap.get(project.id)
+    if (rich) return rich
+    // Placeholder until dashboard data loads
+    return {
+      project,
+      openIssueCount: 0,
+      issuesByPriority: {},
+      issuesByStatus: {},
+      issuesByType: {},
+      currentUserRole: isSuperAdmin ? 'super_admin' : undefined,
+    }
+  })
 
   const visibleSummaries = projectSummaries.filter((s) => !closedProjectIds.has(s.project.id))
   const hiddenSummaries = projectSummaries.filter((s) => closedProjectIds.has(s.project.id))

@@ -3,7 +3,7 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## v0.12.2 (2026-04-23) — Per-Developer Productivity Attribution
+## v0.12.2 (2026-04-23) — Per-Developer Productivity & Performance
 
 ### Added
 - **Per-developer attribution**: Intents, code deltas, and chat history now track `userId` and `userName` of the developer who initiated the session. All productivity and analytics data can be sliced by developer.
@@ -12,9 +12,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Intent delegation fix**: `/api/v1/intents*` routes are now local in delegation mode. Extracted intents are pushed to the remote server for team aggregation, with deduplication by sessionID.
 - **Intent ingest endpoint**: `POST /api/v1/intents/ingest` accepts intents from delegated instances, deduplicating by session IDs.
 - **Developer badge on intents**: Individual intent rows in project cards show the developer's name.
+- **Progressive dashboard loading**: Dashboard grid renders immediately from a fast project list query while rich summary data (issue counts, sessions, roles) loads progressively in the background.
 
 ### Fixed
 - Productivity and Analytics tabs now show data correctly in delegated standalone mode (intents were proxied to remote which had no local extraction data).
+- Dashboard backend parallelized: per-project queries (issue counts, sessions, roles) now run concurrently via goroutines instead of sequentially, ~3-4x faster for 10+ projects.
 
 ---
 

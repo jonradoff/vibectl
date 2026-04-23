@@ -72,50 +72,42 @@ func (h *DashboardHandler) GlobalDashboard(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	totalOpenIssues := 0
-	summaries := make([]models.ProjectSummary, 0, len(projects))
-
-	for _, project := range projects {
-		issuesByStatus, err := h.issueService.CountByProject(ctx, project.Code)
-		if err != nil {
-			middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "COUNT_ISSUES_FAILED")
-			return
-		}
-
-		issuesByPriority, err := h.issueService.CountByPriority(ctx, project.Code)
-		if err != nil {
-			middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "COUNT_ISSUES_FAILED")
-			return
-		}
-
-		openCount := issuesByStatus["open"]
-		totalOpenIssues += openCount
-
-		var lastSession *models.SessionLog
-		session, err := h.sessionService.GetLatest(ctx, project.Code)
-		if err == nil {
-			lastSession = session
-		}
-
-		// Determine current user's effective role for this project.
-		currentUserRole := ""
-		if currentUser != nil {
-			if currentUser.GlobalRole == models.GlobalRoleSuperAdmin {
-				currentUserRole = string(models.ProjectRoleOwner)
-			} else if h.memberService != nil {
-				role, _ := h.memberService.GetRole(ctx, project.Code, currentUser.ID)
-				currentUserRole = string(role)
+	summaries := make([]models.ProjectSummary, len(projects))
+	var wg sync.WaitGroup
+	for i, project := range projects {
+		wg.Add(1)
+		go func(idx int, proj models.Project) {
+			defer wg.Done()
+			issuesByStatus, _ := h.issueService.CountByProject(ctx, proj.Code)
+			issuesByPriority, _ := h.issueService.CountByPriority(ctx, proj.Code)
+			var lastSession *models.SessionLog
+			if session, err := h.sessionService.GetLatest(ctx, proj.Code); err == nil {
+				lastSession = session
 			}
-		}
+			currentUserRole := ""
+			if currentUser != nil {
+				if currentUser.GlobalRole == models.GlobalRoleSuperAdmin {
+					currentUserRole = string(models.ProjectRoleOwner)
+				} else if h.memberService != nil {
+					role, _ := h.memberService.GetRole(ctx, proj.Code, currentUser.ID)
+					currentUserRole = string(role)
+				}
+			}
+			summaries[idx] = models.ProjectSummary{
+				Project:          proj,
+				OpenIssueCount:   issuesByStatus["open"],
+				IssuesByPriority: issuesByPriority,
+				IssuesByStatus:   issuesByStatus,
+				LastSession:      lastSession,
+				CurrentUserRole:  currentUserRole,
+			}
+		}(i, project)
+	}
+	wg.Wait()
 
-		summaries = append(summaries, models.ProjectSummary{
-			Project:          project,
-			OpenIssueCount:   openCount,
-			IssuesByPriority: issuesByPriority,
-			IssuesByStatus:   issuesByStatus,
-			LastSession:      lastSession,
-			CurrentUserRole:  currentUserRole,
-		})
+	totalOpenIssues := 0
+	for _, s := range summaries {
+		totalOpenIssues += s.OpenIssueCount
 	}
 
 	dashboard := models.GlobalDashboard{
