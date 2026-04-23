@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listFeedback, reviewFeedback, listProjects, triageAllPending, generateFeedbackPrompt } from '../api/client';
@@ -6,6 +6,8 @@ import type { FeedbackItem, Project, TriageStatus, GeneratePromptResponse } from
 import FeedbackForm from '../components/feedback/FeedbackForm';
 import PromptReviewModal from '../components/feedback/PromptReviewModal';
 import { FeedbackDetailModal } from '../components/projects/FeedbackTab';
+
+const PAGE_SIZE = 25;
 
 const triageStatusColors: Record<TriageStatus, string> = {
   pending: 'bg-yellow-500 text-black',
@@ -44,6 +46,9 @@ export default function FeedbackPage() {
   const [selectedItem, setSelectedItem] = useState<FeedbackItem | null>(null);
   const [showSubmitForm, setShowSubmitForm] = useState(false);
   const [promptData, setPromptData] = useState<GeneratePromptResponse | null>(null);
+  const [promptProjectCode, setPromptProjectCode] = useState('');
+  const [showProjectPicker, setShowProjectPicker] = useState(false);
+  const [page, setPage] = useState(0);
 
   const feedbackParams: Record<string, string> = {};
   if (projectFilter !== 'all') feedbackParams.projectCode = projectFilter;
@@ -78,15 +83,53 @@ export default function FeedbackPage() {
   });
 
   const generatePromptMutation = useMutation({
-    mutationFn: () => generateFeedbackPrompt(projectFilter),
+    mutationFn: (code: string) => generateFeedbackPrompt(code),
     onSuccess: (data) => setPromptData(data),
   });
 
-  const acceptedUnsubmitted = feedback.filter(
-    (f: FeedbackItem) => f.triageStatus === 'accepted' && !f.promptSubmittedAt
-  );
+  // Compute which projects have accepted-unsubmitted feedback
+  const projectsWithAccepted = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const f of feedback) {
+      if (f.triageStatus === 'accepted' && !f.promptSubmittedAt && f.projectCode) {
+        counts.set(f.projectCode, (counts.get(f.projectCode) || 0) + 1);
+      }
+    }
+    return counts;
+  }, [feedback]);
+
+  const totalAcceptedUnsubmitted = Array.from(projectsWithAccepted.values()).reduce((a, b) => a + b, 0);
 
   const sourceTypes = [...new Set(feedback.map((f) => f.sourceType))];
+
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(feedback.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pagedFeedback = feedback.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
+  // Reset page when filters change
+  const handleFilterChange = (setter: (v: string) => void, value: string) => {
+    setter(value);
+    setPage(0);
+  };
+
+  const handleGeneratePrompt = () => {
+    if (projectFilter !== 'all' && projectsWithAccepted.has(projectFilter)) {
+      // Already filtered to a project — go directly
+      setPromptProjectCode(projectFilter);
+      generatePromptMutation.mutate(projectFilter);
+    } else {
+      // Show project picker
+      setShowProjectPicker(true);
+    }
+  };
+
+  const handlePickProject = (code: string) => {
+    setShowProjectPicker(false);
+    setPromptProjectCode(code);
+    setProjectFilter(code);
+    generatePromptMutation.mutate(code);
+  };
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-6">
@@ -113,13 +156,13 @@ export default function FeedbackPage() {
           >
             {triageMutation.isPending ? 'Analyzing...' : 'Analyze All Pending'}
           </button>
-          {projectFilter !== 'all' && acceptedUnsubmitted.length > 0 && (
+          {totalAcceptedUnsubmitted > 0 && (
             <button
-              onClick={() => generatePromptMutation.mutate()}
+              onClick={handleGeneratePrompt}
               disabled={generatePromptMutation.isPending}
               className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-500 text-sm font-medium disabled:opacity-50"
             >
-              {generatePromptMutation.isPending ? 'Generating...' : `Generate Prompt (${acceptedUnsubmitted.length})`}
+              {generatePromptMutation.isPending ? 'Generating...' : `Generate Prompt (${totalAcceptedUnsubmitted})`}
             </button>
           )}
           </div>
@@ -129,12 +172,12 @@ export default function FeedbackPage() {
         <div className="flex flex-wrap gap-3 mb-6">
           <select
             value={projectFilter}
-            onChange={(e) => setProjectFilter(e.target.value)}
+            onChange={(e) => handleFilterChange(setProjectFilter, e.target.value)}
             className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm"
           >
             <option value="all">All Projects</option>
             {projects.map((p) => (
-              <option key={p.id} value={p.id}>
+              <option key={p.code} value={p.code}>
                 {p.name}
               </option>
             ))}
@@ -142,7 +185,7 @@ export default function FeedbackPage() {
 
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as 'all' | TriageStatus)}
+            onChange={(e) => handleFilterChange((v) => setStatusFilter(v as 'all' | TriageStatus), e.target.value)}
             className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm"
           >
             <option value="all">All Statuses</option>
@@ -154,7 +197,7 @@ export default function FeedbackPage() {
 
           <select
             value={sourceFilter}
-            onChange={(e) => setSourceFilter(e.target.value)}
+            onChange={(e) => handleFilterChange(setSourceFilter, e.target.value)}
             className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm"
           >
             <option value="all">All Sources</option>
@@ -164,6 +207,13 @@ export default function FeedbackPage() {
               </option>
             ))}
           </select>
+
+          {/* Page info */}
+          {feedback.length > PAGE_SIZE && (
+            <span className="text-xs text-gray-500 self-center ml-auto">
+              {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, feedback.length)} of {feedback.length}
+            </span>
+          )}
         </div>
 
         {/* Table */}
@@ -191,7 +241,7 @@ export default function FeedbackPage() {
                 </tr>
               </thead>
               <tbody>
-                {feedback.map((item: FeedbackItem) => {
+                {pagedFeedback.map((item: FeedbackItem) => {
                   const isPending = item.triageStatus === 'pending';
                   const isExpanded = expandedId === item.id;
                   const project = item.projectCode ? projectByCode.get(item.projectCode) : null;
@@ -252,24 +302,14 @@ export default function FeedbackPage() {
                           {isPending && (
                             <div className="flex gap-2">
                               <button
-                                onClick={() =>
-                                  reviewMutation.mutate({
-                                    id: item.id,
-                                    action: 'accept',
-                                  })
-                                }
+                                onClick={(e) => { e.stopPropagation(); reviewMutation.mutate({ id: item.id, action: 'accept' }); }}
                                 disabled={reviewMutation.isPending}
                                 className="px-3 py-1 bg-green-600 hover:bg-green-500 text-white text-xs rounded transition-colors disabled:opacity-50"
                               >
                                 Accept
                               </button>
                               <button
-                                onClick={() =>
-                                  reviewMutation.mutate({
-                                    id: item.id,
-                                    action: 'dismiss',
-                                  })
-                                }
+                                onClick={(e) => { e.stopPropagation(); reviewMutation.mutate({ id: item.id, action: 'dismiss' }); }}
                                 disabled={reviewMutation.isPending}
                                 className="px-3 py-1 bg-gray-600 hover:bg-gray-500 text-white text-xs rounded transition-colors disabled:opacity-50"
                               >
@@ -338,25 +378,90 @@ export default function FeedbackPage() {
                 })}
               </tbody>
             </table>
+
+            {/* Pagination controls */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between px-4 py-3 border-t border-gray-700">
+                <button
+                  onClick={() => setPage(Math.max(0, safePage - 1))}
+                  disabled={safePage === 0}
+                  className="px-3 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  Previous
+                </button>
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: totalPages }, (_, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setPage(i)}
+                      className={`w-7 h-7 rounded text-xs font-medium transition-colors ${
+                        i === safePage
+                          ? 'bg-indigo-600 text-white'
+                          : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
+                      }`}
+                    >
+                      {i + 1}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => setPage(Math.min(totalPages - 1, safePage + 1))}
+                  disabled={safePage >= totalPages - 1}
+                  className="px-3 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Feedback detail modal with continuous review */}
-      {promptData && projectFilter !== 'all' && (
+      {/* Project picker modal for Generate Prompt */}
+      {showProjectPicker && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowProjectPicker(false)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-5 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold text-gray-200">Select Project for Prompt</h3>
+              <button onClick={() => setShowProjectPicker(false)} className="text-gray-500 hover:text-gray-300">&times;</button>
+            </div>
+            <p className="text-xs text-gray-400 mb-3">Choose which project's accepted feedback to compile into a prompt.</p>
+            <div className="space-y-1.5 max-h-60 overflow-y-auto">
+              {Array.from(projectsWithAccepted.entries()).map(([code, count]) => {
+                const proj = projectByCode.get(code);
+                return (
+                  <button
+                    key={code}
+                    onClick={() => handlePickProject(code)}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded bg-gray-800 hover:bg-gray-700 transition-colors text-left"
+                  >
+                    <span className="text-sm text-gray-200">{proj?.name || code}</span>
+                    <span className="text-xs text-green-400 font-mono">{count} accepted</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* Prompt review modal */}
+      {promptData && (
         <PromptReviewModal
           prompt={promptData.prompt}
           warnings={promptData.warnings}
           feedbackIds={promptData.feedbackIds}
           batchId={promptData.batchId}
-          projectCode={projectFilter}
-          projectId={projectByCode.get(projectFilter)?.id || ''}
-          projectName={projectByCode.get(projectFilter)?.name || projectFilter}
+          projectCode={promptProjectCode}
+          projectId={projectByCode.get(promptProjectCode)?.id || ''}
+          projectName={projectByCode.get(promptProjectCode)?.name || promptProjectCode}
           onClose={() => setPromptData(null)}
           onSubmitted={() => queryClient.invalidateQueries({ queryKey: ['feedback'] })}
         />
       )}
 
+      {/* Feedback detail modal with continuous review */}
       {selectedItem && createPortal(
         <FeedbackDetailModal
           item={selectedItem}

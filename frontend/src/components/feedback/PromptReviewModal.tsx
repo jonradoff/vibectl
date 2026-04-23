@@ -59,7 +59,8 @@ export default function PromptReviewModal({
     },
   });
 
-  const hasDanger = warnings.some((w) => w.severity === 'danger');
+  const safeWarnings = warnings ?? [];
+  const hasDanger = safeWarnings.some((w) => w.severity === 'danger');
 
   const handleCopy = () => {
     navigator.clipboard.writeText(promptText);
@@ -92,9 +93,9 @@ export default function PromptReviewModal({
         </div>
 
         {/* Safety warnings */}
-        {warnings.length > 0 && (
+        {safeWarnings.length > 0 && (
           <div className="space-y-1.5 mb-3">
-            {warnings.map((w, i) => (
+            {safeWarnings.map((w, i) => (
               <div
                 key={i}
                 className={`rounded px-3 py-2 text-xs ${

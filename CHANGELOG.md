@@ -3,12 +3,16 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## v0.12.2 (2026-04-23) — Per-Developer Productivity & Performance
+## v0.12.2 (2026-04-23) — Per-Developer Productivity, Feedback Prompts & Performance
 
 ### Added
 - **Per-developer attribution**: Intents, code deltas, and chat history now track `userId` and `userName` of the developer who initiated the session. All productivity and analytics data can be sliced by developer.
 - **Chat WebSocket auth**: Chat sessions now authenticate via `?token=` query param (same as shell), threading user identity from connection through to intent extraction.
 - **Developer filter**: Productivity and Analytics tabs in Mission Control have a developer dropdown that filters all metrics by a specific team member. Only shows when multiple users exist.
+- **Feedback-to-prompt pipeline**: "Generate Prompt" button compiles accepted feedback into a structured prompt for Claude Code. Includes safety scanning (regex-based detection of shell injection, credential exfil, prompt injection), editable review modal with standing advisory, and one-click dispatch to a project's Claude Code session with automatic navigation.
+- **Project picker for prompt generation**: When viewing all projects, "Generate Prompt" opens a modal listing only projects with accepted-unsubmitted feedback, with counts per project.
+- **Feedback pagination**: Feedback page now paginates at 25 items per page with Previous/Next navigation.
+- **Prompt batch tracking**: PromptBatch records create an audit trail linking feedback items to the prompts sent to Claude Code. Intent extractor detects batch markers and links extracted intents back to originating feedback.
 - **Intent delegation fix**: `/api/v1/intents*` routes are now local in delegation mode. Extracted intents are pushed to the remote server for team aggregation, with deduplication by sessionID.
 - **Intent ingest endpoint**: `POST /api/v1/intents/ingest` accepts intents from delegated instances, deduplicating by session IDs.
 - **Developer badge on intents**: Individual intent rows in project cards show the developer's name.
@@ -17,6 +21,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - Productivity and Analytics tabs now show data correctly in delegated standalone mode (intents were proxied to remote which had no local extraction data).
 - Dashboard backend parallelized: per-project queries (issue counts, sessions, roles) now run concurrently via goroutines instead of sequentially, ~3-4x faster for 10+ projects.
+- Feedback project filter dropdown now uses project codes (was using ObjectIDs, breaking filtering in delegated mode).
+- PromptReviewModal null safety fix for warnings array.
 
 ---
 

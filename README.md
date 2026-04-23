@@ -18,10 +18,68 @@ VibeCtl provides:
 - A **VIBECTL.md** file per project — the single source of truth that agents read before every session
 - An **MCP server** that agents use directly, without leaving Claude Code
 - **Productivity analytics** that measure developer output by intent, not lines of code — with per-developer attribution
-- A **feedback pipeline** that converts user reports into triaged issues via Claude
-- **Delegation** so dev standalones can share data with a central team server
+- A **feedback pipeline** that converts user reports into triaged issues and actionable prompts via Claude
+- **Flexible deployment modes** — run solo, run a team server, or connect your local dev environment to a central instance
 - **Health checks** that know the difference between "frontend is down" and "backend /healthz is degraded"
 - **Multi-user access** via GitHub OAuth with role-based permissions per project
+
+---
+
+## Deployment Modes
+
+VibeCtl supports four deployment configurations. Choose the one that fits your workflow:
+
+### Standalone (Solo Developer)
+
+The default mode. Everything runs on one machine against one MongoDB instance. You get the full UI, Claude Code sessions, issue tracking, feedback, analytics — all local.
+
+**Best for:** Individual developers managing multiple projects from a single workstation.
+
+**Setup:** Just `make dev` and go. No special configuration needed.
+
+### Server (Multi-User)
+
+A production deployment (typically on Fly.io or similar) that multiple team members connect to via the web UI. Supports GitHub OAuth for team login, per-project role-based access, and shared data across all users.
+
+**Best for:** Teams where everyone accesses the same VibeCtl instance through a browser. Claude Code sessions run on the server.
+
+**Setup:** Deploy to Fly.io (or any Docker host), configure `MONGODB_URI`, `BASE_URL`, GitHub OAuth credentials, and `ANTHROPIC_API_KEY`.
+
+### Client Mode
+
+A local VibeCtl instance that connects to a remote server for shared data (projects, issues, feedback) while running Claude Code sessions locally. The local instance handles terminals, chat sessions, and file operations against your local filesystem; everything else comes from the server.
+
+**Best for:** Developers who want local Claude Code sessions with their own filesystem access, but share project data with a team server.
+
+**Setup:** Set `VIBECTL_MODE=client`, `REMOTE_SERVER_URL`, and `REMOTE_API_KEY` in `.env`. The local instance runs on port 4385 by default.
+
+### Dev Standalone with Delegation
+
+A full standalone instance that optionally proxies shared data to a remote production server. Unlike client mode, you have your own complete local database — delegation is an overlay that can be toggled on and off from the Settings page.
+
+When delegation is active:
+- **Local:** Claude Code sessions, chat history, terminals, code deltas, file operations
+- **Proxied to remote:** Issues, feedback, intents (for team aggregation), prompts, activity logs
+- **Pushed to remote:** GitHub-swept feedback and extracted intents are automatically pushed to the remote for team visibility
+- A "Remote / Local" toggle in the dashboard header lets you switch between viewing remote team data and your local data
+
+When delegation is off, the instance is fully isolated — identical to standalone mode.
+
+**Best for:** Developers who want their own full VibeCtl instance for local development, with the option to share data with a central team server. You keep working if the server goes down.
+
+**Setup:** Run as standalone, then enable delegation in Settings → Delegation with the remote server URL and an API key. No environment variables needed — configuration is stored in MongoDB and survives restarts.
+
+### Mode Comparison
+
+| Capability | Standalone | Server | Client | Dev Standalone + Delegation |
+|-----------|-----------|--------|--------|---------------------------|
+| Local Claude Code sessions | Yes | Yes (on server) | Yes | Yes |
+| Local filesystem access | Yes | No (server fs) | Yes | Yes |
+| Shared team data | No | Yes | Yes | Yes (when delegation on) |
+| Works offline | Yes | No | No | Yes (delegation off) |
+| Own database | Yes | Yes | No | Yes |
+| Multiple users | No | Yes | No | No (single user, team data via delegation) |
+| GitHub OAuth | Optional | Yes | Via server | Optional |
 
 ---
 
@@ -46,7 +104,7 @@ VibeCtl provides:
 
 ### Projects & Issues
 - Projects with codes (`LCMS`, `MYAPP`, etc.), goals, links, and deployment config
-- Issues with types (bug / feature / idea), priorities (P0–P5), and type-specific status workflows
+- Issues with types (bug / feature / idea), priorities (P0-P5), and type-specific status workflows
 - Issue comments, bulk operations (priority change, archive), full-text global search
 - Decision audit log — every status change is recorded
 - Project tags for portfolio filtering
@@ -62,16 +120,11 @@ VibeCtl provides:
 - **AI triage**: Claude analyzes feedback and proposes issue title, type, priority, and repro steps
 - **Detail modal**: Full content, metadata, AI analysis, and accept/dismiss — with continuous review mode that advances to the next pending item
 - Accept → automatically creates a linked issue using the AI proposal
+- **Generate Prompt**: Compile accepted feedback into a structured, safety-scanned prompt and dispatch it directly to a project's Claude Code session. Includes a review/edit modal, danger pattern detection, and automatic navigation to the project card.
 - Bulk accept/dismiss and batch AI triage for high-volume feedback
+- Paginated feedback list (25 per page) with project, status, and source filters
 - **External product integration**: `POST /api/v1/feedback` with API key auth, XSS protection, LLM injection isolation, metadata support, and sourceURL deduplication
 - Pending feedback badge on each project card; dedicated Feedback page for cross-project review
-
-### Delegation Model
-- **Standalone (default)**: Everything runs locally against local MongoDB
-- **Delegated**: Claude Code sessions, chat history, and terminals stay local. Issues, feedback, intents, and other shared data proxy to a remote production server via API key
-- "Remote / Local" view toggle in the dashboard header
-- GitHub feedback and extracted intents are automatically pushed to the remote for team aggregation
-- Export projects to the remote server with one click
 
 ### Claude Code Integration
 - **Embedded terminal**: Claude Code runs in stream-json mode directly in each project card
@@ -153,6 +206,7 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 This enables:
 - **Intent extraction** — automatic analysis of chat sessions into sized, categorized developer intents
 - **Feedback AI triage** — Claude proposes issue title, type, priority, and repro steps from raw feedback
+- **Feedback prompt generation** — compile accepted feedback into safety-scanned prompts for Claude Code
 - **PM review agent** — on-demand project health assessment
 - **Architecture agent** — code architecture analysis
 
@@ -179,6 +233,45 @@ GITHUB_TOKEN=ghp_...
 ```
 
 Link a GitHub repo URL in each project's Settings tab. VibeCtl sweeps new comments every 15 minutes.
+
+---
+
+## Mode-Specific Setup
+
+### Server mode (production deployment)
+
+Deploy to Fly.io or any Docker host. See [Deploying to Fly.io](#deploying-to-flyio) below.
+
+Required configuration:
+- `MONGODB_URI` — production MongoDB (Atlas recommended)
+- `DATABASE_NAME` — use a unique name per environment (e.g., `vibectl-prod`)
+- `BASE_URL` — your public URL (e.g., `https://your-app.fly.dev`)
+- `ALLOWED_ORIGINS` — same as BASE_URL for CORS
+- `API_KEY_ENCRYPTION_KEY` — 32-char key for encrypting stored API keys
+- `ANTHROPIC_API_KEY` — for AI features
+- `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` — for team OAuth login
+
+### Client mode
+
+Set in `.env`:
+```bash
+VIBECTL_MODE=client
+REMOTE_SERVER_URL=https://your-vibectl-server.fly.dev
+REMOTE_API_KEY=vk_your_api_key_here
+```
+
+The client runs on port 4385 by default (frontend on 4375). It stores local session data in `~/.vibectl-client/`. Create an API key on the remote server first (Settings → API Keys).
+
+### Dev standalone with delegation
+
+No special environment variables needed. Run as normal standalone (`make dev`), then:
+
+1. Go to **Settings → Delegation**
+2. Enter the remote server URL and an API key from that server
+3. Click **Test Connection** to verify
+4. Click **Enable Delegation**
+
+Delegation state is stored in MongoDB and restored on restart. Toggle it off anytime to return to fully isolated mode.
 
 ---
 
@@ -225,7 +318,7 @@ primary_region = "iad"
 
 ## Feedback API
 
-External products can submit end-user feedback via REST. Feedback enters the same pipeline as manual and GitHub-sourced feedback: AI triage, human review, issue creation.
+External products can submit end-user feedback via REST. Feedback enters the same pipeline as manual and GitHub-sourced feedback: AI triage, human review, prompt generation, issue creation.
 
 ```bash
 POST /api/v1/feedback
@@ -248,7 +341,7 @@ Create API keys in VibeCtl under your user profile. Keys are prefixed with `vk_`
 
 **Batch submission**: `POST /api/v1/feedback/batch` accepts an array.
 
-**Security**: HTML stripping (XSS), LLM injection isolation (`<user-content>` tags), sourceURL deduplication, API key identity recording.
+**Security**: HTML stripping (XSS), LLM injection isolation (`<user-content>` tags), sourceURL deduplication, API key identity recording. Prompt generation includes regex-based safety scanning for shell injection, credential exfiltration, and prompt injection patterns.
 
 **Webhooks**: `feedback_created` and `feedback_triaged` events fire on configured webhook URLs.
 
@@ -354,6 +447,8 @@ Or with Atlas:
 
 ## Configuration Reference
 
+### Core
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MONGODB_URI` | Yes | `mongodb://localhost:27017` | MongoDB connection string |
@@ -361,22 +456,28 @@ Or with Atlas:
 | `PORT` | No | `4380` | HTTP port |
 | `BASE_URL` | No | `http://localhost:4380` | Public server URL (used for OAuth callbacks) |
 | `ALLOWED_ORIGINS` | No | `http://localhost:4370` | CORS + OAuth redirect origin |
-| `ANTHROPIC_API_KEY` | No | — | Enables AI triage, intent extraction, PM review, architecture agents |
+| `REPOS_DIR` | No | `/data/repos` | Directory for cloned project repositories |
+
+### AI & Integrations
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | No | — | Enables AI triage, intent extraction, prompt generation, PM review, architecture agents |
 | `GITHUB_TOKEN` | No | — | Enables GitHub comment sweeper (auto-imports issue/PR comments as feedback) |
 | `GITHUB_CLIENT_ID` | No | — | GitHub OAuth App client ID (for team login) |
 | `GITHUB_CLIENT_SECRET` | No | — | GitHub OAuth App client secret |
 | `API_KEY_ENCRYPTION_KEY` | No | — | 32-char key for encrypting stored API keys (AES-256-GCM) |
-| `REPOS_DIR` | No | `/data/repos` | Directory for cloned project repositories |
 
-### Delegation mode (advanced)
+### Client Mode
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VIBECTL_MODE` | `standalone` | Set to `client` for delegation to a remote server |
+| `VIBECTL_MODE` | `standalone` | Set to `client` for client mode |
 | `REMOTE_SERVER_URL` | — | URL of the remote VibeCtl server |
-| `REMOTE_API_KEY` | — | API key for machine-to-machine ops |
+| `REMOTE_API_KEY` | — | API key for machine-to-machine auth |
+| `LOCAL_DATA_DIR` | `~/.vibectl-client` | Directory for local session data |
 
-Delegation can also be configured via the Settings page (super_admin only).
+Dev standalone delegation does not use environment variables — it is configured via the Settings page and stored in MongoDB.
 
 ---
 
@@ -441,7 +542,7 @@ cmd/
   mcp/        MCP stdio server
 
 internal/
-  agents/     Claude-backed AI agents (triage, PM review, architecture)
+  agents/     Claude-backed AI agents (triage, PM review, architecture, prompt generation, safety scanning)
   config/     Environment config loader
   delegation/ Delegation model (proxy, routing, health check)
   handlers/   HTTP request handlers
@@ -449,7 +550,7 @@ internal/
   middleware/ Auth, CORS, logging
   models/     MongoDB data models
   mcp/        MCP server + tool handlers
-  services/   Business logic (intents, feedback, issues, code deltas, usage)
+  services/   Business logic (intents, feedback, issues, code deltas, usage, prompt batches)
   terminal/   PTY + WebSocket handlers (chat, shell)
 
 pkg/
