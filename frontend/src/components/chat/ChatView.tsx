@@ -223,6 +223,7 @@ export default function ChatView({
   const isActiveRef = useRef(false)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const isReplayingRef = useRef(false)
+  const [isReplaying, setIsReplaying] = useState(false)
 
   // Input history (shell-style up/down arrow navigation), persisted to localStorage
   const historyKey = `vibectl-input-history-${projectCode}`
@@ -349,6 +350,7 @@ export default function ChatView({
         if (aborted) { ws.close(); persistentWs.delete(projectCode); return }
         // Suppress scroll during replay
         isReplayingRef.current = true
+        setIsReplaying(true)
         sessionStartedAtRef.current = new Date().toISOString()
         // Clear stale state before launching
         setMessages([])
@@ -413,7 +415,7 @@ export default function ChatView({
         onStatusChange?.(s)
         if (s === 'reconnected' || s === 'started' || s === 'restarted') {
           // Replay is done — trigger scroll after React renders
-          isReplayingRef.current = false
+          isReplayingRef.current = false; setIsReplaying(false)
           userScrolledUpRef.current = false
           setIsReconnecting(false)
           setCompactingLabel(null)
@@ -476,7 +478,7 @@ export default function ChatView({
 
       case 'system': {
         // Init event — session started
-        isReplayingRef.current = false
+        isReplayingRef.current = false; setIsReplaying(false)
         userScrolledUpRef.current = false
         setReplayDone(n => n + 1)
         if (data.subtype === 'init') {
@@ -1157,8 +1159,21 @@ export default function ChatView({
       {/* Messages area */}
       <div ref={messagesContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-3 py-2 space-y-3 min-h-0" style={chatFontSize !== 14 ? { zoom: chatFontSize / 14 } : undefined}>
         {messages.length === 0 && !isStreaming && !exitError && (
-          <div className="flex items-center justify-center h-full text-gray-600 text-sm">
-            {isConnected ? 'Send a message to start' : status === 'exited' ? 'Session ended' : 'Connecting...'}
+          <div className="flex flex-col items-center justify-center h-full gap-2">
+            {isReplaying ? (
+              <>
+                <div className="flex gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-2 h-2 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-2 h-2 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+                <span className="text-gray-500 text-sm">Loading chat session...</span>
+              </>
+            ) : (
+              <span className="text-gray-600 text-sm">
+                {isConnected ? 'Send a message to start' : status === 'exited' ? 'Session ended' : 'Connecting...'}
+              </span>
+            )}
           </div>
         )}
 
@@ -1310,9 +1325,10 @@ export default function ChatView({
             value={inputText}
             onChange={(e) => { setInputText(e.target.value); if (showPromptPicker) setShowPromptPicker(false) }}
             onKeyDown={handleKeyDown}
-            placeholder={isConnected ? 'Message Claude... (type / for commands)' : 'Connecting... (messages will be queued)'}
+            disabled={isReplaying}
+            placeholder={isReplaying ? 'Loading chat session...' : isConnected ? 'Message Claude... (type / for commands)' : 'Connecting... (messages will be queued)'}
             rows={compact ? 1 : 2}
-            className="flex-1 resize-none rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:border-indigo-500 focus:outline-none"
+            className={`flex-1 resize-none rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:border-indigo-500 focus:outline-none ${isReplaying ? 'opacity-50 cursor-not-allowed' : ''}`}
           />
           {/* Prompt picker */}
           <div className="relative shrink-0">

@@ -3,6 +3,20 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.12.4 (2026-04-23) — Accept with Comments, Chat Loading States & Fixes
+
+### Added
+- **Accept with Comments**: Feedback detail modal has a new "Accept with Comments" button. Opens an inline textarea for developer notes (context, clarification, implementation hints) that are saved on the feedback item, displayed in the detail modal, and included as "Developer notes" in generated prompts.
+- **Chat session loading indicator**: When a Claude Code tab is loading/replaying a session, shows animated dots with "Loading chat session..." instead of a blank screen. Input is disabled and grayed out until replay completes.
+
+### Fixed
+- **Fullscreen WebSocket persistence**: WebSocket connections cached at module level survive fullscreen portal remounts — no more disconnect/reconnect losing streaming output.
+- **Feedback prompt visibility**: External prompts dispatched to Claude Code now reliably appear in the chat history. Fixed race condition between replay and message injection by checking replay state before sending.
+- **Generate Prompt button visibility**: Button counts accepted-unsubmitted items from full feedback list, not the filtered "Needs Review" view.
+- **Feedback project filter**: Dropdown now uses project codes instead of ObjectIDs, fixing filtering in delegated mode.
+
+---
+
 ## v0.12.3 (2026-04-23) — Feedback Queue & Fullscreen Fix
 
 ### Changed
