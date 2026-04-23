@@ -124,12 +124,12 @@ When delegation is off, the instance is fully isolated — identical to standalo
 - Accept → automatically creates a linked issue using the AI proposal
 - **Generate Prompt**: Compile accepted feedback into a structured, safety-scanned prompt and dispatch it directly to a project's Claude Code session. Includes a review/edit modal, danger pattern detection, and automatic navigation to the project card.
 - Bulk accept/dismiss and batch AI triage for high-volume feedback
-- Paginated feedback list (25 per page) with project, status, and source filters
+- Paginated feedback list (25 per page) with project, status, and source filters — defaults to "Needs Review" showing only actionable items
 - **External product integration**: `POST /api/v1/feedback` with API key auth, XSS protection, LLM injection isolation, metadata support, and sourceURL deduplication
 - Pending feedback badge on each project card; dedicated Feedback page for cross-project review
 
 ### Claude Code Integration
-- **Embedded terminal**: Claude Code runs in stream-json mode directly in each project card
+- **Embedded terminal**: Claude Code runs in stream-json mode directly in each project card, with seamless fullscreen toggle that preserves streaming output
 - **Plan mode**: Claude's plan mode renders inline as markdown with approve/reject controls
 - **Session resume**: `/compact` reloads MCPs and resumes context; `/fresh` starts clean
 - **Slash commands**: `/mcp`, `/reload`, `/fresh`, `/usage`, `/permissions`

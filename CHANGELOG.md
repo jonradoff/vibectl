@@ -3,6 +3,16 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.12.3 (2026-04-23) — Feedback Queue & Fullscreen Fix
+
+### Changed
+- **Feedback page defaults to "Needs Review"**: Only shows pending and triaged items by default, acting as an actionable review queue rather than a full history dump. "All Statuses" and individual status filters still available in the dropdown.
+
+### Fixed
+- **Fullscreen Claude Code output continuity**: Toggling fullscreen during active streaming no longer loses scroll position or stops auto-scrolling. Output continues seamlessly as the DOM re-parents via `createPortal`.
+
+---
+
 ## v0.12.2 (2026-04-23) — Per-Developer Productivity, Feedback Prompts & Performance
 
 ### Added

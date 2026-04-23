@@ -40,7 +40,7 @@ function formatDate(iso: string) {
 export default function FeedbackPage() {
   const queryClient = useQueryClient();
   const [projectFilter, setProjectFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | TriageStatus>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'actionable' | TriageStatus>('actionable');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<FeedbackItem | null>(null);
@@ -52,13 +52,18 @@ export default function FeedbackPage() {
 
   const feedbackParams: Record<string, string> = {};
   if (projectFilter !== 'all') feedbackParams.projectCode = projectFilter;
-  if (statusFilter !== 'all') feedbackParams.triageStatus = statusFilter;
+  if (statusFilter !== 'all' && statusFilter !== 'actionable') feedbackParams.triageStatus = statusFilter;
   if (sourceFilter !== 'all') feedbackParams.sourceType = sourceFilter;
 
-  const { data: feedback = [], isLoading } = useQuery({
+  const { data: rawFeedback = [], isLoading } = useQuery({
     queryKey: ['feedback', feedbackParams],
     queryFn: () => listFeedback(Object.keys(feedbackParams).length > 0 ? feedbackParams : undefined),
   });
+
+  // "Actionable" filters to pending + triaged (items needing review)
+  const feedback = statusFilter === 'actionable'
+    ? rawFeedback.filter((f: FeedbackItem) => f.triageStatus === 'pending' || f.triageStatus === 'triaged')
+    : rawFeedback;
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
@@ -185,12 +190,13 @@ export default function FeedbackPage() {
 
           <select
             value={statusFilter}
-            onChange={(e) => handleFilterChange((v) => setStatusFilter(v as 'all' | TriageStatus), e.target.value)}
+            onChange={(e) => handleFilterChange((v) => setStatusFilter(v as 'all' | 'actionable' | TriageStatus), e.target.value)}
             className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm"
           >
+            <option value="actionable">Needs Review</option>
             <option value="all">All Statuses</option>
             <option value="pending">Pending</option>
-            <option value="reviewed">Reviewed</option>
+            <option value="triaged">Triaged</option>
             <option value="accepted">Accepted</option>
             <option value="dismissed">Dismissed</option>
           </select>

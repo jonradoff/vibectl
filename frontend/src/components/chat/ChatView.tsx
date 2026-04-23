@@ -271,6 +271,13 @@ export default function ChatView({
     }
   }, [messages, streamingText, replayDone, scrollToBottom])
 
+  // When toggling fullscreen (compact changes), the DOM re-parents via createPortal.
+  // Reset scroll state and scroll to bottom so output continues seamlessly.
+  useEffect(() => {
+    userScrolledUpRef.current = false
+    requestAnimationFrame(() => scrollToBottom(true))
+  }, [compact, scrollToBottom])
+
   // Report current session snapshot for the History tab
   useEffect(() => {
     onSessionSnapshot?.({ messages, startedAt: sessionStartedAtRef.current })
