@@ -116,9 +116,11 @@ interface ToolUseBlock {
 
 type ContentBlock = TextBlock | ToolUseBlock
 
-// Persist WebSocket connections across fullscreen remounts so they don't disconnect.
+// Persist WebSocket connections and message state across fullscreen remounts.
 // Keyed by projectCode. Cleaned up only when the WS closes naturally.
 const persistentWs = new Map<string, WebSocket>()
+const persistentMessages = new Map<string, ChatMessage[]>()
+const persistentStreamingText = new Map<string, string>()
 
 export default function ChatView({
   projectId,
@@ -134,8 +136,22 @@ export default function ChatView({
   const { mode: modeInfo } = useMode()
   const chatFontSize = currentUser?.claudeCodeFontSize || 14
 
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [streamingText, setStreamingText] = useState('')
+  const [messages, setMessagesRaw] = useState<ChatMessage[]>(() => persistentMessages.get(projectCode) ?? [])
+  const setMessages = useCallback((update: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
+    setMessagesRaw(prev => {
+      const next = typeof update === 'function' ? update(prev) : update
+      persistentMessages.set(projectCode, next)
+      return next
+    })
+  }, [projectCode])
+  const [streamingText, setStreamingTextRaw] = useState(() => persistentStreamingText.get(projectCode) ?? '')
+  const setStreamingText = useCallback((update: string | ((prev: string) => string)) => {
+    setStreamingTextRaw(prev => {
+      const next = typeof update === 'function' ? update(prev) : update
+      persistentStreamingText.set(projectCode, next)
+      return next
+    })
+  }, [projectCode])
   const [isStreaming, setIsStreaming] = useState(false)
   const [inputText, setInputTextRaw] = useState(() => {
     try { return sessionStorage.getItem(`vibectl-draft-${projectCode}`) || '' } catch { return '' }
@@ -330,7 +346,9 @@ export default function ChatView({
         setStatus('error')
         onStatusChange?.('error')
       }
-      // Don't clear messages — they're still valid from before the remount
+      // Don't clear messages — they're restored from persistentMessages cache.
+      // Mark replay as done since the WS is already connected.
+      isReplayingRef.current = false; setIsReplaying(false)
       return () => {
         aborted = true
         // Don't close — just detach. The WS stays in persistentWs for reattach.
