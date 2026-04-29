@@ -62,6 +62,8 @@ func (h *ProjectHandler) Routes() chi.Router {
 	r.Delete("/{id}", h.Delete)
 	r.Post("/{id}/archive", h.Archive)
 	r.Post("/{id}/unarchive", h.Unarchive)
+	r.Post("/{id}/snooze", h.Snooze)
+	r.Post("/{id}/unsnooze", h.Unsnooze)
 	r.Get("/{id}/dashboard", h.Dashboard)
 
 	// Multi-module unit routes
@@ -177,6 +179,49 @@ func (h *ProjectHandler) Unarchive(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := h.projectService.Unarchive(r.Context(), id); err != nil {
 		middleware.WriteError(w, http.StatusBadRequest, err.Error(), "UNARCHIVE_FAILED")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Snooze sets a snooze-until time on a project, hiding it from rounds.
+func (h *ProjectHandler) Snooze(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	proj, err := h.projectService.GetByID(r.Context(), id)
+	if err != nil || proj == nil {
+		middleware.WriteError(w, http.StatusNotFound, "project not found", "NOT_FOUND")
+		return
+	}
+	var req struct {
+		Until  string `json:"until"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Until == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "until is required (RFC3339)", "VALIDATION_ERROR")
+		return
+	}
+	until, err := time.Parse(time.RFC3339, req.Until)
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "until must be RFC3339", "VALIDATION_ERROR")
+		return
+	}
+	if err := h.projectService.Snooze(r.Context(), proj.Code, until, req.Reason); err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "SNOOZE_FAILED")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Unsnooze clears a project's snooze state.
+func (h *ProjectHandler) Unsnooze(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	proj, err := h.projectService.GetByID(r.Context(), id)
+	if err != nil || proj == nil {
+		middleware.WriteError(w, http.StatusNotFound, "project not found", "NOT_FOUND")
+		return
+	}
+	if err := h.projectService.Unsnooze(r.Context(), proj.Code); err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "UNSNOOZE_FAILED")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

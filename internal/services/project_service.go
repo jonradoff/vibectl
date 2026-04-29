@@ -137,6 +137,37 @@ func (s *ProjectService) Unarchive(ctx context.Context, id string) error {
 	return nil
 }
 
+// Snooze sets a project's snooze-until time, removing it from rounds until that time.
+func (s *ProjectService) Snooze(ctx context.Context, projectCode string, until time.Time, reason string) error {
+	filter := bson.D{{Key: "code", Value: projectCode}}
+	update := bson.D{{Key: "$set", Value: bson.D{
+		{Key: "snoozedUntil", Value: until},
+		{Key: "snoozeReason", Value: reason},
+		{Key: "updatedAt", Value: time.Now().UTC()},
+	}}}
+	result, err := s.collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("snooze project: %w", err)
+	}
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("project not found")
+	}
+	return nil
+}
+
+// Unsnooze clears a project's snooze state.
+func (s *ProjectService) Unsnooze(ctx context.Context, projectCode string) error {
+	filter := bson.D{{Key: "code", Value: projectCode}}
+	update := bson.D{{Key: "$unset", Value: bson.D{
+		{Key: "snoozedUntil", Value: ""},
+		{Key: "snoozeReason", Value: ""},
+	}}, {Key: "$set", Value: bson.D{
+		{Key: "updatedAt", Value: time.Now().UTC()},
+	}}}
+	_, err := s.collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
 // Create validates the request and inserts a new project.
 // For multi-module projects (projectType="multi" with units), use CreateMultiModule instead.
 func (s *ProjectService) Create(ctx context.Context, req *models.CreateProjectRequest) (*models.Project, error) {

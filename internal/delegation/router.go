@@ -26,6 +26,9 @@ var localPrefixes = []string{
 	// Intents stay local — extraction runs locally from chat sessions.
 	// Extracted intents are pushed to remote separately for team aggregation.
 	"/api/v1/intents",
+	// Rounds and project notes are user-local workflow, not team-shared.
+	"/api/v1/rounds",
+	"/api/v1/project-notes",
 }
 
 // localExactPaths are paths that match exactly (not as prefixes).

@@ -124,6 +124,9 @@ func main() {
 	apiKeyService := services.NewAPIKeyService(db)
 	cloneService := services.NewCloneService(projectService, userService, cfg.ReposDir, cfg.GitHubToken)
 
+	projectNoteService := services.NewProjectNoteService(db)
+	roundService := services.NewRoundService(db)
+
 	// -------------------------------------------------------------------------
 	// Ensure indexes
 	// -------------------------------------------------------------------------
@@ -143,6 +146,8 @@ func main() {
 		memberService.EnsureIndexes,
 		checkoutService.EnsureIndexes,
 		claudeUsageService.EnsureIndexes,
+		projectNoteService.EnsureIndexes,
+		roundService.EnsureIndexes,
 	} {
 		if err := fn(idxCtx); err != nil {
 			slog.Error("failed to ensure indexes", "error", err)
@@ -491,6 +496,8 @@ func main() {
 	settingsHandler := handlers.NewSettingsHandler(settingsService, cfg.DatabaseName, parseMongoUser(cfg.MongoDBURI))
 	sessionHandler := handlers.NewSessionHandler(sessionService, projectService, eventBus)
 	dashboardHandler := handlers.NewDashboardHandler(projectService, issueService, sessionService, feedbackService, memberService, activityLogService, healthRecordService, codeDeltaService)
+	projectNoteHandler := handlers.NewProjectNoteHandler(projectNoteService)
+	roundHandler := handlers.NewRoundHandler(roundService, projectNoteService, projectService, intentService, issueService, feedbackService, activityLogService, healthRecordService)
 
 	var ghSweeper *ingestion.GitHubSweeper
 	var prSweeper *ingestion.PRSweeper
@@ -678,6 +685,8 @@ func main() {
 			r.Mount("/delegation", delegationHandler.Routes())
 			r.Mount("/plans", planHandler.Routes())
 			r.Mount("/intents", intentHandler.Routes())
+			r.Mount("/rounds", roundHandler.Routes())
+			r.Mount("/project-notes", projectNoteHandler.Routes())
 			r.Mount("/settings", settingsHandler.Routes())
 			r.Mount("/client-instances", clientInstanceHandler.Routes())
 			r.Get("/events/stream", eventsHandler.Stream)

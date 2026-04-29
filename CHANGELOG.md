@@ -3,6 +3,19 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.13.0 (2026-04-29) — Project Rounds
+
+### Added
+- **Project Rounds**: Step-through workflow that visits each active project one at a time, showing actionable context (open issues, pending feedback, health status, recent intents) and letting you take action — send a prompt to Claude Code, save a note for next round, snooze the project, or skip. "Start Round" button in Mission Control header.
+- **Project notes**: Scratch notes attached to a project that surface during the next round. One note per project, upserted via rounds or API.
+- **Project snooze**: Temporarily hide a project from rounds (1 day, 3 days, 1 week, 2 weeks). Snoozed projects reappear automatically when the snooze expires.
+- **Round summaries**: Audit trail of completed rounds — projects visited, actions taken (prompts, notes, snoozes, skips), duration.
+- **Keyboard-driven flow**: Enter (send/save), S (skip), N (note mode), Z (snooze), Escape (exit). Keyboard hints at the bottom of the overlay.
+- **Round context endpoint**: `GET /api/v1/rounds/context` aggregates per-project data for the step-through (issues, feedback, health, intents, notes, snooze status) in parallel.
+- **New endpoints**: `POST /api/v1/rounds` (record round), `PUT /api/v1/project-notes/{code}` (upsert note), `DELETE /api/v1/project-notes/{code}`, `POST /api/v1/projects/{id}/snooze`, `POST /api/v1/projects/{id}/unsnooze`.
+
+---
+
 ## v0.12.4 (2026-04-23) — Accept with Comments, Chat Loading States & Fixes
 
 ### Added

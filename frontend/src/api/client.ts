@@ -708,6 +708,24 @@ export const submitFeedbackPrompt = (batchId: string, projectCode: string, promp
   request<{ submitted: number }>('/feedback/submit-prompt', {
     method: 'POST', body: JSON.stringify({ batchId, projectCode, promptText }),
   });
+// ---- Rounds ----
+export const getRoundContext = () =>
+  request<import('../types').RoundProjectContext[]>('/rounds/context');
+export const recordRound = (data: { projectsVisited: number; projectsTotal: number; actions: import('../types').RoundAction[]; startedAt: string }) =>
+  request<import('../types').RoundSummaryRecord>('/rounds', { method: 'POST', body: JSON.stringify(data) });
+
+// ---- Project Notes ----
+export const upsertProjectNote = (projectCode: string, text: string) =>
+  request<import('../types').ProjectNote>(`/project-notes/${projectCode}`, { method: 'PUT', body: JSON.stringify({ text }) });
+export const deleteProjectNote = (projectCode: string) =>
+  request<void>(`/project-notes/${projectCode}`, { method: 'DELETE' });
+
+// ---- Project Snooze ----
+export const snoozeProject = (projectId: string, until: string, reason?: string) =>
+  request<void>(`/projects/${projectId}/snooze`, { method: 'POST', body: JSON.stringify({ until, reason }) });
+export const unsnoozeProject = (projectId: string) =>
+  request<void>(`/projects/${projectId}/unsnooze`, { method: 'POST' });
+
 export const runPMReview = (projectId: string) =>
   request<PMReviewResult>(`/agents/pm-review/${projectId}`, { method: 'POST' });
 

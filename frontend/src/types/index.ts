@@ -643,3 +643,57 @@ export const statusTransitions: Record<IssueType, Record<string, string[]>> = {
     open: ['closed', 'backlogged'],
   },
 };
+
+// ---- Project Rounds ----
+
+export interface ProjectNote {
+  id: string;
+  projectCode: string;
+  text: string;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoundIntentSummary {
+  title: string;
+  category: string;
+  status: string;
+  size: string;
+  completedAt: string;
+}
+
+export interface RoundProjectContext {
+  projectCode: string;
+  projectId: string;
+  projectName: string;
+  goals?: string[];
+  tags?: string[];
+  inactive: boolean;
+  paused: boolean;
+  snoozedUntil?: string;
+  snoozeReason?: string;
+  openIssueCount: number;
+  issuesByPriority?: Record<string, number>;
+  pendingFeedbackCount: number;
+  acceptedUnsubmitted: number;
+  currentHealth: string;
+  lastActivityAt?: string;
+  lastPromptAt?: string;
+  recentIntents: RoundIntentSummary[];
+  note?: ProjectNote;
+}
+
+export interface RoundAction {
+  projectCode: string;
+  action: 'prompt' | 'note' | 'snooze' | 'skip' | 'feedback';
+}
+
+export interface RoundSummaryRecord {
+  id: string;
+  projectsVisited: number;
+  projectsTotal: number;
+  actions: RoundAction[];
+  startedAt: string;
+  completedAt: string;
+}

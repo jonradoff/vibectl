@@ -6,6 +6,7 @@ import React from 'react'
 import { getUniverseData, listArchivedProjects, unarchiveProject, deleteProject, listUnits, getClaudeUsageSummary, updateClaudeUsageConfig, getSubscriptionUsage, getProductivity, getIntentProductivity, getIntentInsights, backfillIntents, getBackfillCount, listAllTags, listUsersDirectory } from '../../api/client'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, AreaChart, Area, ResponsiveContainer } from 'recharts'
 import type { ProductivityEntry } from '../../api/client'
+import RoundsOverlay from './RoundsOverlay'
 import type { ProjectUniverseData, Project, ClaudeUsageSummary, ClaudeUsageConfig } from '../../types'
 import { useActiveProject } from '../../contexts/ActiveProjectContext'
 
@@ -1352,6 +1353,8 @@ export default function MissionControl() {
     return 0
   })()
 
+  const [showRounds, setShowRounds] = useState(false)
+
   const sortField = (state.sortField as SortField) || 'name'
   const sortDir = (state.sortDir as SortDir) || 'asc'
 
@@ -1400,6 +1403,13 @@ export default function MissionControl() {
           </button>
         ))}
         <div className="flex items-center gap-1 ml-auto" onMouseDown={e => e.stopPropagation()}>
+          <button
+            onClick={() => setShowRounds(true)}
+            className="rounded-full bg-indigo-600 hover:bg-indigo-500 px-3 py-1 text-[10px] font-semibold text-white transition-colors cursor-pointer mr-2 flex items-center gap-1"
+          >
+            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21" /></svg>
+            Start Round
+          </button>
           {allProjectTags.length > 0 && (
             <>
               <button
@@ -1457,6 +1467,8 @@ export default function MissionControl() {
         {state.tab === 'usage' && <UsageTab />}
         {state.tab === 'archived' && <ArchivedTab />}
       </div>
+
+      {showRounds && <RoundsOverlay onClose={() => setShowRounds(false)} />}
     </div>
   )
 }
