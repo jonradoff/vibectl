@@ -110,6 +110,8 @@ type Project struct {
 	Paused                bool               `json:"paused" bson:"paused"`
 	SnoozedUntil          *time.Time         `json:"snoozedUntil,omitempty" bson:"snoozedUntil,omitempty"`
 	SnoozeReason          string             `json:"snoozeReason,omitempty" bson:"snoozeReason,omitempty"`
+	StatusNote            string             `json:"statusNote,omitempty" bson:"statusNote,omitempty"`
+	StatusSetAt           *time.Time         `json:"statusSetAt,omitempty" bson:"statusSetAt,omitempty"`
 	Tags                  []string           `json:"tags,omitempty" bson:"tags,omitempty"`
 	RecurringThemes       []RecurringTheme   `json:"recurringThemes,omitempty" bson:"recurringThemes,omitempty"`
 	ArchitectureSummary   string             `json:"architectureSummary,omitempty" bson:"architectureSummary,omitempty"`

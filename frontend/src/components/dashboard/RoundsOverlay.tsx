@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getRoundContext, recordRound, upsertProjectNote, snoozeProject } from '../../api/client'
+import { getRoundContext, recordRound, upsertProjectNote, snoozeProject, updateProject } from '../../api/client'
 import { useActiveProject } from '../../contexts/ActiveProjectContext'
 import type { RoundProjectContext, RoundAction } from '../../types'
 
@@ -41,6 +41,9 @@ export default function RoundsOverlay({ onClose }: RoundsOverlayProps) {
   const [showSnooze, setShowSnooze] = useState(false)
   const [startedAt] = useState(() => new Date().toISOString())
   const [completed, setCompleted] = useState(false)
+  const [snoozedThisRound, setSnoozedThisRound] = useState<Set<string>>(new Set())
+  const [editingStatus, setEditingStatus] = useState(false)
+  const [statusText, setStatusText] = useState('')
 
   const { data: allProjects = [], isLoading } = useQuery({
     queryKey: ['roundContext'],
@@ -51,6 +54,7 @@ export default function RoundsOverlay({ onClose }: RoundsOverlayProps) {
   // Filter and sort projects for the round
   const projects = allProjects
     .filter(p => !p.paused && !p.inactive)
+    .filter(p => !snoozedThisRound.has(p.projectCode))
     .filter(p => !p.snoozedUntil || new Date(p.snoozedUntil) <= new Date())
     .sort((a, b) => {
       // Actionable items first
@@ -71,6 +75,20 @@ export default function RoundsOverlay({ onClose }: RoundsOverlayProps) {
 
   const snoozeMutation = useMutation({
     mutationFn: ({ id, until, reason }: { id: string; until: string; reason?: string }) => snoozeProject(id, until, reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['roundContext'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+    },
+  })
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, statusNote }: { id: string; statusNote: string }) =>
+      updateProject(id, { statusNote } as Record<string, unknown>),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['roundContext'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
+    },
   })
 
   const recordMutation = useMutation({
@@ -92,6 +110,7 @@ export default function RoundsOverlay({ onClose }: RoundsOverlayProps) {
     setInputText('')
     setInputMode('prompt')
     setShowSnooze(false)
+    setEditingStatus(false)
     const nextIdx = currentIndex + 1
     if (nextIdx >= projects.length) {
       setCompleted(true)
@@ -125,6 +144,7 @@ export default function RoundsOverlay({ onClose }: RoundsOverlayProps) {
     if (!current) return
     const until = new Date()
     until.setDate(until.getDate() + days)
+    setSnoozedThisRound(prev => new Set(prev).add(current.projectCode))
     snoozeMutation.mutate({ id: current.projectId, until: until.toISOString(), reason: `Snoozed for ${days} day${days > 1 ? 's' : ''}` })
     advance({ projectCode: current.projectCode, action: 'snooze' })
   }, [current, snoozeMutation, advance])
@@ -302,6 +322,55 @@ export default function RoundsOverlay({ onClose }: RoundsOverlayProps) {
             </div>
           </div>
 
+          {/* Status note */}
+          {editingStatus ? (
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={statusText}
+                onChange={e => setStatusText(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    statusMutation.mutate({ id: p.projectId, statusNote: statusText })
+                    setEditingStatus(false)
+                  } else if (e.key === 'Escape') {
+                    setEditingStatus(false)
+                  }
+                }}
+                placeholder="Set project status (e.g., Blocked until WebSDK publishes)..."
+                autoFocus
+                className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-indigo-500"
+              />
+              <button
+                onClick={() => { statusMutation.mutate({ id: p.projectId, statusNote: statusText }); setEditingStatus(false) }}
+                className="px-2 py-1.5 bg-indigo-600 text-white text-xs rounded hover:bg-indigo-500"
+              >Save</button>
+              <button
+                onClick={() => setEditingStatus(false)}
+                className="px-2 py-1.5 text-gray-500 text-xs hover:text-gray-300"
+              >Cancel</button>
+            </div>
+          ) : p.statusNote ? (
+            <button
+              onClick={() => { setStatusText(p.statusNote); setEditingStatus(true) }}
+              className={`w-full text-left rounded px-3 py-2 text-xs hover:opacity-80 transition-opacity ${
+                /blocked|waiting|stuck/i.test(p.statusNote)
+                  ? 'bg-amber-900/30 border border-amber-700/40 text-amber-200'
+                  : 'bg-gray-800 border border-gray-700/40 text-gray-300'
+              }`}
+            >
+              {p.statusNote}
+              <span className="ml-2 text-[9px] text-gray-600">(click to edit)</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => { setStatusText(''); setEditingStatus(true) }}
+              className="text-[10px] text-gray-600 hover:text-gray-400 transition-colors"
+            >
+              + Set project status
+            </button>
+          )}
+
           {/* Goals */}
           {p.goals && p.goals.length > 0 && (
             <div className="text-xs text-gray-400">
@@ -356,8 +425,11 @@ export default function RoundsOverlay({ onClose }: RoundsOverlayProps) {
             </div>
           )}
 
-          {/* Activity timestamp */}
+          {/* Last session + activity */}
           <div className="flex gap-4 text-[10px] text-gray-600">
+            {p.lastSessionAt && (
+              <span>Last session: {timeAgo(p.lastSessionAt)} ({p.lastSessionMsgs || 0} messages)</span>
+            )}
             <span>Last prompt: {timeAgo(p.lastPromptAt)}</span>
             <span>Last activity: {timeAgo(p.lastActivityAt)}</span>
           </div>

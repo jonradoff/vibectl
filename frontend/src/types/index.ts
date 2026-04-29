@@ -682,6 +682,9 @@ export interface RoundProjectContext {
   lastPromptAt?: string;
   recentIntents: RoundIntentSummary[];
   note?: ProjectNote;
+  lastSessionAt?: string;
+  lastSessionMsgs?: number;
+  statusNote?: string;
 }
 
 export interface RoundAction {

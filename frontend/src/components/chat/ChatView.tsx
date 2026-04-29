@@ -240,6 +240,7 @@ export default function ChatView({
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const isReplayingRef = useRef(false)
   const [isReplaying, setIsReplaying] = useState(false)
+  const [resetKey, setResetKey] = useState(0)
 
   // Input history (shell-style up/down arrow navigation), persisted to localStorage
   const historyKey = `vibectl-input-history-${projectCode}`
@@ -420,7 +421,7 @@ export default function ChatView({
       // It will be cleaned up when it closes naturally or on a new connect().
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectCode, localPath])
+  }, [projectCode, localPath, resetKey])
 
   const handleEvent = useCallback((data: Record<string, unknown>) => {
     const type = data.type as string
@@ -1116,6 +1117,27 @@ export default function ChatView({
             <span className="text-[10px] font-mono text-gray-600">
               ${costUsd.toFixed(2)}
             </span>
+          )}
+          {(status === 'disconnected' || status === 'error' || status === 'exited') && (
+            <button
+              onClick={() => {
+                // Clear persistent caches and force a fresh WS connection
+                persistentWs.delete(projectCode)
+                persistentMessages.delete(projectCode)
+                persistentStreamingText.delete(projectCode)
+                if (wsRef.current) {
+                  wsRef.current.close()
+                  wsRef.current = null
+                }
+                setMessages([])
+                setStreamingText('')
+                setExitError(null)
+                setResetKey(k => k + 1)
+              }}
+              className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-red-900/40 border border-red-700/40 text-red-300 hover:bg-red-900/60 transition-colors"
+            >
+              Reset Session
+            </button>
           )}
         </div>
         <div className="flex items-center gap-2">

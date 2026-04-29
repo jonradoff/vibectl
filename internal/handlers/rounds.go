@@ -41,12 +41,16 @@ type RoundProjectContext struct {
 	LastPromptAt         *string            `json:"lastPromptAt,omitempty"`
 	RecentIntents        []IntentSummary    `json:"recentIntents"`
 	Note                 *models.ProjectNote `json:"note,omitempty"`
+	LastSessionAt        *string            `json:"lastSessionAt,omitempty"`
+	LastSessionMsgs      int                `json:"lastSessionMsgs,omitempty"`
+	StatusNote           string             `json:"statusNote,omitempty"`
 }
 
 type RoundHandler struct {
 	roundService        *services.RoundService
 	noteService         *services.ProjectNoteService
 	projectService      *services.ProjectService
+	chatHistoryService  *services.ChatHistoryService
 	intentService       *services.IntentService
 	issueService        *services.IssueService
 	feedbackService     *services.FeedbackService
@@ -58,6 +62,7 @@ func NewRoundHandler(
 	rs *services.RoundService,
 	ns *services.ProjectNoteService,
 	ps *services.ProjectService,
+	chs *services.ChatHistoryService,
 	is *services.IntentService,
 	iss *services.IssueService,
 	fs *services.FeedbackService,
@@ -68,6 +73,7 @@ func NewRoundHandler(
 		roundService:        rs,
 		noteService:         ns,
 		projectService:      ps,
+		chatHistoryService:  chs,
 		intentService:       is,
 		issueService:        iss,
 		feedbackService:     fs,
@@ -179,6 +185,18 @@ func (h *RoundHandler) Context(w http.ResponseWriter, r *http.Request) {
 			if note, ok := noteMap[proj.Code]; ok {
 				rpc.Note = note
 			}
+
+			// Last chat session
+			if h.chatHistoryService != nil {
+				if sessions, err := h.chatHistoryService.ListByProject(ctx, proj.Code); err == nil && len(sessions) > 0 {
+					s := sessions[0].EndedAt.Format(time.RFC3339)
+					rpc.LastSessionAt = &s
+					rpc.LastSessionMsgs = sessions[0].MessageCount
+				}
+			}
+
+			// Status note
+			rpc.StatusNote = proj.StatusNote
 
 			results[idx] = rpc
 		}(i, project)

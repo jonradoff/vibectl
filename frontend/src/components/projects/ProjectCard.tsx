@@ -539,7 +539,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
           <CompactSettings project={project} currentUserRole={summary.currentUserRole} onClone={handleClone} />
         )}
         {activeTab === 'intents' && (
-          <ProjectIntentsTab projectId={project.id} />
+          <ProjectIntentsTab projectId={project.code} />
         )}
         {activeTab === 'feedback' && (
           <FeedbackTab projectId={project.id} projectCode={project.code} />

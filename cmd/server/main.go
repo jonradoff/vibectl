@@ -497,7 +497,7 @@ func main() {
 	sessionHandler := handlers.NewSessionHandler(sessionService, projectService, eventBus)
 	dashboardHandler := handlers.NewDashboardHandler(projectService, issueService, sessionService, feedbackService, memberService, activityLogService, healthRecordService, codeDeltaService)
 	projectNoteHandler := handlers.NewProjectNoteHandler(projectNoteService)
-	roundHandler := handlers.NewRoundHandler(roundService, projectNoteService, projectService, intentService, issueService, feedbackService, activityLogService, healthRecordService)
+	roundHandler := handlers.NewRoundHandler(roundService, projectNoteService, projectService, chatHistoryService, intentService, issueService, feedbackService, activityLogService, healthRecordService)
 
 	var ghSweeper *ingestion.GitHubSweeper
 	var prSweeper *ingestion.PRSweeper
