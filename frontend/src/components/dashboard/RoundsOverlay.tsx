@@ -352,7 +352,7 @@ export default function RoundsOverlay({ onClose }: RoundsOverlayProps) {
             </div>
           ) : p.statusNote ? (
             <button
-              onClick={() => { setStatusText(p.statusNote); setEditingStatus(true) }}
+              onClick={() => { setStatusText(p.statusNote || ''); setEditingStatus(true) }}
               className={`w-full text-left rounded px-3 py-2 text-xs hover:opacity-80 transition-opacity ${
                 /blocked|waiting|stuck/i.test(p.statusNote)
                   ? 'bg-amber-900/30 border border-amber-700/40 text-amber-200'
