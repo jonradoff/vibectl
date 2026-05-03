@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 // react-router-dom not needed — issue detail shown inline
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listIssues, updateProject, createIssue, transitionIssueStatus, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode, checkDir } from '../../api/client'
+import { listIssues, updateProject, createIssue, transitionIssueStatus, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode, checkDir, getGitStatus, gitCommit } from '../../api/client'
 import type { Intent } from '../../types'
 import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, DeploymentConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ActivityLogEntry } from '../../types'
 import { statusTransitions, typeColors, priorityColors } from '../../types'
@@ -146,6 +146,10 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
   }, [project.id, queryClient])
 
   const [rebuilding, setRebuilding] = useState(false)
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const [pullDirtyState, setPullDirtyState] = useState<{ dirty: boolean; files: string[] } | null>(null)
+  const [commitMsg, setCommitMsg] = useState('WIP: auto-commit before pull')
+  const [committing, setCommitting] = useState(false)
   const [showHealthDetail, setShowHealthDetail] = useState(false)
   const handleRebuild = useCallback(async () => {
     setRebuilding(true)
@@ -458,13 +462,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
           if (isCloned && !cloneStreaming) {
             return (
               <div className="flex flex-col h-full">
-                <div className="flex items-center justify-between gap-2 px-2 py-1 text-xs text-gray-500 shrink-0">
-                  <span className="font-mono truncate">{project.links.localPath}</span>
-                  <div className="flex gap-1 shrink-0">
-                    <button onClick={handlePull} className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Pull</button>
-                    <button onClick={handleRemoveClone} className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Remove</button>
-                  </div>
-                </div>
+                <ProjectStatusBar project={project} />
                 <div className="flex-1 overflow-hidden">
                   <ChatView
                     projectId={project.id}
@@ -519,12 +517,71 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
           <CompactIssueList projectId={project.id} projectCode={project.code} />
         )}
         {activeTab === 'files' && (
-          <FilesBrowser
-            projectCode={project.code}
-            localPath={project.links.localPath}
-            githubUrl={project.links.githubUrl}
-            onClone={handleClone}
-          />
+          <div className="flex flex-col h-full">
+            {project.links.localPath && (
+              <div className="flex items-center gap-2 px-3 py-1 border-b border-gray-700/30 text-xs text-gray-500 shrink-0">
+                <span className="font-mono truncate">{project.links.localPath}</span>
+                <div className="flex gap-1 items-center shrink-0 ml-auto">
+                  {pullDirtyState ? (
+                    <>
+                      <span className="text-[10px] text-amber-400">{pullDirtyState.files.length} uncommitted file{pullDirtyState.files.length !== 1 ? 's' : ''}</span>
+                      <input
+                        value={commitMsg}
+                        onChange={e => setCommitMsg(e.target.value)}
+                        className="bg-gray-800 border border-gray-600 rounded px-1.5 py-0.5 text-[10px] text-gray-200 w-40"
+                        placeholder="Commit message"
+                      />
+                      <button
+                        onClick={async () => {
+                          setCommitting(true)
+                          try {
+                            await gitCommit(project.code, commitMsg)
+                            setPullDirtyState(null)
+                            handlePull()
+                          } catch { /* ignore */ }
+                          setCommitting(false)
+                        }}
+                        disabled={committing || !commitMsg.trim()}
+                        className="px-2 py-0.5 rounded bg-green-700 hover:bg-green-600 text-white text-[10px] disabled:opacity-50 transition-colors"
+                      >{committing ? '...' : 'Commit & Pull'}</button>
+                      <button
+                        onClick={() => { setPullDirtyState(null); handlePull() }}
+                        className="px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-600 text-white text-[10px] transition-colors"
+                      >Pull Anyway</button>
+                      <button
+                        onClick={() => setPullDirtyState(null)}
+                        className="px-1.5 py-0.5 text-[10px] text-gray-500 hover:text-gray-300"
+                      >Cancel</button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const status = await getGitStatus(project.code)
+                          if (status.dirty) {
+                            setPullDirtyState(status)
+                          } else {
+                            handlePull()
+                          }
+                        } catch {
+                          handlePull() // if status check fails, just pull
+                        }
+                      }}
+                      className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
+                    >Pull</button>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="flex-1 min-h-0">
+              <FilesBrowser
+                projectCode={project.code}
+                localPath={project.links.localPath}
+                githubUrl={project.links.githubUrl}
+                onClone={handleClone}
+              />
+            </div>
+          </div>
         )}
         {activeTab === 'history' && (
           <ChatHistoryTab projectCode={project.code} currentSession={currentSession} />
@@ -910,6 +967,63 @@ function SetLocalPathPanel({ project, onClone, onPathSaved }: { project: Project
         </div>
       )}
     </div>
+  )
+}
+
+function ProjectStatusBar({ project }: { project: Project }) {
+  const queryClient = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState(project.statusNote || '')
+
+  const saveMutation = useMutation({
+    mutationFn: () => updateProject(project.id, { statusNote: text } as Record<string, unknown>),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      setEditing(false)
+    },
+  })
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1.5 px-2 py-1 border-b border-gray-700/30 shrink-0">
+        <input
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') saveMutation.mutate()
+            if (e.key === 'Escape') { setEditing(false); setText(project.statusNote || '') }
+          }}
+          placeholder="Project status (e.g., Blocked until API key arrives)"
+          autoFocus
+          className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-[10px] text-gray-200 focus:outline-none focus:border-indigo-500"
+        />
+        <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} className="px-1.5 py-0.5 bg-indigo-600 text-white text-[10px] rounded hover:bg-indigo-500 disabled:opacity-50">Save</button>
+        <button onClick={() => { setEditing(false); setText(project.statusNote || '') }} className="text-[10px] text-gray-500 hover:text-gray-300">Cancel</button>
+      </div>
+    )
+  }
+
+  if (project.statusNote) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        className={`w-full text-left px-2 py-1 border-b border-gray-700/30 text-[10px] shrink-0 hover:opacity-80 transition-opacity ${
+          /blocked|waiting|stuck/i.test(project.statusNote) ? 'text-amber-300 bg-amber-900/20' : 'text-gray-400'
+        }`}
+      >
+        {project.statusNote}
+      </button>
+    )
+  }
+
+  return (
+    <button
+      onClick={() => setEditing(true)}
+      className="w-full text-left px-2 py-1 border-b border-gray-700/30 text-[10px] text-gray-600 hover:text-gray-400 transition-colors shrink-0"
+    >
+      + Set project status
+    </button>
   )
 }
 

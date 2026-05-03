@@ -183,4 +183,5 @@ type UpdateProjectRequest struct {
 	Webhooks    *[]WebhookConfig   `json:"webhooks,omitempty"`
 	Tags        *[]string          `json:"tags,omitempty"`
 	Inactive    *bool              `json:"inactive,omitempty"`
+	StatusNote  *string            `json:"statusNote,omitempty"`
 }

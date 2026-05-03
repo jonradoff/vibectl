@@ -178,6 +178,12 @@ export const getPullSSEUrl = (projectId: string): string => {
   const token = getStoredToken();
   return `/api/v1/projects/${projectId}/pull${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 };
+export const getGitStatus = (projectId: string) =>
+  request<{ dirty: boolean; files: string[] }>(`/projects/${projectId}/git-status`);
+export const gitCommit = (projectId: string, message: string) =>
+  request<{ status: string }>(`/projects/${projectId}/git-commit`, {
+    method: 'POST', body: JSON.stringify({ message }),
+  });
 
 export const getRestartDevStreamUrl = (projectId: string): string => {
   const token = getStoredToken();
@@ -649,6 +655,26 @@ export const listMCPServers = (projectPath?: string) => {
   const qs = projectPath ? `?projectPath=${encodeURIComponent(projectPath)}` : '';
   return request<{ servers: MCPServerInfo[] }>(`/admin/mcp-servers${qs}`);
 };
+
+// ---- Plugins ----
+export const listPlugins = () =>
+  request<import('../types').InstalledPlugin[]>('/admin/plugins');
+export const listPluginCommands = () =>
+  request<import('../types').PluginCommand[]>('/admin/plugins/commands');
+export const listAvailablePlugins = () =>
+  request<import('../types').AvailablePlugin[]>('/admin/plugins/available');
+export const listPluginMarketplaces = () =>
+  request<import('../types').PluginMarketplace[]>('/admin/plugins/marketplaces');
+export const addPluginMarketplace = (id: string, repo: string) =>
+  request<{ status: string }>('/admin/plugins/marketplaces', { method: 'POST', body: JSON.stringify({ id, repo }) });
+export const enablePlugin = (id: string) =>
+  request<{ status: string }>(`/admin/plugins/${encodeURIComponent(id)}/enable`, { method: 'POST' });
+export const disablePlugin = (id: string) =>
+  request<{ status: string }>(`/admin/plugins/${encodeURIComponent(id)}/disable`, { method: 'POST' });
+export const installPlugin = (marketplace: string, name: string) =>
+  request<{ status: string }>('/admin/plugins/install', { method: 'POST', body: JSON.stringify({ marketplace, name }) });
+export const uninstallPlugin = (id: string) =>
+  request<{ status: string }>(`/admin/plugins/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 // ---- Claude Subscription Usage ----
 export interface UsageBucket {

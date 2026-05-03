@@ -3,6 +3,34 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.14.0 (2026-05-03) — Plugin Manager & Dynamic Slash Commands
+
+### Added
+- **Plugin Manager**: `/plugins` slash command opens a full plugin management modal with three tabs:
+  - **Installed**: List installed Claude Code plugins with on/off toggles, version info, commands, skills, and uninstall
+  - **Browse**: Search and install from marketplace with popularity rankings (500+ plugins)
+  - **Marketplaces**: View and add marketplace sources (GitHub repos)
+- **Dynamic slash command autocomplete**: Plugin commands (from `commands/*.md`) and skills (from `skills/*/SKILL.md`) are discovered from installed plugins and merged into the chat autocomplete. Plugin commands show source badge (e.g., `[token-optimizer]`).
+- **Restart after changes**: Banner prompts to restart Claude Code after plugin enable/disable/install/uninstall, using existing `/reload` mechanism.
+- **Plugin API endpoints**: `GET /admin/plugins`, `GET /admin/plugins/commands`, `GET /admin/plugins/available`, marketplace management, enable/disable/install/uninstall.
+- **VIBECTL.md auto-regeneration**: Regenerated on Claude Code session start for fresh project context.
+- **VIBECTL.md auto-gitignore**: Automatically added to `.gitignore` on first generation.
+- **Project status notes**: Editable status field on project cards (Claude Code header) and in Rounds overlay. Yellow-tinted for "blocked"/"waiting" keywords.
+- **JSON tree viewer**: File browser renders JSON files as collapsible/expandable tree with smart default expansion and Expand/Collapse All.
+- **Markdown preview**: File browser defaults to rendered markdown preview for `.md` files.
+- **Inline issue detail**: Clicking an issue in project card shows detail inline instead of navigating to a new page.
+- **Issue form persistence**: New issue form saves draft to sessionStorage, survives tab switches. Repro steps optional.
+- **Smart git pull**: Pull checks for uncommitted changes first, offers Commit & Pull, Pull Anyway, or Cancel.
+- **Reset Session button**: Appears on disconnected/error/exited Claude Code status for recovering stuck sessions.
+
+### Fixed
+- VIBECTL.md uses project code instead of MongoDB ObjectID.
+- Multiple ID→code fallback fixes across handlers (filesystem, issues, vibectl-md) for delegation compatibility.
+- File editor discard no longer causes blank screen (portal stopPropagation fix).
+- Removed dangerous Remove button from Claude Code header; Pull/Remove moved to Files tab.
+
+---
+
 ## v0.13.0 (2026-04-29) — Project Rounds
 
 ### Added

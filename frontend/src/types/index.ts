@@ -86,6 +86,8 @@ export interface Project {
   tags?: string[];
   inactive?: boolean;
   inactiveSince?: string;
+  statusNote?: string;
+  statusSetAt?: string;
   recurringThemes?: RecurringTheme[];
   architectureSummary?: string;
   architectureUpdatedAt?: string;
@@ -643,6 +645,47 @@ export const statusTransitions: Record<IssueType, Record<string, string[]>> = {
     open: ['closed', 'backlogged'],
   },
 };
+
+// ---- Plugins ----
+
+export interface PluginCommand {
+  name: string;
+  description: string;
+  source: string;
+}
+
+export interface PluginSkill {
+  name: string;
+  description: string;
+  effort?: string;
+}
+
+export interface InstalledPlugin {
+  id: string;
+  name: string;
+  description: string;
+  author?: string;
+  version: string;
+  enabled: boolean;
+  installPath: string;
+  commands: PluginCommand[];
+  skills: PluginSkill[];
+  keywords?: string[];
+}
+
+export interface AvailablePlugin {
+  id: string;
+  name: string;
+  marketplace: string;
+  uniqueInstalls: number;
+}
+
+export interface PluginMarketplace {
+  id: string;
+  source: string;
+  repo: string;
+  location?: string;
+}
 
 // ---- Project Rounds ----
 

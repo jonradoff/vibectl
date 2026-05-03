@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { listProjectPrompts, ensureDir, getClaudeAuthStatus, getStoredToken, submitClaudeLoginCode, submitClaudeTokenDirect, listMCPServers, getSubscriptionUsage } from '../../api/client'
+import { listProjectPrompts, ensureDir, getClaudeAuthStatus, getStoredToken, submitClaudeLoginCode, submitClaudeTokenDirect, listMCPServers, getSubscriptionUsage, listPluginCommands } from '../../api/client'
 import { useAuth } from '../../contexts/AuthContext'
+import PluginManagerModal from '../plugins/PluginManagerModal'
 import { useMode } from '../../contexts/ModeContext'
 import { notifyServerRestarting } from '../shared/RebuildOverlay'
 import ReactMarkdown from 'react-markdown'
@@ -187,13 +188,32 @@ export default function ChatView({
   const compactingRef = useRef(false)
   const [exitError, setExitError] = useState<{ exitCode: number; stderr: string[] } | null>(null)
   const [showLoginModal, setShowLoginModal] = useState(false)
+  const [showPluginManager, setShowPluginManager] = useState(false)
+
+  // Dynamic plugin commands — merged with builtins for autocomplete
+  const { data: pluginCmds = [] } = useQuery({
+    queryKey: ['pluginCommands'],
+    queryFn: listPluginCommands,
+    staleTime: 60_000,
+    retry: 1,
+  })
+  const SLASH_COMMANDS = useMemo(() => {
+    const all = [...BUILTIN_SLASH_COMMANDS]
+    for (const cmd of pluginCmds) {
+      const name = '/' + cmd.name
+      if (!all.some(c => c.name === name)) {
+        all.push({ name, description: cmd.description, source: cmd.source })
+      }
+    }
+    return all
+  }, [pluginCmds])
 
   // Inline slash command autocomplete — show when input starts with / and matches commands
   const slashMatches = useMemo(() => {
     const text = inputText.trim()
     if (!text.startsWith('/') || text.includes(' ') || slashDismissedRef.current) return []
     return SLASH_COMMANDS.filter(c => c.name.startsWith(text.toLowerCase()))
-  }, [inputText])
+  }, [inputText, SLASH_COMMANDS])
 
   // Reset highlight when matches change, and clear dismissed flag when input changes away from /
   useEffect(() => {
@@ -893,6 +913,8 @@ export default function ChatView({
     } else if (cmdName === '/permissions approve') {
       setPermissionMode('approve')
       sendWsMessage('restart', { skipPermissions: false })
+    } else if (cmdName === '/plugins') {
+      setShowPluginManager(true)
     } else {
       // Other slash commands — send as user message text (keep the / so Claude Code recognizes them)
       setMessages((prev) => [...prev, { role: 'user', text: cmdName }])
@@ -1297,6 +1319,17 @@ export default function ChatView({
             </div>
           )
         })()}
+        {showPluginManager && (
+          <PluginManagerModal
+            onClose={() => setShowPluginManager(false)}
+            onRestart={() => {
+              setCompactingLabel('Reloading after plugin changes...')
+              compactingRef.current = true
+              sendWsMessage('restart', { skipPermissions: permissionMode === 'accept-all' })
+            }}
+          />
+        )}
+
         {showLoginModal && (
           <ClaudeLoginModal
             onClose={() => setShowLoginModal(false)}
@@ -1353,6 +1386,7 @@ export default function ChatView({
                 >
                   <code className="text-xs font-mono text-indigo-400 shrink-0">{cmd.name}</code>
                   <span className="text-[11px] text-gray-500 truncate">{cmd.description}</span>
+                  {cmd.source && <span className="text-[9px] text-gray-600 shrink-0">[{cmd.source}]</span>}
                 </button>
               ))}
               <div className="px-3 py-1 border-t border-gray-700/50 text-[10px] text-gray-600">
@@ -1519,7 +1553,7 @@ function LoginCodePrompt({ onSubmit }: { onSubmit: (code: string) => void }) {
 
 // --- Slash Command Autocomplete ---
 
-const SLASH_COMMANDS = [
+const BUILTIN_SLASH_COMMANDS: { name: string; description: string; source?: string }[] = [
   { name: '/compact', description: 'Free context window (resume with compacted context)' },
   { name: '/fresh', description: 'Start a fresh session (clears all context)' },
   { name: '/reload', description: 'Reload MCPs and resume session with context' },
@@ -1528,6 +1562,7 @@ const SLASH_COMMANDS = [
   { name: '/login', description: 'Log in or switch Claude Code account' },
   { name: '/permissions auto', description: 'Accept all tool calls automatically' },
   { name: '/permissions approve', description: 'Require approval for tool calls' },
+  { name: '/plugins', description: 'Manage Claude Code plugins' },
   { name: '/review', description: 'Review a pull request' },
   { name: '/init', description: 'Create a CLAUDE.md for this project' },
   { name: '/memory', description: 'Review and edit project memory' },
