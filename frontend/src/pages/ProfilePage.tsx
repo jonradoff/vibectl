@@ -7,17 +7,19 @@ import {
 } from '../api/client';
 import type { APIKeyView } from '../api/client';
 import { useSearchParams } from 'react-router-dom';
+import AdaptersSection from '../components/settings/AdaptersSection';
 
 // ─── Tab config ──────────────────────────────────────────────────────────────
 
-type TabKey = 'profile' | 'github' | 'llms' | 'api-keys' | 'claude-code';
+type TabKey = 'profile' | 'github' | 'llms' | 'api-keys' | 'claude-code' | 'integrations';
 
 const TABS: { key: TabKey; label: string }[] = [
-  { key: 'profile',     label: 'Profile'     },
-  { key: 'github',      label: 'GitHub'      },
-  { key: 'llms',        label: 'LLMs'        },
-  { key: 'api-keys',    label: 'API Keys'    },
-  { key: 'claude-code', label: 'Claude Code' },
+  { key: 'profile',      label: 'Profile'      },
+  { key: 'github',       label: 'GitHub'       },
+  { key: 'llms',         label: 'LLMs'         },
+  { key: 'api-keys',     label: 'API Keys'     },
+  { key: 'claude-code',  label: 'Claude Code'  },
+  { key: 'integrations', label: 'Integrations' },
 ];
 
 // ─── Page shell ──────────────────────────────────────────────────────────────
@@ -138,6 +140,10 @@ export default function ProfilePage() {
           fontSize={currentUser.claudeCodeFontSize || 14}
           onSaved={refreshUser}
         />
+      )}
+
+      {activeTab === 'integrations' && (
+        <AdaptersSection />
       )}
     </div>
   );
