@@ -1,9 +1,9 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation } from 'react-router-dom'
 import React from 'react'
-import { getUniverseData, listArchivedProjects, unarchiveProject, deleteProject, listUnits, getClaudeUsageSummary, updateClaudeUsageConfig, getSubscriptionUsage, getProductivity, getIntentProductivity, getIntentInsights, backfillIntents, getBackfillCount, listAllTags, listUsersDirectory } from '../../api/client'
+import { getUniverseData, listArchivedProjects, unarchiveProject, deleteProject, listUnits, getClaudeUsageSummary, updateClaudeUsageConfig, getSubscriptionUsage, getProductivity, getIntentProductivity, getIntentInsights, backfillIntents, getBackfillCount, listAllTags, listUsersDirectory, listProjects } from '../../api/client'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, AreaChart, Area, ResponsiveContainer } from 'recharts'
 import type { ProductivityEntry } from '../../api/client'
 import RoundsOverlay from './RoundsOverlay'
@@ -133,12 +133,17 @@ function ProjectsTab({ days, sortField, sortDir, onSort, tagFilter, onTagFilter,
 
   const handleSort = onSort
 
+  // Resolve project code → ObjectID for card navigation
+  const { data: projList = [] } = useQuery({ queryKey: ['projects'], queryFn: listProjects, staleTime: 30_000 })
+  const codeToId = useMemo(() => new Map(projList.map(p => [p.code, p.id])), [projList])
+
   const handleRowClick = (projectCode: string) => {
-    openProject(projectCode)
-    setActiveProjectId(projectCode)
+    const pid = codeToId.get(projectCode) || projectCode
+    openProject(pid)
+    setActiveProjectId(pid)
     if (location.pathname !== '/') navigate('/')
     setTimeout(() => {
-      const el = document.querySelector(`[data-project-id="${projectCode}"]`)
+      const el = document.querySelector(`[data-project-id="${pid}"]`)
       el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 100)
   }
@@ -840,10 +845,18 @@ export function CodeDeltaTab({ tagFilter, onTagFilter: _onTagFilter, days }: { t
     else { setSortBy(field); setSortAsc(false) }
   }
 
+  const { data: projList2 = [] } = useQuery({ queryKey: ['projects'], queryFn: listProjects, staleTime: 30_000 })
+  const codeToId2 = useMemo(() => new Map(projList2.map(p => [p.code, p.id])), [projList2])
+
   const handleRowClick = (projectCode: string) => {
-    openProject(projectCode)
-    setActiveProjectId(projectCode)
+    const pid = codeToId2.get(projectCode) || projectCode
+    openProject(pid)
+    setActiveProjectId(pid)
     if (location.pathname !== '/') navigate('/')
+    setTimeout(() => {
+      const el = document.querySelector(`[data-project-id="${pid}"]`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 100)
   }
 
   const formatNum = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
@@ -1333,6 +1346,7 @@ export default function MissionControl() {
     queryFn: listUsersDirectory,
     staleTime: 60_000,
   })
+
 
   // Subscription usage alert — badge on Usage tab when any bucket >= 75%
   const { data: subUsage } = useQuery({
