@@ -208,7 +208,7 @@ export default function ChatView({
   const { data: contextHealth } = useQuery({
     queryKey: ['projectContextHealth', projectCode],
     queryFn: () => getProjectContextHealth(projectCode),
-    enabled: hasAdapters && isConnected,
+    enabled: hasAdapters && !['disconnected', 'error'].includes(status),
     refetchInterval: 30_000,
     staleTime: 15_000,
   })
