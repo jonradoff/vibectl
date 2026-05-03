@@ -646,6 +646,42 @@ export const statusTransitions: Record<IssueType, Record<string, string[]>> = {
   },
 };
 
+// ---- Adapters (third-party plugin integrations) ----
+
+export interface ContextHealth {
+  score: number;
+  grade: string;
+  fillPct: number;
+  compactions: number;
+  compactionLossPct?: number;
+  sessionDuration?: string;
+}
+
+export interface WasteFinding {
+  severity: string;
+  pattern: string;
+  description: string;
+  confidence: number;
+  monthlyWasteUsd?: number;
+  recommendation?: string;
+}
+
+export interface ActivityMode {
+  mode: string;
+  confidence: number;
+}
+
+export interface RecommendedPlugin {
+  id: string;
+  name: string;
+  description: string;
+  installUrl: string;
+  marketplace: string;
+  features: string[];
+  installed: boolean;
+  enabled: boolean;
+}
+
 // ---- Plugins ----
 
 export interface PluginCommand {

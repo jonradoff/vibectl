@@ -20,6 +20,7 @@ import (
 	"github.com/jonradoff/vibectl/internal/config"
 	"github.com/jonradoff/vibectl/internal/delegation"
 	"github.com/jonradoff/vibectl/internal/events"
+	"github.com/jonradoff/vibectl/internal/adapters"
 	"github.com/jonradoff/vibectl/internal/handlers"
 	"github.com/jonradoff/vibectl/internal/ingestion"
 	"github.com/jonradoff/vibectl/internal/middleware"
@@ -508,6 +509,11 @@ func main() {
 	projectNoteHandler := handlers.NewProjectNoteHandler(projectNoteService)
 	pluginService := services.NewPluginService()
 	pluginHandler := handlers.NewPluginHandler(pluginService)
+
+	// Adapter registry — auto-detects third-party plugin integrations
+	adapterRegistry := adapters.NewRegistry()
+	adapterRegistry.Register(adapters.NewTokenOptimizerAdapter())
+	adapterHandler := handlers.NewAdapterHandler(adapterRegistry)
 	roundHandler := handlers.NewRoundHandler(roundService, projectNoteService, projectService, chatHistoryService, intentService, issueService, feedbackService, activityLogService, healthRecordService)
 
 	var ghSweeper *ingestion.GitHubSweeper
@@ -683,6 +689,7 @@ func main() {
 			r.Post("/admin/claude-token-direct", adminHandler.ClaudeTokenDirect)
 			r.Get("/admin/mcp-servers", adminHandler.ListMCPServers)
 			r.Mount("/admin/plugins", pluginHandler.Routes())
+			r.Mount("/admin/adapters", adapterHandler.Routes())
 			r.Get("/admin/subscription-usage", adminHandler.GetSubscriptionUsage)
 
 			r.Get("/chat-history/{historyId}", chatHistoryHandler.GetByID)

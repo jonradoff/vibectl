@@ -656,6 +656,20 @@ export const listMCPServers = (projectPath?: string) => {
   return request<{ servers: MCPServerInfo[] }>(`/admin/mcp-servers${qs}`);
 };
 
+// ---- Adapters (third-party plugin integrations) ----
+export const getAdapterStatus = () =>
+  request<{ adapters: string[] }>('/admin/adapters/status');
+export const getRecommendedPlugins = () =>
+  request<import('../types').RecommendedPlugin[]>('/admin/adapters/recommended');
+export const getContextHealth = (sessionId: string) =>
+  request<import('../types').ContextHealth | null>(`/admin/adapters/context-health/${sessionId}`);
+export const getWasteFindings = () =>
+  request<import('../types').WasteFinding[]>('/admin/adapters/waste-findings');
+export const getActivityMode = (sessionId: string) =>
+  request<import('../types').ActivityMode | null>(`/admin/adapters/activity-mode/${sessionId}`);
+export const refreshAdapters = () =>
+  request<{ adapters: string[] }>('/admin/adapters/refresh', { method: 'POST' });
+
 // ---- Plugins ----
 export const listPlugins = () =>
   request<import('../types').InstalledPlugin[]>('/admin/plugins');
