@@ -70,8 +70,11 @@ func (h *IssueHandler) ListByProject(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 
 	project, err := h.projectService.GetByID(r.Context(), projectID)
-	if err != nil {
-		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+	if err != nil || project == nil {
+		project, err = h.projectService.GetByCode(r.Context(), projectID)
+	}
+	if err != nil || project == nil {
+		middleware.WriteError(w, http.StatusNotFound, "project not found", "PROJECT_NOT_FOUND")
 		return
 	}
 
@@ -99,9 +102,13 @@ func (h *IssueHandler) ListByProject(w http.ResponseWriter, r *http.Request) {
 func (h *IssueHandler) Create(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 
+	// Try by ObjectID first, then by project code (supports delegation where IDs differ)
 	project, err := h.projectService.GetByID(r.Context(), projectID)
-	if err != nil {
-		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+	if err != nil || project == nil {
+		project, err = h.projectService.GetByCode(r.Context(), projectID)
+	}
+	if err != nil || project == nil {
+		middleware.WriteError(w, http.StatusNotFound, "project not found", "PROJECT_NOT_FOUND")
 		return
 	}
 
@@ -123,11 +130,6 @@ func (h *IssueHandler) Create(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusBadRequest, "invalid priority", "INVALID_PRIORITY")
 		return
 	}
-	if req.Type == models.IssueTypeBug && req.ReproSteps == "" {
-		middleware.WriteError(w, http.StatusBadRequest, "reproSteps is required for bug issues", "MISSING_REPRO_STEPS")
-		return
-	}
-
 	issue, err := h.issueService.Create(r.Context(), project.Code, &req)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "CREATE_FAILED")
@@ -290,8 +292,11 @@ func (h *IssueHandler) ListArchived(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 
 	project, err := h.projectService.GetByID(r.Context(), projectID)
-	if err != nil {
-		middleware.WriteError(w, http.StatusNotFound, err.Error(), "PROJECT_NOT_FOUND")
+	if err != nil || project == nil {
+		project, err = h.projectService.GetByCode(r.Context(), projectID)
+	}
+	if err != nil || project == nil {
+		middleware.WriteError(w, http.StatusNotFound, "project not found", "PROJECT_NOT_FOUND")
 		return
 	}
 

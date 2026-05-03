@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listDirectory, readFile, writeFile, generateVibectlMd } from '../../api/client'
 import type { FileEntry } from '../../api/client'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
@@ -553,12 +555,136 @@ function FileRow({
   )
 }
 
+// ─── JSON Tree Viewer ────────────────────────────────────────────────────────
+
+function countNodes(value: unknown): number {
+  if (value === null || typeof value !== 'object') return 1
+  if (Array.isArray(value)) return value.reduce((s, v) => s + countNodes(v), 1)
+  return Object.values(value as Record<string, unknown>).reduce((s: number, v) => s + countNodes(v), 1)
+}
+
+function JsonTreeViewer({ content }: { content: string }) {
+  const [expandAll, setExpandAll] = useState(false)
+  const [collapseAll, setCollapseAll] = useState(0) // increment to trigger collapse
+
+  let parsed: unknown
+  let parseError = ''
+  try {
+    parsed = JSON.parse(content)
+  } catch (e) {
+    parseError = e instanceof Error ? e.message : 'Invalid JSON'
+  }
+
+  if (parseError) {
+    return (
+      <div className="w-full h-full p-4 overflow-auto bg-gray-950 text-red-400 text-sm font-mono">
+        JSON parse error: {parseError}
+      </div>
+    )
+  }
+
+  const totalNodes = countNodes(parsed)
+  const isSmall = totalNodes < 80
+
+  return (
+    <div className="w-full h-full flex flex-col bg-gray-950">
+      <div className="flex items-center gap-2 px-4 py-1.5 border-b border-gray-800 shrink-0">
+        <button
+          onClick={() => { setExpandAll(true); setCollapseAll(0) }}
+          className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+        >Expand All</button>
+        <button
+          onClick={() => { setExpandAll(false); setCollapseAll(n => n + 1) }}
+          className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+        >Collapse All</button>
+        <span className="text-[10px] text-gray-700 ml-auto">{totalNodes} nodes</span>
+      </div>
+      <div className="flex-1 overflow-auto p-4 font-mono text-[13px]">
+        <JsonNode value={parsed} keyName={null} depth={0} defaultOpen={isSmall || expandAll} expandAll={expandAll} collapseSignal={collapseAll} />
+      </div>
+    </div>
+  )
+}
+
+function JsonNode({ value, keyName, depth, defaultOpen, expandAll, collapseSignal }: {
+  value: unknown; keyName: string | null; depth: number; defaultOpen: boolean; expandAll: boolean; collapseSignal: number
+}) {
+  // For top-level + small files: open. For deeper nodes in large files: closed unless expand all.
+  const shouldOpen = expandAll || (defaultOpen && depth < 3)
+  const [open, setOpen] = useState(shouldOpen)
+
+  // React to expand/collapse all
+  useEffect(() => { if (expandAll) setOpen(true) }, [expandAll])
+  useEffect(() => { if (collapseSignal > 0) setOpen(depth === 0) }, [collapseSignal, depth])
+
+  const keyLabel = keyName !== null ? (
+    <span className="text-indigo-400">{`"${keyName}"`}<span className="text-gray-600">: </span></span>
+  ) : null
+
+  if (value === null) return <div style={{ paddingLeft: depth * 16 }}>{keyLabel}<span className="text-gray-500">null</span></div>
+  if (typeof value === 'boolean') return <div style={{ paddingLeft: depth * 16 }}>{keyLabel}<span className="text-amber-400">{String(value)}</span></div>
+  if (typeof value === 'number') return <div style={{ paddingLeft: depth * 16 }}>{keyLabel}<span className="text-cyan-400">{value}</span></div>
+  if (typeof value === 'string') {
+    const truncated = value.length > 120 ? value.slice(0, 120) + '...' : value
+    return <div style={{ paddingLeft: depth * 16 }}>{keyLabel}<span className="text-green-400">{`"${truncated}"`}</span></div>
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <div style={{ paddingLeft: depth * 16 }}>{keyLabel}<span className="text-gray-500">[]</span></div>
+    return (
+      <div>
+        <button onClick={() => setOpen(!open)} className="hover:bg-gray-800/50 rounded transition-colors" style={{ paddingLeft: depth * 16 }}>
+          <span className="text-gray-600 mr-1">{open ? '▼' : '▶'}</span>
+          {keyLabel}
+          {!open && <span className="text-gray-600">[{value.length} items]</span>}
+          {open && <span className="text-gray-600">[</span>}
+        </button>
+        {open && (
+          <>
+            {value.map((item, i) => (
+              <JsonNode key={i} value={item} keyName={null} depth={depth + 1} defaultOpen={defaultOpen} expandAll={expandAll} collapseSignal={collapseSignal} />
+            ))}
+            <div style={{ paddingLeft: depth * 16 }} className="text-gray-600">]</div>
+          </>
+        )}
+      </div>
+    )
+  }
+
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (entries.length === 0) return <div style={{ paddingLeft: depth * 16 }}>{keyLabel}<span className="text-gray-500">{'{}'}</span></div>
+    return (
+      <div>
+        <button onClick={() => setOpen(!open)} className="hover:bg-gray-800/50 rounded transition-colors" style={{ paddingLeft: depth * 16 }}>
+          <span className="text-gray-600 mr-1">{open ? '▼' : '▶'}</span>
+          {keyLabel}
+          {!open && <span className="text-gray-600">{'{' + entries.length + ' keys}'}</span>}
+          {open && <span className="text-gray-600">{'{'}</span>}
+        </button>
+        {open && (
+          <>
+            {entries.map(([k, v]) => (
+              <JsonNode key={k} value={v} keyName={k} depth={depth + 1} defaultOpen={defaultOpen} expandAll={expandAll} collapseSignal={collapseSignal} />
+            ))}
+            <div style={{ paddingLeft: depth * 16 }} className="text-gray-600">{'}'}</div>
+          </>
+        )}
+      </div>
+    )
+  }
+
+  return <div style={{ paddingLeft: depth * 16 }}>{keyLabel}<span className="text-gray-400">{String(value)}</span></div>
+}
+
 function FileEditorModal({ projectCode, filePath, onClose }: { projectCode: string; filePath: string; onClose: () => void }) {
   const queryClient = useQueryClient()
   const [content, setContent] = useState('')
   const [isDirty, setIsDirty] = useState(false)
   const [saved, setSaved] = useState(false)
   const [showUnsavedPrompt, setShowUnsavedPrompt] = useState(false)
+  const fileExt = (filePath.split('/').pop() || '').split('.').pop()?.toLowerCase() || ''
+  const [previewMode, setPreviewMode] = useState(fileExt === 'md' || fileExt === 'markdown' || fileExt === 'json')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const { data: fileData, isLoading, error } = useQuery({
@@ -616,12 +742,14 @@ function FileEditorModal({ projectCode, filePath, onClose }: { projectCode: stri
   const fileName = filePath.split('/').pop() || filePath
   const ext = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : ''
   const lang = extToLang(ext)
+  const isMarkdown = ext === 'md' || ext === 'markdown'
+  const isJson = ext === 'json'
 
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70" onClick={tryClose}>
       <div
-        className="bg-gray-900 rounded-lg border border-gray-700 w-full max-w-6xl mx-4 flex flex-col h-[90vh]"
+        className="bg-gray-900 rounded-lg border border-gray-700 w-full max-w-6xl mx-4 flex flex-col h-[90vh] relative"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -633,6 +761,18 @@ function FileEditorModal({ projectCode, filePath, onClose }: { projectCode: stri
             {lang && <span className="text-[10px] text-gray-600 font-mono shrink-0">{lang}</span>}
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {(isMarkdown || isJson) && (
+              <button
+                onClick={() => setPreviewMode(!previewMode)}
+                className={`rounded px-3 py-1 text-xs font-medium transition-colors ${
+                  previewMode
+                    ? 'bg-cyan-600 text-white hover:bg-cyan-500'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                {previewMode ? 'Edit' : 'Preview'}
+              </button>
+            )}
             <button
               onClick={() => saveMutation.mutate()}
               disabled={!isDirty || saveMutation.isPending}
@@ -651,7 +791,7 @@ function FileEditorModal({ projectCode, filePath, onClose }: { projectCode: stri
 
         {/* Unsaved changes dialog */}
         {showUnsavedPrompt && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 rounded-lg">
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 rounded-lg" onClick={(e) => e.stopPropagation()}>
             <div className="bg-gray-800 border border-gray-600 rounded-lg p-5 max-w-sm mx-4 shadow-xl">
               <h3 className="text-sm font-semibold text-white mb-2">Unsaved Changes</h3>
               <p className="text-xs text-gray-400 mb-4">You have unsaved changes. What would you like to do?</p>
@@ -694,7 +834,20 @@ function FileEditorModal({ projectCode, filePath, onClose }: { projectCode: stri
               {error instanceof Error ? error.message : 'Failed to load file'}
             </div>
           )}
-          {fileData && (
+          {fileData && previewMode && isMarkdown ? (
+            <div className="w-full h-full p-6 overflow-auto bg-gray-950 prose prose-invert prose-sm max-w-none
+              prose-headings:text-gray-100 prose-h1:border-b prose-h1:border-gray-700 prose-h1:pb-2
+              prose-a:text-indigo-400 prose-code:text-indigo-300 prose-code:bg-gray-800 prose-code:rounded prose-code:px-1.5 prose-code:py-0.5
+              prose-pre:bg-gray-800 prose-pre:border prose-pre:border-gray-700 prose-pre:rounded-lg
+              prose-table:border-collapse prose-th:border prose-th:border-gray-700 prose-th:px-3 prose-th:py-1.5 prose-th:bg-gray-800
+              prose-td:border prose-td:border-gray-700 prose-td:px-3 prose-td:py-1.5
+              prose-img:rounded-lg prose-blockquote:border-indigo-500"
+            >
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            </div>
+          ) : fileData && previewMode && isJson ? (
+            <JsonTreeViewer content={content} />
+          ) : fileData ? (
             <textarea
               ref={textareaRef}
               value={content}
@@ -702,7 +855,7 @@ function FileEditorModal({ projectCode, filePath, onClose }: { projectCode: stri
               spellCheck={false}
               className="w-full h-full p-4 font-mono text-[13px] leading-relaxed bg-gray-950 text-gray-200 resize-none focus:outline-none overflow-auto border-none"
             />
-          )}
+          ) : null}
         </div>
 
         {/* Footer */}

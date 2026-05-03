@@ -133,7 +133,22 @@ When delegation is off, the instance is fully isolated — identical to standalo
 - **Plan mode**: Claude's plan mode renders inline as markdown with approve/reject controls
 - **Session resume**: `/compact` reloads MCPs and resumes context; `/fresh` starts clean
 - **Slash commands**: `/mcp`, `/reload`, `/fresh`, `/usage`, `/permissions`
-- **VIBECTL.md generation**: Auto-generated context file with open issues, deployment info, decisions, and architecture summary — Claude Code reads this on startup
+- **VIBECTL.md generation**: Auto-generated per-developer context file with open issues, deployment info, decisions, and architecture summary — Claude Code reads this on startup. This is a local file (not for source control) that bridges VibeCtl's database with Claude Code's context window. Automatically added to `.gitignore` on first generation.
+
+### VIBECTL.md vs CLAUDE.md
+
+Your project has two context files that Claude Code reads, serving different purposes:
+
+**CLAUDE.md** — Checked into source control. Contains project-wide instructions: build commands, coding conventions, architectural rules, and setup guides. Shared by all contributors. Written and maintained by humans.
+
+**VIBECTL.md** — Local, auto-generated, NOT checked into source control. Contains live project state from VibeCtl's database: open issues by priority, recent decisions, deployment info, pending feedback, and architecture summary. Includes machine-specific data (local paths, project IDs) that would be wrong on anyone else's machine.
+
+When Claude Code starts a session, it reads both files. CLAUDE.md tells it *how* to work on this project. VIBECTL.md tells it *what* needs work right now.
+
+VibeCtl automatically:
+- Adds a reference to VIBECTL.md in your CLAUDE.md (so Claude Code knows to read it)
+- Adds `VIBECTL.md` to your `.gitignore` (so it never gets committed)
+- Preserves the `[Notes]` section across regenerations (your local scratch space for Claude)
 
 ### Multi-user Access
 - Admin signs in with password; team members sign in via **GitHub OAuth**

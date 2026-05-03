@@ -1,11 +1,11 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import { Link } from 'react-router-dom'
+// react-router-dom not needed — issue detail shown inline
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listIssues, updateProject, createIssue, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode, checkDir } from '../../api/client'
+import { listIssues, updateProject, createIssue, transitionIssueStatus, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode, checkDir } from '../../api/client'
 import type { Intent } from '../../types'
 import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, DeploymentConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ActivityLogEntry } from '../../types'
-import { priorityColors, typeColors } from '../../types'
+import { statusTransitions, typeColors, priorityColors } from '../../types'
 import ChatView from '../chat/ChatView'
 import UserShellView from '../terminal/UserShellView'
 import type { ChatSessionSnapshot } from '../chat/ChatView'
@@ -913,11 +913,21 @@ function SetLocalPathPanel({ project, onClone, onPathSaved }: { project: Project
   )
 }
 
-function CompactIssueList({ projectId, projectCode }: { projectId: string; projectCode: string }) {
+function CompactIssueList({ projectCode }: { projectId: string; projectCode: string }) {
   const [showNewIssue, setShowNewIssue] = useState(false)
+  const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null)
+  const queryClient = useQueryClient()
   const { data: issues, isLoading } = useQuery({
-    queryKey: ['issues', projectId],
-    queryFn: () => listIssues(projectId),
+    queryKey: ['issues', projectCode],
+    queryFn: () => listIssues(projectCode),
+  })
+
+  const transitionMutation = useMutation({
+    mutationFn: ({ key, status }: { key: string; status: string }) => transitionIssueStatus(key, status),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['issues', projectCode] })
+      setSelectedIssue(null)
+    },
   })
 
   if (isLoading) {
@@ -931,6 +941,59 @@ function CompactIssueList({ projectId, projectCode }: { projectId: string; proje
   }
 
   const openIssues = (issues ?? []).filter((i: Issue) => i.status === 'open')
+
+  // Inline issue detail view
+  if (selectedIssue) {
+    const validTransitions = statusTransitions[selectedIssue.type]?.[selectedIssue.status] ?? []
+    return (
+      <div className="flex flex-col h-full overflow-y-auto">
+        <div className="px-3 py-1.5 border-b border-gray-700/30 shrink-0">
+          <button
+            onClick={() => setSelectedIssue(null)}
+            className="text-[10px] text-gray-400 hover:text-gray-200 transition-colors"
+          >
+            &larr; Back to issues
+          </button>
+        </div>
+        <div className="px-3 py-2 space-y-2 text-xs">
+          <div className="flex items-center gap-2">
+            <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${priorityColors[selectedIssue.priority as Priority] ?? ''}`}>
+              {selectedIssue.priority}
+            </span>
+            <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${typeColors[selectedIssue.type as IssueType] ?? ''}`}>
+              {selectedIssue.type}
+            </span>
+            <span className="text-gray-600 font-mono text-[10px]">{selectedIssue.issueKey}</span>
+            <span className="rounded bg-gray-700 px-1.5 py-0.5 text-[10px] text-gray-400">{selectedIssue.status}</span>
+          </div>
+          <h3 className="text-sm font-medium text-white">{selectedIssue.title}</h3>
+          {selectedIssue.description && (
+            <p className="text-gray-400 whitespace-pre-wrap">{selectedIssue.description}</p>
+          )}
+          {selectedIssue.reproSteps && (
+            <div>
+              <label className="text-[9px] text-gray-600 uppercase">Repro Steps</label>
+              <p className="text-gray-400 whitespace-pre-wrap mt-0.5">{selectedIssue.reproSteps}</p>
+            </div>
+          )}
+          {validTransitions.length > 0 && (
+            <div className="flex gap-1.5 pt-1">
+              {validTransitions.map((s: string) => (
+                <button
+                  key={s}
+                  onClick={() => transitionMutation.mutate({ key: selectedIssue.issueKey, status: s })}
+                  disabled={transitionMutation.isPending}
+                  className="rounded bg-indigo-600/60 px-2 py-1 text-[10px] text-indigo-200 hover:bg-indigo-600 disabled:opacity-50 transition-colors"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -951,17 +1014,17 @@ function CompactIssueList({ projectId, projectCode }: { projectId: string; proje
       ) : (
         <div className="overflow-y-auto flex-1">
           {openIssues.slice(0, 20).map((issue: Issue) => (
-            <Link
+            <button
               key={issue.id}
-              to={`/projects/${projectCode}/issues/${issue.issueKey}`}
-              className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-gray-700/50 border-b border-gray-700/30"
+              onClick={() => setSelectedIssue(issue)}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-gray-700/50 border-b border-gray-700/30 text-left"
             >
               <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${priorityColors[issue.priority as Priority] ?? ''}`}>
                 {issue.priority}
               </span>
               <span className="text-gray-300 truncate">{issue.title}</span>
               <span className="ml-auto text-gray-600 font-mono text-[10px] shrink-0">{issue.issueKey}</span>
-            </Link>
+            </button>
           ))}
           {openIssues.length > 20 && (
             <div className="px-3 py-1.5 text-xs text-gray-500 text-center">
@@ -983,16 +1046,28 @@ function CompactIssueList({ projectId, projectCode }: { projectId: string; proje
 
 function NewIssueModal({ projectCode, onClose }: { projectCode: string; onClose: () => void }) {
   const queryClient = useQueryClient()
-  const [title, setTitle] = useState('')
-  const [type, setType] = useState<IssueType>('bug')
-  const [priority, setPriority] = useState<Priority>('P2')
-  const [description, setDescription] = useState('')
-  const [reproSteps, setReproSteps] = useState('')
+  const draftKey = `vibectl-issue-draft-${projectCode}`
+  const loadDraft = () => {
+    try { const d = sessionStorage.getItem(draftKey); return d ? JSON.parse(d) : null } catch { return null }
+  }
+  const draft = loadDraft()
+  const [title, setTitle] = useState(draft?.title || '')
+  const [type, setType] = useState<IssueType>(draft?.type || 'bug')
+  const [priority, setPriority] = useState<Priority>(draft?.priority || 'P2')
+  const [description, setDescription] = useState(draft?.description || '')
+  const [reproSteps, setReproSteps] = useState(draft?.reproSteps || '')
   const [reproError, setReproError] = useState('')
+
+  // Persist draft to sessionStorage so it survives tab switches
+  useEffect(() => {
+    const d = { title, type, priority, description, reproSteps }
+    try { sessionStorage.setItem(draftKey, JSON.stringify(d)) } catch { /* ignore */ }
+  }, [title, type, priority, description, reproSteps, draftKey])
 
   const mutation = useMutation({
     mutationFn: (data: Partial<Issue>) => createIssue(projectCode, data),
     onSuccess: () => {
+      try { sessionStorage.removeItem(draftKey) } catch { /* ignore */ }
       queryClient.invalidateQueries({ queryKey: ['issues', projectCode] })
       queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
       onClose()
@@ -1002,10 +1077,6 @@ function NewIssueModal({ projectCode, onClose }: { projectCode: string; onClose:
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!title.trim()) return
-    if (type === 'bug' && !reproSteps.trim()) {
-      setReproError('Repro steps are required for bugs')
-      return
-    }
     setReproError('')
     mutation.mutate({
       title: title.trim(),
@@ -1013,7 +1084,7 @@ function NewIssueModal({ projectCode, onClose }: { projectCode: string; onClose:
       priority,
       description: description.trim(),
       createdBy: 'user',
-      ...(type === 'bug' && reproSteps.trim() && { reproSteps: reproSteps.trim() }),
+      ...(reproSteps.trim() && { reproSteps: reproSteps.trim() }),
     })
   }
 
@@ -1026,8 +1097,8 @@ function NewIssueModal({ projectCode, onClose }: { projectCode: string; onClose:
 
   const inputClass = 'w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-200 focus:border-indigo-500 focus:outline-none'
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => { try { sessionStorage.removeItem(draftKey) } catch { /* ignore */ }; onClose() }}>
       <div className="bg-gray-800 rounded-lg border border-gray-700 w-full max-w-3xl mx-4 p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold text-white mb-4">New Issue</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -1096,7 +1167,7 @@ function NewIssueModal({ projectCode, onClose }: { projectCode: string; onClose:
           {type === 'bug' && (
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1">
-                Repro Steps <span className="text-red-400">*</span>
+                Repro Steps
               </label>
               <textarea
                 value={reproSteps}
@@ -1121,7 +1192,7 @@ function NewIssueModal({ projectCode, onClose }: { projectCode: string; onClose:
             </button>
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => { try { sessionStorage.removeItem(draftKey) } catch { /* ignore */ }; onClose() }}
               className="rounded bg-gray-700 px-4 py-2 text-sm font-medium text-gray-300 hover:bg-gray-600"
             >
               Cancel
@@ -1134,7 +1205,8 @@ function NewIssueModal({ projectCode, onClose }: { projectCode: string; onClose:
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

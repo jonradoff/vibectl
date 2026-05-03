@@ -44,6 +44,7 @@ var localExactPaths = []string{
 var localProjectSubPaths = []string{
 	"chat-session",
 	"chat-history",
+	"vibectl-md",
 	"files/list",
 	"files/read",
 	"files/write",

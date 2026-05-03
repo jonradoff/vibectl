@@ -38,7 +38,10 @@ type DirEntry struct {
 func (h *FilesystemHandler) resolveAndValidate(r *http.Request) (string, string, error) {
 	projectID := chi.URLParam(r, "id")
 	project, err := h.projectService.GetByID(r.Context(), projectID)
-	if err != nil {
+	if err != nil || project == nil {
+		project, err = h.projectService.GetByCode(r.Context(), projectID)
+	}
+	if err != nil || project == nil {
 		return "", "", fmt.Errorf("project not found")
 	}
 

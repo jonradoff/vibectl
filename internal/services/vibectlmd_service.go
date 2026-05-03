@@ -55,8 +55,11 @@ func (s *VibectlMdService) projectMu(projectID string) *sync.Mutex {
 // Generate assembles the full VIBECTL.md content for a project.
 func (s *VibectlMdService) Generate(ctx context.Context, projectID string) (string, error) {
 	project, err := s.projects.GetByID(ctx, projectID)
-	if err != nil {
-		return "", fmt.Errorf("get project: %w", err)
+	if err != nil || project == nil {
+		project, err = s.projects.GetByCode(ctx, projectID)
+	}
+	if err != nil || project == nil {
+		return "", fmt.Errorf("get project: project not found")
 	}
 
 	now := time.Now().UTC()
@@ -130,8 +133,11 @@ func (s *VibectlMdService) Generate(ctx context.Context, projectID string) (stri
 // WriteToProject generates VIBECTL.md and writes it to the project's localPath.
 func (s *VibectlMdService) WriteToProject(ctx context.Context, projectID string) error {
 	project, err := s.projects.GetByID(ctx, projectID)
-	if err != nil {
-		return fmt.Errorf("get project: %w", err)
+	if err != nil || project == nil {
+		project, err = s.projects.GetByCode(ctx, projectID)
+	}
+	if err != nil || project == nil {
+		return fmt.Errorf("get project: project not found")
 	}
 	localPath := project.Links.LocalPath
 	if localPath == "" {
@@ -157,6 +163,9 @@ func (s *VibectlMdService) WriteToProject(ctx context.Context, projectID string)
 	if err := ensureClaudeMdReference(localPath); err != nil {
 		slog.Error("failed to ensure CLAUDE.md reference", "error", err)
 	}
+	if err := ensureGitignoreEntry(localPath, "VIBECTL.md"); err != nil {
+		slog.Error("failed to ensure .gitignore entry", "error", err)
+	}
 
 	now := time.Now().UTC()
 	_ = s.projects.SetVibectlMdGeneratedAt(ctx, projectID, now)
@@ -171,8 +180,11 @@ func (s *VibectlMdService) WriteToProject(ctx context.Context, projectID string)
 // UpdateSection regenerates specific sections of an existing VIBECTL.md.
 func (s *VibectlMdService) UpdateSection(ctx context.Context, projectID string, sectionNames ...string) error {
 	project, err := s.projects.GetByID(ctx, projectID)
-	if err != nil {
-		return err
+	if err != nil || project == nil {
+		project, err = s.projects.GetByCode(ctx, projectID)
+	}
+	if err != nil || project == nil {
+		return fmt.Errorf("project not found")
 	}
 	localPath := project.Links.LocalPath
 	if localPath == "" {
@@ -504,6 +516,29 @@ func ensureClaudeMdReference(localPath string) error {
 	// Prepend reference
 	newContent := refLine + "\n" + string(existing)
 	return os.WriteFile(claudePath, []byte(newContent), 0644)
+}
+
+// ensureGitignoreEntry adds an entry to .gitignore if the file exists and doesn't already contain it.
+// Does nothing if there's no .gitignore (doesn't create one).
+func ensureGitignoreEntry(localPath, entry string) error {
+	gitignorePath := filepath.Join(localPath, ".gitignore")
+	existing, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		return nil // no .gitignore — don't create one
+	}
+	content := string(existing)
+	// Check if already present (as a whole line)
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == entry {
+			return nil
+		}
+	}
+	// Append with a newline separator if needed
+	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += entry + "\n"
+	return os.WriteFile(gitignorePath, []byte(content), 0644)
 }
 
 func strOr(hc *models.HealthCheckConfig, valFn func() string, fallback string) string {

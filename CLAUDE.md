@@ -1,5 +1,13 @@
 Read VIBECTL.md for current project status, deployment details, and issue context before starting work.
 
+# VIBECTL.md — What It Is
+
+VIBECTL.md is an auto-generated, per-developer context file that VibeCtl places in your project directory. It contains live project state from VibeCtl's database: open issues, recent decisions, deployment info, pending feedback, architecture summary, and goals.
+
+**Important:** VIBECTL.md is a local file, NOT for source control. It contains machine-specific data (local paths, database IDs) and is automatically added to `.gitignore`. The `[Notes]` section is preserved across regenerations — use it for developer-specific context you want Claude Code to know about.
+
+VIBECTL.md is the ephemeral, per-developer layer. CLAUDE.md (this file) is the permanent, repo-committed layer with build commands, conventions, and project rules.
+
 # Build & Restart
 
 VibeCtl is a self-hosted tool that may be running its own Claude Code sessions. When you make changes to Go backend code or frontend code that requires a server restart, use the rebuild endpoint:
