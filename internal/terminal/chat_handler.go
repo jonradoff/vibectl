@@ -58,6 +58,9 @@ type ChatWebSocketHandler struct {
 	// When set, the user identity is threaded through to sessions and intents.
 	// Leave nil for standalone mode (user identity will be nil).
 	TokenVerifier TokenVerifier
+	// OnSessionStart is called when a session launches, before Claude Code reads files.
+	// Used to regenerate VIBECTL.md so the agent gets fresh project context.
+	OnSessionStart func(projectCode string)
 	// RoleChecker is an optional function called before starting a new chat session.
 	// If it returns role "none" or an error, the launch is rejected.
 	// Leave nil to skip the check (standalone mode).
@@ -345,6 +348,11 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 					})
 					return
 				}
+			}
+
+			// Regenerate VIBECTL.md so the agent reads fresh project context.
+			if h.OnSessionStart != nil && launch.ProjectCode != "__workspace__" {
+				go h.OnSessionStart(launch.ProjectCode)
 			}
 
 			// Check for existing live session (reconnection).

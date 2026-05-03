@@ -293,6 +293,15 @@ func main() {
 		activityLogService.LogAsync("prompt_sent", "Sent prompt to Claude Code", projectID, snippet, meta)
 	})
 	chatWSHandler.TokenVerifier = authSessionService
+	chatWSHandler.OnSessionStart = func(projectCode string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := vibectlMdService.WriteToProject(ctx, projectCode); err != nil {
+			slog.Error("failed to regenerate VIBECTL.md on session start", "projectCode", projectCode, "error", err)
+		} else {
+			slog.Info("regenerated VIBECTL.md on session start", "projectCode", projectCode)
+		}
+	}
 	chatWSHandler.SetPlanLoggers(
 		func(projectID, requestID, planText string) {
 			plan := &models.Plan{
