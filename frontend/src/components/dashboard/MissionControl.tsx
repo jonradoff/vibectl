@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation } from 'react-router-dom'
 import React from 'react'
-import { getUniverseData, listArchivedProjects, unarchiveProject, deleteProject, listUnits, getClaudeUsageSummary, updateClaudeUsageConfig, getSubscriptionUsage, getProductivity, getIntentProductivity, getIntentInsights, backfillIntents, getBackfillCount, listAllTags, listUsersDirectory, listProjects } from '../../api/client'
+import { getUniverseData, listArchivedProjects, unarchiveProject, deleteProject, listUnits, getClaudeUsageSummary, updateClaudeUsageConfig, getSubscriptionUsage, getProductivity, getIntentProductivity, getIntentInsights, backfillIntents, getBackfillCount, listAllTags, listUsersDirectory, listProjects, getWasteFindings } from '../../api/client'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, AreaChart, Area, ResponsiveContainer } from 'recharts'
 import type { ProductivityEntry } from '../../api/client'
 import RoundsOverlay from './RoundsOverlay'
@@ -1369,6 +1369,14 @@ export default function MissionControl() {
 
   const [showRounds, setShowRounds] = useState(false)
 
+  // Waste findings from adapters (e.g., token-optimizer)
+  const { data: wasteFindings = [] } = useQuery({
+    queryKey: ['wasteFindings'],
+    queryFn: getWasteFindings,
+    staleTime: 120_000,
+    retry: 1,
+  })
+
   const sortField = (state.sortField as SortField) || 'name'
   const sortDir = (state.sortDir as SortDir) || 'asc'
 
@@ -1417,6 +1425,11 @@ export default function MissionControl() {
           </button>
         ))}
         <div className="flex items-center gap-1 ml-auto" onMouseDown={e => e.stopPropagation()}>
+          {wasteFindings.length > 0 && (
+            <span className="rounded bg-amber-900/30 px-2 py-0.5 text-[10px] text-amber-400" title={wasteFindings.map(w => w.description).join('\n')}>
+              {wasteFindings.length} optimization{wasteFindings.length !== 1 ? 's' : ''}
+            </span>
+          )}
           <button
             onClick={() => setShowRounds(true)}
             className="rounded-full bg-indigo-600 hover:bg-indigo-500 px-3 py-1 text-[10px] font-semibold text-white transition-colors cursor-pointer mr-2 flex items-center gap-1"

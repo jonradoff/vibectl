@@ -3,6 +3,17 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.14.1 (2026-05-03) — Token Optimizer Integration
+
+### Added
+- **Context health badge**: Claude Code status bar shows quality grade (A 87, C 52, etc.) from token-optimizer when installed. Color-coded green/amber/red. Hover shows compaction count and context loss. Refreshes every 30s.
+- **Context health in Rounds**: Each project in the round shows its context quality score. Degraded sessions (>50% context lost to compactions) get a red warning with recommendation to /fresh.
+- **Waste findings badge**: Mission Control header shows optimization opportunities detected by token-optimizer (e.g., "2 optimizations"). Hover shows details.
+- **Project health endpoint**: `GET /admin/adapters/project-health/{projectCode}` resolves project → session → adapter data in one call.
+- **Integrations tab in user profile**: Moved from server Settings to per-user account settings. Shows detected adapters, recommended plugins with feature checklists.
+
+---
+
 ## v0.14.0 (2026-05-03) — Plugin Manager & Dynamic Slash Commands
 
 ### Added

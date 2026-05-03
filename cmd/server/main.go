@@ -513,8 +513,8 @@ func main() {
 	// Adapter registry — auto-detects third-party plugin integrations
 	adapterRegistry := adapters.NewRegistry()
 	adapterRegistry.Register(adapters.NewTokenOptimizerAdapter())
-	adapterHandler := handlers.NewAdapterHandler(adapterRegistry)
-	roundHandler := handlers.NewRoundHandler(roundService, projectNoteService, projectService, chatHistoryService, intentService, issueService, feedbackService, activityLogService, healthRecordService)
+	adapterHandler := handlers.NewAdapterHandler(adapterRegistry, chatSessionService)
+	roundHandler := handlers.NewRoundHandler(roundService, projectNoteService, projectService, chatHistoryService, chatSessionService, intentService, issueService, feedbackService, activityLogService, healthRecordService, adapterRegistry)
 
 	var ghSweeper *ingestion.GitHubSweeper
 	var prSweeper *ingestion.PRSweeper

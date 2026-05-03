@@ -663,6 +663,8 @@ export const getRecommendedPlugins = () =>
   request<import('../types').RecommendedPlugin[]>('/admin/adapters/recommended');
 export const getContextHealth = (sessionId: string) =>
   request<import('../types').ContextHealth | null>(`/admin/adapters/context-health/${sessionId}`);
+export const getProjectContextHealth = (projectCode: string) =>
+  request<import('../types').ContextHealth | null>(`/admin/adapters/project-health/${projectCode}`);
 export const getWasteFindings = () =>
   request<import('../types').WasteFinding[]>('/admin/adapters/waste-findings');
 export const getActivityMode = (sessionId: string) =>

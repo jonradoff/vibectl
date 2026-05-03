@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { listProjectPrompts, ensureDir, getClaudeAuthStatus, getStoredToken, submitClaudeLoginCode, submitClaudeTokenDirect, listMCPServers, getSubscriptionUsage, listPluginCommands } from '../../api/client'
+import { listProjectPrompts, ensureDir, getClaudeAuthStatus, getStoredToken, submitClaudeLoginCode, submitClaudeTokenDirect, listMCPServers, getSubscriptionUsage, listPluginCommands, getProjectContextHealth, getAdapterStatus } from '../../api/client'
 import { useAuth } from '../../contexts/AuthContext'
 import PluginManagerModal from '../plugins/PluginManagerModal'
 import { useMode } from '../../contexts/ModeContext'
@@ -197,6 +197,22 @@ export default function ChatView({
     staleTime: 60_000,
     retry: 1,
   })
+  // Context health from adapter (e.g., token-optimizer quality score)
+  const { data: adapterStatus } = useQuery({
+    queryKey: ['adapterStatus'],
+    queryFn: getAdapterStatus,
+    staleTime: 120_000,
+    retry: 1,
+  })
+  const hasAdapters = (adapterStatus?.adapters?.length ?? 0) > 0
+  const { data: contextHealth } = useQuery({
+    queryKey: ['projectContextHealth', projectCode],
+    queryFn: () => getProjectContextHealth(projectCode),
+    enabled: hasAdapters && isConnected,
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  })
+
   const SLASH_COMMANDS = useMemo(() => {
     const all = [...BUILTIN_SLASH_COMMANDS]
     for (const cmd of pluginCmds) {
@@ -1138,6 +1154,18 @@ export default function ChatView({
           {costUsd !== null && (
             <span className="text-[10px] font-mono text-gray-600">
               ${costUsd.toFixed(2)}
+            </span>
+          )}
+          {contextHealth && (
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                contextHealth.score >= 75 ? 'bg-green-900/40 text-green-400' :
+                contextHealth.score >= 50 ? 'bg-amber-900/40 text-amber-400' :
+                'bg-red-900/40 text-red-400'
+              }`}
+              title={`Context quality: ${contextHealth.grade} (${contextHealth.score}/100)${contextHealth.compactions > 0 ? ` | ${contextHealth.compactions} compactions` : ''}${contextHealth.compactionLossPct ? ` | ${contextHealth.compactionLossPct.toFixed(0)}% context lost` : ''}`}
+            >
+              {contextHealth.grade} {contextHealth.score}
             </span>
           )}
           {(status === 'disconnected' || status === 'error' || status === 'exited') && (

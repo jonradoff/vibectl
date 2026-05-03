@@ -764,6 +764,7 @@ export interface RoundProjectContext {
   lastSessionAt?: string;
   lastSessionMsgs?: number;
   statusNote?: string;
+  contextHealth?: ContextHealth;
 }
 
 export interface RoundAction {

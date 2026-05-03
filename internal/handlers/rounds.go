@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jonradoff/vibectl/internal/adapters"
 	"github.com/jonradoff/vibectl/internal/middleware"
 	"github.com/jonradoff/vibectl/internal/models"
 	"github.com/jonradoff/vibectl/internal/services"
@@ -41,9 +42,10 @@ type RoundProjectContext struct {
 	LastPromptAt         *string            `json:"lastPromptAt,omitempty"`
 	RecentIntents        []IntentSummary    `json:"recentIntents"`
 	Note                 *models.ProjectNote `json:"note,omitempty"`
-	LastSessionAt        *string            `json:"lastSessionAt,omitempty"`
-	LastSessionMsgs      int                `json:"lastSessionMsgs,omitempty"`
-	StatusNote           string             `json:"statusNote,omitempty"`
+	LastSessionAt        *string                `json:"lastSessionAt,omitempty"`
+	LastSessionMsgs      int                    `json:"lastSessionMsgs,omitempty"`
+	StatusNote           string                 `json:"statusNote,omitempty"`
+	ContextHealth        *adapters.ContextHealth `json:"contextHealth,omitempty"`
 }
 
 type RoundHandler struct {
@@ -51,11 +53,13 @@ type RoundHandler struct {
 	noteService         *services.ProjectNoteService
 	projectService      *services.ProjectService
 	chatHistoryService  *services.ChatHistoryService
+	chatSessionService  *services.ChatSessionService
 	intentService       *services.IntentService
 	issueService        *services.IssueService
 	feedbackService     *services.FeedbackService
 	activityLogService  *services.ActivityLogService
 	healthRecordService *services.HealthRecordService
+	adapterRegistry     *adapters.Registry
 }
 
 func NewRoundHandler(
@@ -63,22 +67,26 @@ func NewRoundHandler(
 	ns *services.ProjectNoteService,
 	ps *services.ProjectService,
 	chs *services.ChatHistoryService,
+	css *services.ChatSessionService,
 	is *services.IntentService,
 	iss *services.IssueService,
 	fs *services.FeedbackService,
 	als *services.ActivityLogService,
 	hrs *services.HealthRecordService,
+	ar *adapters.Registry,
 ) *RoundHandler {
 	return &RoundHandler{
 		roundService:        rs,
 		noteService:         ns,
 		projectService:      ps,
 		chatHistoryService:  chs,
+		chatSessionService:  css,
 		intentService:       is,
 		issueService:        iss,
 		feedbackService:     fs,
 		activityLogService:  als,
 		healthRecordService: hrs,
+		adapterRegistry:     ar,
 	}
 }
 
@@ -197,6 +205,13 @@ func (h *RoundHandler) Context(w http.ResponseWriter, r *http.Request) {
 
 			// Status note
 			rpc.StatusNote = proj.StatusNote
+
+			// Context health from adapter (e.g., token-optimizer quality score)
+			if h.chatSessionService != nil && h.adapterRegistry != nil {
+				if sess, err := h.chatSessionService.GetResumable(ctx, proj.Code); err == nil && sess != nil && sess.ClaudeSessionID != "" {
+					rpc.ContextHealth = h.adapterRegistry.GetContextHealth(sess.ClaudeSessionID)
+				}
+			}
 
 			results[idx] = rpc
 		}(i, project)

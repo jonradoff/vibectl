@@ -319,6 +319,15 @@ export default function RoundsOverlay({ onClose }: RoundsOverlayProps) {
             <div className="flex items-center gap-2">
               <div className={`w-2.5 h-2.5 rounded-full ${healthColors[p.currentHealth] || 'bg-gray-700'}`} title={p.currentHealth} />
               <span className="text-[10px] text-gray-500">{p.currentHealth}</span>
+              {p.contextHealth && (
+                <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                  p.contextHealth.score >= 75 ? 'bg-green-900/40 text-green-400' :
+                  p.contextHealth.score >= 50 ? 'bg-amber-900/40 text-amber-400' :
+                  'bg-red-900/40 text-red-400'
+                }`} title={`Context quality: ${p.contextHealth.score}/100`}>
+                  {p.contextHealth.grade} {p.contextHealth.score}
+                </span>
+              )}
             </div>
           </div>
 
@@ -395,6 +404,11 @@ export default function RoundsOverlay({ onClose }: RoundsOverlayProps) {
             {p.acceptedUnsubmitted > 0 && (
               <div className="rounded bg-green-900/30 border border-green-700/40 px-2.5 py-1.5 text-xs text-green-300">
                 {p.acceptedUnsubmitted} ready for prompt
+              </div>
+            )}
+            {p.contextHealth && p.contextHealth.compactionLossPct && p.contextHealth.compactionLossPct > 50 && (
+              <div className="rounded bg-red-900/30 border border-red-700/40 px-2.5 py-1.5 text-xs text-red-300">
+                Session degraded — {p.contextHealth.compactions} compaction{p.contextHealth.compactions !== 1 ? 's' : ''}, ~{p.contextHealth.compactionLossPct.toFixed(0)}% context lost. Consider /fresh.
               </div>
             )}
             {p.currentHealth === 'down' && (

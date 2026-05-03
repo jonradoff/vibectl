@@ -6,14 +6,16 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jonradoff/vibectl/internal/adapters"
 	"github.com/jonradoff/vibectl/internal/middleware"
+	"github.com/jonradoff/vibectl/internal/services"
 )
 
 type AdapterHandler struct {
-	registry *adapters.Registry
+	registry           *adapters.Registry
+	chatSessionService *services.ChatSessionService
 }
 
-func NewAdapterHandler(r *adapters.Registry) *AdapterHandler {
-	return &AdapterHandler{registry: r}
+func NewAdapterHandler(r *adapters.Registry, css *services.ChatSessionService) *AdapterHandler {
+	return &AdapterHandler{registry: r, chatSessionService: css}
 }
 
 func (h *AdapterHandler) Routes() chi.Router {
@@ -21,6 +23,7 @@ func (h *AdapterHandler) Routes() chi.Router {
 	r.Get("/status", h.Status)
 	r.Get("/recommended", h.Recommended)
 	r.Get("/context-health/{sessionID}", h.ContextHealth)
+	r.Get("/project-health/{projectCode}", h.ProjectHealth)
 	r.Get("/waste-findings", h.WasteFindings)
 	r.Get("/activity-mode/{sessionID}", h.ActivityMode)
 	r.Post("/refresh", h.Refresh)
@@ -47,6 +50,22 @@ func (h *AdapterHandler) ContextHealth(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteJSON(w, http.StatusOK, nil)
 		return
 	}
+	middleware.WriteJSON(w, http.StatusOK, health)
+}
+
+// ProjectHealth resolves a project code to its active Claude session and returns context health.
+func (h *AdapterHandler) ProjectHealth(w http.ResponseWriter, r *http.Request) {
+	projectCode := chi.URLParam(r, "projectCode")
+	if h.chatSessionService == nil {
+		middleware.WriteJSON(w, http.StatusOK, nil)
+		return
+	}
+	session, err := h.chatSessionService.GetResumable(r.Context(), projectCode)
+	if err != nil || session == nil || session.ClaudeSessionID == "" {
+		middleware.WriteJSON(w, http.StatusOK, nil)
+		return
+	}
+	health := h.registry.GetContextHealth(session.ClaudeSessionID)
 	middleware.WriteJSON(w, http.StatusOK, health)
 }
 
