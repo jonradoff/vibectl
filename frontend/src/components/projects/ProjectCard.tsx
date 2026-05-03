@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 // react-router-dom not needed — issue detail shown inline
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listIssues, updateProject, createIssue, transitionIssueStatus, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, removeClone, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode, checkDir, getGitStatus, gitCommit } from '../../api/client'
+import { listIssues, updateProject, createIssue, transitionIssueStatus, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode, checkDir, getGitStatus, gitCommit } from '../../api/client'
 import type { Intent } from '../../types'
 import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, DeploymentConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ActivityLogEntry } from '../../types'
 import { statusTransitions, typeColors, priorityColors } from '../../types'
@@ -140,13 +140,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
 
   const handleClone = useCallback(() => startSSE(getCloneSSEUrl(project.id)), [project.id, startSSE])
   const handlePull = useCallback(() => startSSE(getPullSSEUrl(project.id)), [project.id, startSSE])
-  const handleRemoveClone = useCallback(async () => {
-    await removeClone(project.id)
-    queryClient.invalidateQueries({ queryKey: ['globalDashboard'] })
-  }, [project.id, queryClient])
-
   const [rebuilding, setRebuilding] = useState(false)
-  const [confirmRemove, setConfirmRemove] = useState(false)
   const [pullDirtyState, setPullDirtyState] = useState<{ dirty: boolean; files: string[] } | null>(null)
   const [commitMsg, setCommitMsg] = useState('WIP: auto-commit before pull')
   const [committing, setCommitting] = useState(false)
