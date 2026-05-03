@@ -4,6 +4,7 @@ import { getSettings, updateSettings } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import type { AppSettings } from '../types';
 import DelegationSection from '../components/settings/DelegationSection';
+import AdaptersSection from '../components/settings/AdaptersSection';
 
 // ─── Help Drawers ────────────────────────────────────────────────────────────
 
@@ -262,6 +263,11 @@ function SettingsPage() {
               helpContent={<GitHubTokenHelpDrawer />}
             />
           </div>
+        </div>
+
+        {/* Integrations (Adapters) */}
+        <div className="mb-6">
+          <AdaptersSection />
         </div>
 
         {/* Delegation */}
