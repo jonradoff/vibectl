@@ -30,6 +30,17 @@ type Config struct {
 	RemoteServerURL string // client mode: URL of the remote vibectl server (no trailing slash)
 	RemoteAPIKey    string // client mode: API key for machine-to-machine ops
 	LocalDataDir    string // client mode: directory for local config/data
+
+	// Cache-optimizer trace recording (research toggle, off by default).
+	// When RecordTraces is true, each Claude Code spawn is wrapped with a local
+	// recording proxy that captures full request/response traces in cache-optimizer
+	// corpus format. RecordingProxyCmd is invoked as `<cmd> --port <p> --session-id
+	// <id> --output-dir <dir>`. RecordingProxyDir is the CWD for that exec (typically
+	// the cache-optimizer repo root so the optimizer module is importable).
+	RecordTraces            bool
+	RecordingProxyCmd       string
+	RecordingProxyDir       string
+	RecordingProxyOutputDir string
 }
 
 func Load() *Config {
@@ -52,6 +63,16 @@ func Load() *Config {
 		}
 	}
 
+	traceOutputDir := getEnv("VIBECTL_TRACE_OUTPUT_DIR", "")
+	if traceOutputDir == "" {
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			traceOutputDir = home + "/.vibectl/traces"
+		} else {
+			traceOutputDir = ".vibectl/traces"
+		}
+	}
+
 	return &Config{
 		MongoDBURI:          getEnv("MONGODB_URI", "mongodb://localhost:27017"),
 		DatabaseName:        getEnv("DATABASE_NAME", "vibectl"),
@@ -68,6 +89,11 @@ func Load() *Config {
 		RemoteServerURL:     getEnv("REMOTE_SERVER_URL", ""),
 		RemoteAPIKey:        getEnv("REMOTE_API_KEY", ""),
 		LocalDataDir:        localDataDir,
+
+		RecordTraces:            getEnv("VIBECTL_RECORD_TRACES", "") == "1",
+		RecordingProxyCmd:       getEnv("VIBECTL_RECORDING_PROXY_CMD", ""),
+		RecordingProxyDir:       getEnv("VIBECTL_RECORDING_PROXY_DIR", ""),
+		RecordingProxyOutputDir: traceOutputDir,
 	}
 }
 

@@ -496,6 +496,19 @@ Or with Atlas:
 
 Dev standalone delegation does not use environment variables — it is configured via the Settings page and stored in MongoDB.
 
+### Cache-Optimizer Trace Recording (research)
+
+Optional. When enabled, every Claude Code spawn is wrapped with a local sidecar that captures full Anthropic API traces in [cache-optimizer](https://github.com/) corpus format. Off by default — leave the env vars unset and nothing changes.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VIBECTL_RECORD_TRACES` | unset | Set to `1` to enable. |
+| `VIBECTL_RECORDING_PROXY_CMD` | unset | Required when recording. Command for the sidecar, e.g. `python3 -m optimizer.recording_proxy`. |
+| `VIBECTL_RECORDING_PROXY_DIR` | server CWD | Working directory for the proxy (typically the cache-optimizer repo root). |
+| `VIBECTL_TRACE_OUTPUT_DIR` | `~/.vibectl/traces/` | Where trace JSON files land (one per Claude Code spawn). |
+
+If the sidecar can't start (missing binary, port collision, etc.), Claude Code spawns normally without recording — the feature is best-effort and never blocks a real session. See [CLAUDE.md](CLAUDE.md#cache-optimizer-trace-recording-research-toggle) for the full design.
+
 ---
 
 ## Health Check Protocol

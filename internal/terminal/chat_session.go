@@ -58,6 +58,7 @@ type ChatSession struct {
 	pendingContextUpdate string   // queued VIBECTL.md update to prepend to next user message
 	stderrMu             sync.Mutex
 	stderrBuf            []string // recent stderr lines, capped at 50
+	proxy                *recordingProxy // optional cache-optimizer trace recorder
 }
 
 // UsageRecorderFunc is a callback invoked when Claude Code reports token usage.
@@ -266,6 +267,14 @@ type ChatManager struct {
 	ChatHistoryService  ChatHistoryArchiver
 	UsageRecorder       UsageRecorderFunc // optional callback for token usage tracking
 	IntentExtractor     IntentExtractorFunc // optional callback for intent extraction after archive
+
+	// Cache-optimizer trace recording (research toggle). When RecordTraces is
+	// true and RecordingProxyCmd is set, each Claude Code spawn is wrapped with
+	// a local recording proxy. See internal/terminal/recording_proxy.go.
+	RecordTraces            bool
+	RecordingProxyCmd       string
+	RecordingProxyDir       string
+	RecordingProxyOutputDir string
 }
 
 // NewChatManager creates a new chat session manager.
@@ -394,6 +403,22 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 	if oauthToken != "" {
 		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+oauthToken)
 	}
+
+	// Optional cache-optimizer trace recording. Non-fatal: if the proxy can't
+	// start, Claude Code launches normally without recording.
+	spawnID := uuid.New().String()
+	var proxy *recordingProxy
+	if m.RecordTraces && m.RecordingProxyCmd != "" {
+		p, err := startRecordingProxy(m.RecordingProxyCmd, m.RecordingProxyDir, m.RecordingProxyOutputDir, spawnID)
+		if err != nil {
+			slog.Warn("recording proxy disabled for this spawn", "projectID", projectID, "error", err)
+		} else {
+			proxy = p
+			env = append(env, fmt.Sprintf("ANTHROPIC_BASE_URL=http://127.0.0.1:%d", p.port))
+			slog.Info("recording trace for spawn", "projectID", projectID, "spawnID", spawnID, "port", p.port)
+		}
+	}
+
 	cmd.Env = env
 
 	stdinPipe, err := cmd.StdinPipe()
@@ -435,14 +460,15 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 	}
 
 	sess := &ChatSession{
-		ID:        uuid.New().String(),
+		ID:          spawnID,
 		ProjectCode: projectID,
-		LocalPath: localPath,
-		TokenHash: tokenHash,
-		StartedAt: time.Now().UTC(),
-		Cmd:       cmd,
-		stdin:     stdinPipe,
-		exited:    make(chan struct{}),
+		LocalPath:   localPath,
+		TokenHash:   tokenHash,
+		StartedAt:   time.Now().UTC(),
+		Cmd:         cmd,
+		stdin:       stdinPipe,
+		exited:      make(chan struct{}),
+		proxy:       proxy,
 	}
 
 	// stderrDone is closed when the stderr goroutine has fully drained.
@@ -490,6 +516,7 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 	go func() {
 		defer close(sess.exited)
 		defer sess.closeAllSubscribers()
+		defer sess.proxy.stop() // no-op if nil; flushes the recording trace
 
 		scanner := bufio.NewScanner(stdoutPipe)
 		scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB line buffer

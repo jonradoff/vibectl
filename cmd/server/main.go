@@ -256,6 +256,17 @@ func main() {
 	}
 
 	chatManager := terminal.NewChatManager(chatSessionService, chatHistoryService)
+	chatManager.RecordTraces = cfg.RecordTraces
+	chatManager.RecordingProxyCmd = cfg.RecordingProxyCmd
+	chatManager.RecordingProxyDir = cfg.RecordingProxyDir
+	chatManager.RecordingProxyOutputDir = cfg.RecordingProxyOutputDir
+	if cfg.RecordTraces {
+		if cfg.RecordingProxyCmd == "" {
+			slog.Warn("VIBECTL_RECORD_TRACES=1 but VIBECTL_RECORDING_PROXY_CMD is unset — recording disabled")
+		} else {
+			slog.Info("cache-optimizer trace recording enabled", "proxyCmd", cfg.RecordingProxyCmd, "outputDir", cfg.RecordingProxyOutputDir)
+		}
+	}
 	chatManager.UsageRecorder = func(tokenHash, projectID, sessionID, model string, inputTokens, outputTokens, cacheRead, cacheCreation int64) {
 		rec := &models.ClaudeUsageRecord{
 			TokenHash:           tokenHash,

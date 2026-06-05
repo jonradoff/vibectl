@@ -3,6 +3,13 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.14.2 (2026-05-27) — Cache-Optimizer Trace Recording
+
+### Added
+- **Optional per-spawn Anthropic API trace recording.** When `VIBECTL_RECORD_TRACES=1`, vibectl wraps each Claude Code subprocess with a local recording sidecar (from the cache-optimizer project) and points `ANTHROPIC_BASE_URL` at it. The sidecar transparently proxies traffic to `api.anthropic.com` while writing full request/response JSON traces to `~/.vibectl/traces/<spawnID>.json` in cache-optimizer corpus format (system prompt, tools, messages, assistant response, tool calls, token counts incl. cache read/creation).
+- Configuration via env vars: `VIBECTL_RECORDING_PROXY_CMD`, `VIBECTL_RECORDING_PROXY_DIR`, `VIBECTL_TRACE_OUTPUT_DIR`. See README and CLAUDE.md.
+- Non-fatal degradation: if the sidecar fails to start, Claude Code launches normally without recording.
+
 ## v0.14.1 (2026-05-03) — Token Optimizer Integration
 
 ### Added
