@@ -41,6 +41,11 @@ var localExactPaths = []string{
 }
 
 // localProjectSubPaths are project sub-routes that stay local (under /api/v1/projects/{id}/...).
+//
+// Filesystem and Claude Code operations must run on the user's machine — the
+// remote server has no access to the local disk. The project lookup in these
+// handlers happens against local Mongo, so the project must have been created
+// locally (POST /api/v1/projects is a local-route).
 var localProjectSubPaths = []string{
 	"chat-session",
 	"chat-history",
@@ -49,6 +54,10 @@ var localProjectSubPaths = []string{
 	"files/read",
 	"files/write",
 	"feedback",
+	"clone",        // matches /clone, /clone-status, DELETE /clone
+	"pull",
+	"git-status",
+	"git-commit",
 }
 
 // IsLocalRoute returns true if the given path should be handled locally, even when delegation is active.
