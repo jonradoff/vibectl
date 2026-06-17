@@ -9,6 +9,7 @@ import { statusTransitions, typeColors, priorityColors } from '../../types'
 import ChatView from '../chat/ChatView'
 import UserShellView from '../terminal/UserShellView'
 import type { ChatSessionSnapshot } from '../chat/ChatView'
+import { ModelPicker } from '../shared/ModelPicker'
 import { useActiveProject } from '../../contexts/ActiveProjectContext'
 import { useMode } from '../../contexts/ModeContext'
 import { useAuth } from '../../contexts/AuthContext'
@@ -1502,6 +1503,7 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
   const [tagInput, setTagInput] = useState('')
   const [allTags, setAllTags] = useState<string[]>([])
   const [tagHighlight, setTagHighlight] = useState(0)
+  const [model, setModel] = useState((project as unknown as { model?: string }).model ?? '')
 
   // Fetch all tags for autocomplete
   useEffect(() => {
@@ -1570,7 +1572,8 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
       tags,
       healthCheck,
       deployment,
-    })
+      model,
+    } as Partial<Project>)
   }
 
   const inputClass = 'w-full rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none'
@@ -1644,6 +1647,18 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
             </div>
           )}
         </div>
+      </div>
+      <div>
+        <label className={labelClass}>Claude Model</label>
+        <ModelPicker
+          value={model}
+          onChange={setModel}
+          allowInherit
+          inheritLabel="(inherit server default)"
+        />
+        <p className="text-[10px] text-gray-500 mt-0.5">
+          Overrides the Settings → Default Claude Model for this project.
+        </p>
       </div>
       {/* Health Check Config */}
       <div className="border-t border-gray-700/50 pt-2 mt-2">

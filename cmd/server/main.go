@@ -256,6 +256,25 @@ func main() {
 	}
 
 	chatManager := terminal.NewChatManager(chatSessionService, chatHistoryService)
+	chatManager.ModelResolver = func(projectID string) string {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		// Try project override first (lookup by code, then by ID).
+		var proj *models.Project
+		var err error
+		proj, err = projectService.GetByCode(ctx, projectID)
+		if (err != nil || proj == nil) && len(projectID) == 24 {
+			proj, err = projectService.GetByID(ctx, projectID)
+		}
+		if err == nil && proj != nil && proj.Model != "" {
+			return proj.Model
+		}
+		s, err := settingsService.Get(ctx)
+		if err == nil && s != nil {
+			return s.DefaultModel
+		}
+		return ""
+	}
 	chatManager.RecordTraces = cfg.RecordTraces
 	chatManager.RecordingProxyCmd = cfg.RecordingProxyCmd
 	chatManager.RecordingProxyDir = cfg.RecordingProxyDir
@@ -621,6 +640,9 @@ func main() {
 
 			// Auth self-endpoints (API keys for current user)
 			r.Mount("/api-keys", apiKeyHandler.Routes())
+
+			// Anthropic model list (for picker UIs)
+			r.Mount("/models", handlers.NewModelsHandler(cfg.AnthropicKey).Routes())
 
 			// User profile (self)
 			r.Mount("/users/me", userHandler.SelfRoutes())

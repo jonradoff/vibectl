@@ -290,6 +290,9 @@ func (s *ProjectService) Update(ctx context.Context, id string, req *models.Upda
 		setFields = append(setFields, bson.E{Key: "statusNote", Value: *req.StatusNote})
 		setFields = append(setFields, bson.E{Key: "statusSetAt", Value: time.Now().UTC()})
 	}
+	if req.Model != nil {
+		setFields = append(setFields, bson.E{Key: "model", Value: *req.Model})
+	}
 
 	update := bson.D{{Key: "$set", Value: setFields}}
 

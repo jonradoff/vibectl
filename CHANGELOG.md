@@ -3,6 +3,17 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.14.3 (2026-06-17) — Claude Model Selection
+
+### Added
+- **Default Claude model in Settings.** Settings → Default Claude Model picks a model that every Claude Code spawn uses unless overridden per-project. Empty (default) leaves model selection to Claude Code's own config.
+- **Per-project model override** in the project card's Settings tab. Falls back to the server default when empty.
+- **`GET /api/v1/models`** queries `api.anthropic.com/v1/models` using the server's `ANTHROPIC_API_KEY` and caches the result for 5 minutes. The picker UI loads the list on mount; `?refresh=1` or the ↻ button bypasses the cache. Local route under delegation (uses the local key, not the remote's).
+- **`model_unavailable` typed event** is broadcast over the chat WebSocket when Claude Code rejects the selected model. Detected via stderr ("issue with the selected model") *and* stdout `result` events with `is_error: true` — Claude Code uses both channels depending on when the error fires. ChatView surfaces an inline picker; selecting a model writes the per-project override, sends a `kill` WS message to terminate the broken spawn, then triggers a fresh launch that picks up the new model.
+
+### Resolution order
+At spawn time: `project.model` → `settings.defaultModel` → unset (Claude Code uses its own default).
+
 ## v0.14.2 (2026-05-27) — Cache-Optimizer Trace Recording
 
 ### Added

@@ -112,6 +112,7 @@ type Project struct {
 	SnoozeReason          string             `json:"snoozeReason,omitempty" bson:"snoozeReason,omitempty"`
 	StatusNote            string             `json:"statusNote,omitempty" bson:"statusNote,omitempty"`
 	StatusSetAt           *time.Time         `json:"statusSetAt,omitempty" bson:"statusSetAt,omitempty"`
+	Model                 string             `json:"model,omitempty" bson:"model,omitempty"` // Claude model override; empty means inherit from settings.DefaultModel
 	Tags                  []string           `json:"tags,omitempty" bson:"tags,omitempty"`
 	RecurringThemes       []RecurringTheme   `json:"recurringThemes,omitempty" bson:"recurringThemes,omitempty"`
 	ArchitectureSummary   string             `json:"architectureSummary,omitempty" bson:"architectureSummary,omitempty"`
@@ -184,4 +185,5 @@ type UpdateProjectRequest struct {
 	Tags        *[]string          `json:"tags,omitempty"`
 	Inactive    *bool              `json:"inactive,omitempty"`
 	StatusNote  *string            `json:"statusNote,omitempty"`
+	Model       *string            `json:"model,omitempty"`
 }

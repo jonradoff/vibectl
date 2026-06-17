@@ -275,6 +275,12 @@ type ChatManager struct {
 	RecordingProxyCmd       string
 	RecordingProxyDir       string
 	RecordingProxyOutputDir string
+
+	// ModelResolver returns the Claude model to spawn with for the given project,
+	// or empty string to let Claude Code use its own default. Looks up project
+	// override first, then falls back to global settings.DefaultModel. Wired
+	// in cmd/server/main.go.
+	ModelResolver func(projectID string) string
 }
 
 // NewChatManager creates a new chat session manager.
@@ -375,6 +381,14 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 			"--allowedTools", "EnterPlanMode ExitPlanMode")
 	}
 	args = append(args, extraArgs...)
+
+	// Resolve model: project override > settings default > unset (use Claude's default).
+	if m.ModelResolver != nil {
+		if model := m.ModelResolver(projectID); model != "" {
+			args = append(args, "--model", model)
+			slog.Info("spawn with model", "projectID", projectID, "model", model)
+		}
+	}
 
 	cmd := exec.Command("claude", args...)
 
@@ -495,6 +509,20 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 
 			// Forward error lines immediately (case-insensitive match).
 			lower := strings.ToLower(line)
+			// Model availability errors get their own typed event so the
+			// frontend can show an inline picker. The standard wording from
+			// Claude Code is "issue with the selected model (<id>)".
+			if strings.Contains(lower, "issue with the selected model") ||
+				strings.Contains(lower, "model not found") ||
+				(strings.Contains(lower, "model") && strings.Contains(lower, "may not exist")) {
+				modelEvent := map[string]interface{}{
+					"type": "model_unavailable",
+					"data": map[string]string{"message": line},
+				}
+				if data, marshalErr := json.Marshal(modelEvent); marshalErr == nil {
+					sess.broadcast(data)
+				}
+			}
 			if strings.Contains(lower, "error") ||
 				strings.Contains(lower, "not logged in") ||
 				strings.Contains(lower, "please run /login") ||
@@ -558,6 +586,29 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 						m.extractStreamUsage(line, sess)
 					} else if parsed.Type == "result" {
 						m.extractResultUsage(line, sess)
+					}
+				}
+
+				// Detect model-unavailable errors emitted via result events with
+				// is_error: true. Claude Code surfaces these on stdout, not stderr.
+				if parsed.Type == "result" {
+					var r struct {
+						IsError bool   `json:"is_error"`
+						Result  string `json:"result"`
+					}
+					if json.Unmarshal(line, &r) == nil && r.IsError {
+						lower := strings.ToLower(r.Result)
+						if strings.Contains(lower, "issue with the selected model") ||
+							strings.Contains(lower, "model not found") ||
+							(strings.Contains(lower, "model") && strings.Contains(lower, "may not exist")) {
+							evt := map[string]interface{}{
+								"type": "model_unavailable",
+								"data": map[string]string{"message": r.Result},
+							}
+							if data, marshalErr := json.Marshal(evt); marshalErr == nil {
+								sess.broadcast(data)
+							}
+						}
 					}
 				}
 

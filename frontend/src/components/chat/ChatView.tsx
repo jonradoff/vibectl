@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { listProjectPrompts, ensureDir, getClaudeAuthStatus, getStoredToken, submitClaudeLoginCode, submitClaudeTokenDirect, listMCPServers, getSubscriptionUsage, listPluginCommands, getProjectContextHealth, getAdapterStatus } from '../../api/client'
+import { listProjectPrompts, ensureDir, getClaudeAuthStatus, getStoredToken, submitClaudeLoginCode, submitClaudeTokenDirect, listMCPServers, getSubscriptionUsage, listPluginCommands, getProjectContextHealth, getAdapterStatus, updateProject } from '../../api/client'
+import { ModelPicker } from '../shared/ModelPicker'
+import type { Project } from '../../types'
 import { useAuth } from '../../contexts/AuthContext'
 import PluginManagerModal from '../plugins/PluginManagerModal'
 import { useMode } from '../../contexts/ModeContext'
@@ -187,6 +189,8 @@ export default function ChatView({
   const [compactingLabel, setCompactingLabel] = useState<string | null>(null)
   const compactingRef = useRef(false)
   const [exitError, setExitError] = useState<{ exitCode: number; stderr: string[] } | null>(null)
+  const [modelUnavailable, setModelUnavailable] = useState<{ message: string } | null>(null)
+  const [pickerModel, setPickerModel] = useState('')
   const [showLoginModal, setShowLoginModal] = useState(false)
   const [showPluginManager, setShowPluginManager] = useState(false)
 
@@ -753,6 +757,17 @@ export default function ChatView({
         break
       }
 
+      case 'model_unavailable': {
+        const d = data.data as { message?: string } | undefined
+        setModelUnavailable({ message: d?.message || 'The selected Claude model is unavailable.' })
+        setIsStreaming(false)
+        setAwaitingResult(false)
+        setStatus('claude_error')
+        onStatusChange?.('claude_error')
+        onActivityChange?.(false)
+        break
+      }
+
       case 'error': {
         // Two possible error formats:
         // 1. Backend-generated: { type: "error", data: { message: "..." } }
@@ -1302,6 +1317,52 @@ export default function ChatView({
               <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '300ms' }} />
             </span>
             Thinking...
+          </div>
+        )}
+
+        {/* Model unavailable picker — shown when claude rejects the selected model */}
+        {modelUnavailable && (
+          <div className="rounded-lg bg-amber-950/60 border border-amber-800/60 p-3 space-y-2 shrink-0">
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-xs font-medium text-amber-400">Selected model is unavailable</span>
+              <button onClick={() => setModelUnavailable(null)} className="text-gray-600 hover:text-gray-400 text-[10px] shrink-0">dismiss</button>
+            </div>
+            <p className="text-[11px] text-amber-300 leading-relaxed">{modelUnavailable.message}</p>
+            <div className="flex items-center gap-2">
+              <ModelPicker value={pickerModel} onChange={setPickerModel} placeholder="Pick a model" />
+              <button
+                disabled={!pickerModel}
+                onClick={async () => {
+                  try {
+                    await updateProject(projectId, { model: pickerModel } as Partial<Project>)
+                  } catch (e) {
+                    console.error('failed to save model override', e)
+                  }
+                  // Kill the underlying claude process so the next launch spawns fresh
+                  // with the new model. Without this, the chat handler "reconnects to
+                  // existing chat session" and never re-reads the model.
+                  if (wsRef.current?.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify({ type: 'kill' }))
+                  }
+                  setModelUnavailable(null)
+                  setExitError(null)
+                  setPickerModel('')
+                  persistentWs.delete(projectCode)
+                  persistentMessages.delete(projectCode)
+                  persistentStreamingText.delete(projectCode)
+                  // Give the kill message time to flush before closing the socket.
+                  setTimeout(() => {
+                    if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
+                    setMessages([])
+                    setStreamingText('')
+                    setResetKey(k => k + 1)
+                  }, 200)
+                }}
+                className="px-2 py-1 text-[10px] font-medium rounded bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white hover:bg-indigo-600"
+              >
+                Save & restart
+              </button>
+            </div>
           </div>
         )}
 

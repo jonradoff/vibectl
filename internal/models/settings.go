@@ -7,6 +7,11 @@ type Settings struct {
 	VibectlMdSchedule  string    `json:"vibectlMdSchedule" bson:"vibectlMdSchedule"` // "hourly", "daily", "weekly", "" (off)
 	UpdatedAt          time.Time `json:"updatedAt" bson:"updatedAt"`
 
+	// DefaultModel is the Claude model passed to every Claude Code spawn that
+	// doesn't have a project-level override (Project.Model). Empty = let Claude
+	// Code use its own default (whatever ~/.claude/settings.json or account default says).
+	DefaultModel string `json:"defaultModel,omitempty" bson:"defaultModel,omitempty"`
+
 	// Experimental features — all off by default.
 	ExperimentalShell bool `json:"experimentalShell" bson:"experimentalShell"`
 

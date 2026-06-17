@@ -18,6 +18,7 @@ import type {
   ActivityLogResponse,
   IssueComment,
   AppSettings,
+  AnthropicModel,
   User,
   ProjectMember,
   CheckoutStatus,
@@ -622,6 +623,12 @@ export const deleteComment = (issueKey: string, commentId: string) =>
 export const getSettings = () => request<AppSettings>('/settings');
 export const updateSettings = (data: Partial<AppSettings>) =>
   request<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(data) });
+
+// ---- Models ----
+export const getAvailableModels = (refresh = false) =>
+  request<{ models: AnthropicModel[]; fetchedAt: string }>(
+    `/models${refresh ? '?refresh=1' : ''}`
+  );
 
 // ---- Admin ----
 export const triggerRebuild = () =>

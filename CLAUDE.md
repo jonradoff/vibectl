@@ -96,6 +96,18 @@ VibeCtl spawns Claude Code processes in stream-json mode (`-p --input-format str
 - Plan mode tools (`EnterPlanMode`, `ExitPlanMode`) must be in `--allowedTools` — otherwise `acceptEdits` silently denies them and plan mode gets stuck.
 - `--dangerously-skip-permissions` is used when the user sets permissions to "auto" via `/permissions auto`.
 
+## Model selection
+
+vibectl can override the model that Claude Code spawns use via `--model <id>`. Resolution order at spawn:
+
+1. `project.model` — set per project in the project card's Settings tab.
+2. `settings.defaultModel` — set globally in the Settings page.
+3. Unset — Claude Code uses whatever its own `~/.claude/settings.json` / account default says.
+
+The picker UI fetches available models on demand from `GET /api/v1/models`, which calls `api.anthropic.com/v1/models` using the server's `ANTHROPIC_API_KEY` and caches for 5 min (bypass with `?refresh=1` or the ↻ button in the picker). The local key is used even under delegation so the picker reflects the current account's actual access.
+
+When Claude Code rejects the configured model ("issue with the selected model"), vibectl broadcasts a `model_unavailable` typed event over the chat WebSocket. ChatView renders an inline picker; choosing a model writes the per-project override and forces a fresh spawn.
+
 # UI Conventions
 
 - **No browser dialogs** — Never use `confirm()`, `alert()`, or `prompt()`. Always use a styled React modal instead.

@@ -29,6 +29,9 @@ var localPrefixes = []string{
 	// Rounds and project notes are user-local workflow, not team-shared.
 	"/api/v1/rounds",
 	"/api/v1/project-notes",
+	// Model list comes from the LOCAL Anthropic API key, not the remote's.
+	// Otherwise the picker would show the remote account's models rather than the user's.
+	"/api/v1/models",
 }
 
 // localExactPaths are paths that match exactly (not as prefixes).

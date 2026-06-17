@@ -4,6 +4,7 @@ import { getSettings, updateSettings } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import type { AppSettings } from '../types';
 import DelegationSection from '../components/settings/DelegationSection';
+import { ModelPicker } from '../components/shared/ModelPicker';
 
 // ─── Help Drawers ────────────────────────────────────────────────────────────
 
@@ -163,6 +164,7 @@ function SettingsPage() {
   const [autoRegen, setAutoRegen] = useState(false);
   const [schedule, setSchedule] = useState('daily');
   const [experimentalShell, setExperimentalShell] = useState(false);
+  const [defaultModel, setDefaultModel] = useState('');
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -180,6 +182,7 @@ function SettingsPage() {
       setAutoRegen(settings.vibectlMdAutoRegen);
       setSchedule(settings.vibectlMdSchedule || 'daily');
       setExperimentalShell(settings.experimentalShell ?? false);
+      setDefaultModel(settings.defaultModel ?? '');
     }
   }, [settings]);
 
@@ -196,6 +199,7 @@ function SettingsPage() {
       vibectlMdAutoRegen: autoRegen,
       vibectlMdSchedule: autoRegen ? schedule : '',
       experimentalShell,
+      defaultModel,
     });
   };
 
@@ -267,6 +271,21 @@ function SettingsPage() {
         {/* Delegation */}
         <div className="mb-6">
           <DelegationSection />
+        </div>
+
+        {/* Default Claude Model */}
+        <div className="rounded-lg border border-gray-700 bg-gray-800 p-6 mb-6">
+          <h2 className="mb-1 text-base font-semibold text-white">Default Claude Model</h2>
+          <p className="mb-4 text-xs text-gray-500">
+            Applied to every Claude Code spawn unless a project overrides it in its own Settings tab.
+            Empty = let Claude Code use its own default from <code className="text-gray-400">~/.claude/settings.json</code>.
+          </p>
+          <ModelPicker
+            value={defaultModel}
+            onChange={setDefaultModel}
+            allowInherit
+            inheritLabel="(none — use Claude Code's own default)"
+          />
         </div>
 
         {/* VIBECTL.md Auto-Regen */}

@@ -88,6 +88,7 @@ export interface Project {
   inactiveSince?: string;
   statusNote?: string;
   statusSetAt?: string;
+  model?: string;
   recurringThemes?: RecurringTheme[];
   architectureSummary?: string;
   architectureUpdatedAt?: string;
@@ -115,8 +116,16 @@ export interface AppSettings {
   updatedAt: string;
   dbName?: string;
   dbUser?: string;
+  defaultModel?: string;
   // Experimental features — all false by default
   experimentalShell: boolean;
+}
+
+export interface AnthropicModel {
+  id: string;
+  displayName?: string;
+  type?: string;
+  createdAt?: string;
 }
 
 export type IssueType = 'bug' | 'feature' | 'idea';
