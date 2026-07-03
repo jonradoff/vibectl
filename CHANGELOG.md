@@ -3,6 +3,26 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.14.4 (2026-07-03) — Session Auto-Recovery, Workspace Dir, Model Chip
+
+### Session lifecycle: kill the "no conversation found" foot-gun
+- **Auto-recovery for orphaned Claude sessions.** When Claude Code exits with *"no conversation found with session ID: ..."* — typically because a prior spawn (e.g. a model-unavailable error) captured a session ID before Claude Code wrote the conversation file to disk — vibectl now detects the stderr line, clears the orphan from `chat_sessions` via a new `ClearSession` persister method, broadcasts a `session_lost` typed event, and the frontend remounts into a fresh launch. No user intervention, no misleading "Claude exited" panel.
+- **Deferred session-ID persistence.** vibectl no longer writes `claudeSessionId` on the Claude Code `init` event. It waits for the first `assistant` message, which is the boundary at which Claude Code commits the on-disk conversation log. Orphans are no longer created in the first place.
+- **`SendMessage` / `SendControlResponse` fail fast on a dead session.** Writing to a closed stdin pipe used to surface as *"write |1: file already closed"* — a meaningless error. Both now check `sess.exited` up front and return `SESSION_ENDED:` with a hint to reset. The frontend already handles that gracefully.
+- **Redundant `system_error` broadcast suppressed after `session_lost`.** Prevents the stale "Claude exited" panel from flashing over the auto-recovery.
+- **`chat_sessions` no longer persists uncommitted spawns on exit.** If Claude never produced an assistant message, the exit path skips the final upsert — reinforcing the deferred-persistence guarantee above.
+
+### Per-user workspace directory (finally wired end-to-end)
+- **User → Account → Local Config tab** — a new tab with an absolute-path input for the per-user workspace directory. Live preview shows what "New project" and "Clone" paths will resolve to.
+- **`SuggestNewPath` / `SuggestPath` / `RepoDirForURL`** now honor the current user's `workspaceDir`, falling back to the server's `REPOS_DIR` only when unset. Fixes the *"/data/repos is read-only"* dead end on standalone dev.
+- **`/api/v1/clone/*` stays local under delegation.** Path suggestions depend on the local user record and the local filesystem — they must not proxy to a remote that has neither. Fixes suggestions returning `/data/repos/...` even after setting workspaceDir.
+
+### Active-model chip + interactive `/model` picker
+- **Model chip in the chat status bar** (right of the connection status word). Shows the model Claude is actually using — sourced from `message_start` and `assistant` events. Falls back through `project.model` → `settings.defaultModel` → an italic "set model" affordance so the picker is always one click away.
+- **Same chip appears in the project card header** for at-a-glance visibility across cards.
+- **Bare `/model` opens an interactive picker overlay** (reusing the `ModelPicker`) with the current model pre-selected. Save & restart writes the per-project override, kills the current spawn, and re-launches — same flow as the `model_unavailable` picker. Power-user escape hatch: `/model <id>` still takes the literal argument.
+- **Context-health chip guarded** to hide when there's no grade or a zero score (was rendering a bare "0" on fresh sessions).
+
 ## v0.14.3 (2026-06-17) — Claude Model Selection
 
 ### Added

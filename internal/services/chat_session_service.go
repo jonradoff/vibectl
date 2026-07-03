@@ -78,6 +78,23 @@ func (s *ChatSessionService) MarkDead(ctx context.Context, projectCode string) e
 	return err
 }
 
+// ClearSession marks dead AND removes claudeSessionId. Use when the persisted
+// session ID is known to be orphaned (e.g. Claude Code reports "no conversation
+// found with session ID"), so the next launch starts fresh instead of trying
+// to resume the dead ID again.
+func (s *ChatSessionService) ClearSession(ctx context.Context, projectCode string) error {
+	filter := bson.D{{Key: "projectCode", Value: projectCode}}
+	update := bson.D{
+		{Key: "$set", Value: bson.D{
+			{Key: "status", Value: "dead"},
+			{Key: "updatedAt", Value: time.Now().UTC()},
+		}},
+		{Key: "$unset", Value: bson.D{{Key: "claudeSessionId", Value: ""}}},
+	}
+	_, err := s.collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
 // GetResumable returns the resumable session for a project, or nil if none exists.
 // Matches both "resumable" (graceful shutdown) and "active" (server killed ungracefully).
 func (s *ChatSessionService) GetResumable(ctx context.Context, projectCode string) (*models.ChatSessionState, error) {

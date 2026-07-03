@@ -44,25 +44,37 @@ func (h *CloneHandler) GlobalRoutes() chi.Router {
 }
 
 // NewPath returns the suggested server-side path for a brand-new project directory.
+// Uses the current user's workspaceDir when set; falls back to the server default.
 func (h *CloneHandler) NewPath(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "code query param is required", "MISSING_CODE")
 		return
 	}
-	path := h.cloneService.SuggestNewPath(code)
+	path := h.cloneService.SuggestNewPath(code, currentUserWorkspaceDir(r))
 	middleware.WriteJSON(w, http.StatusOK, map[string]string{"path": path})
 }
 
 // SuggestPath returns the deterministic server-side path for a given GitHub URL.
+// Uses the current user's workspaceDir when set; falls back to the server default.
 func (h *CloneHandler) SuggestPath(w http.ResponseWriter, r *http.Request) {
 	githubURL := r.URL.Query().Get("url")
 	if githubURL == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "url query param is required", "MISSING_URL")
 		return
 	}
-	path := h.cloneService.SuggestPath(githubURL)
+	path := h.cloneService.SuggestPath(githubURL, currentUserWorkspaceDir(r))
 	middleware.WriteJSON(w, http.StatusOK, map[string]string{"path": path})
+}
+
+// currentUserWorkspaceDir returns the current user's workspaceDir, or "" if not
+// authenticated / not set. Used to seed path suggestions.
+func currentUserWorkspaceDir(r *http.Request) string {
+	u := middleware.GetCurrentUser(r)
+	if u == nil {
+		return ""
+	}
+	return u.WorkspaceDir
 }
 
 // Status returns the current clone status for a project.

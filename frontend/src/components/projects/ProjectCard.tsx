@@ -78,6 +78,11 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
     setIsActive(active)
   }, [])
 
+  const [activeModel, setActiveModel] = useState<string>(project.model || '')
+  const handleModelChange = useCallback((model: string) => {
+    setActiveModel(model)
+  }, [])
+
   // Escape key exits fullscreen
   useEffect(() => {
     if (!isFullscreen) return
@@ -336,6 +341,14 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
               Ready
             </span>
           )}
+          {activeTab === 'terminal' && (activeModel || appSettings?.defaultModel) && (
+            <span
+              className="inline-flex items-center rounded-full bg-gray-800 px-2 py-0.5 text-[10px] font-mono text-gray-400 border border-gray-700 max-w-[180px] truncate"
+              title={`Active model: ${activeModel || appSettings?.defaultModel} (click /model to switch)`}
+            >
+              {(activeModel || appSettings?.defaultModel || '').replace(/^claude-/, '')}
+            </span>
+          )}
           {monitorEnv && healthHasResults && (
             <button
               onClick={(e) => { e.stopPropagation(); setShowHealthDetail(true) }}
@@ -468,6 +481,8 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
                     onActivityChange={handleActivityChange}
                     onSessionSnapshot={handleSessionSnapshot}
                     onWaitingChange={handleWaitingChange}
+                    onModelChange={handleModelChange}
+                    configuredModel={project.model || appSettings?.defaultModel}
                   />
                 </div>
               </div>
@@ -502,6 +517,8 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
               onActivityChange={handleActivityChange}
               onSessionSnapshot={handleSessionSnapshot}
               onWaitingChange={handleWaitingChange}
+              onModelChange={handleModelChange}
+              configuredModel={project.model || appSettings?.defaultModel}
             />
           )
         })()}

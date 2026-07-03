@@ -11,7 +11,7 @@ import AdaptersSection from '../components/settings/AdaptersSection';
 
 // ─── Tab config ──────────────────────────────────────────────────────────────
 
-type TabKey = 'profile' | 'github' | 'llms' | 'api-keys' | 'claude-code' | 'integrations';
+type TabKey = 'profile' | 'github' | 'llms' | 'api-keys' | 'claude-code' | 'local-config' | 'integrations';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'profile',      label: 'Profile'      },
@@ -19,6 +19,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'llms',         label: 'LLMs'         },
   { key: 'api-keys',     label: 'API Keys'     },
   { key: 'claude-code',  label: 'Claude Code'  },
+  { key: 'local-config', label: 'Local Config' },
   { key: 'integrations', label: 'Integrations' },
 ];
 
@@ -138,6 +139,13 @@ export default function ProfilePage() {
       {activeTab === 'claude-code' && (
         <ClaudeCodePrefsSection
           fontSize={currentUser.claudeCodeFontSize || 14}
+          onSaved={refreshUser}
+        />
+      )}
+
+      {activeTab === 'local-config' && (
+        <LocalConfigSection
+          workspaceDir={currentUser.workspaceDir || ''}
           onSaved={refreshUser}
         />
       )}
@@ -709,6 +717,76 @@ function ClaudeCodePrefsSection({ fontSize, onSaved }: { fontSize: number; onSav
               {saving ? 'Saving...' : 'Save'}
             </button>
             {saved && <span className="text-xs text-green-400">Saved</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Local Config ────────────────────────────────────────────────────────────
+
+function LocalConfigSection({ workspaceDir, onSaved }: { workspaceDir: string; onSaved: () => Promise<void> }) {
+  const [dir, setDir] = useState(workspaceDir);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => { setDir(workspaceDir); }, [workspaceDir]);
+
+  const dirty = dir.trim() !== workspaceDir;
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await updateSelfProfile({ workspaceDir: dir.trim() || undefined });
+      await onSaved();
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+        <h2 className="text-base font-semibold text-white mb-1">Workspace directory</h2>
+        <p className="text-xs text-gray-500 mb-4">
+          Base directory used to suggest paths when you create a new project or clone a repo.
+          When empty, the server default ({<code className="font-mono text-gray-400">/data/repos</code>}) is used —
+          which is typically read-only outside of a Docker container.
+        </p>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1.5">Absolute path on this machine</label>
+            <input
+              type="text"
+              value={dir}
+              onChange={e => setDir(e.target.value)}
+              placeholder="/Users/you/projects"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-indigo-500"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p className="text-[10px] text-gray-600 mt-1.5 font-mono">
+              New project → <span className="text-gray-400">{dir.trim() || '/data/repos'}/projects/&lt;code&gt;</span>
+            </p>
+            <p className="text-[10px] text-gray-600 font-mono">
+              Clone → <span className="text-gray-400">{dir.trim() || '/data/repos'}/&lt;owner&gt;/&lt;repo&gt;</span>
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={handleSave}
+              disabled={saving || !dirty}
+              className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium py-2 px-5 rounded-lg text-sm transition-colors"
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+            {saved && <span className="text-xs text-green-400">Saved</span>}
+            {dirty && !saving && !saved && <span className="text-xs text-gray-500">Unsaved changes</span>}
           </div>
         </div>
       </div>

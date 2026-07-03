@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -452,7 +453,14 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 
 			if err := sess.SendMessage(userMsg.Text); err != nil {
 				slog.Error("failed to send message to claude", "projectID", activeProjectID, "error", err)
-				sendJSON("error", map[string]string{"message": err.Error()})
+				// SESSION_ENDED is our typed prefix for "process already exited".
+				// Use a dedicated event so the frontend can show a clean reset
+				// affordance instead of the misleading stdin-closed error.
+				if strings.HasPrefix(err.Error(), "SESSION_ENDED") {
+					sendJSON("session_ended", map[string]string{"message": err.Error()})
+				} else {
+					sendJSON("error", map[string]string{"message": err.Error()})
+				}
 			} else if h.promptLogger != nil {
 				go h.promptLogger(activeProjectID, userMsg.Text)
 			}

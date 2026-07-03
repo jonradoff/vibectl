@@ -61,6 +61,8 @@ interface ChatViewProps {
   onActivityChange?: (active: boolean) => void
   onSessionSnapshot?: (snapshot: ChatSessionSnapshot) => void
   onWaitingChange?: (waiting: boolean) => void
+  onModelChange?: (model: string) => void
+  configuredModel?: string  // project.model override, used as fallback before message_start arrives
 }
 
 // Parsed message types for rendering
@@ -134,6 +136,8 @@ export default function ChatView({
   onActivityChange,
   onSessionSnapshot,
   onWaitingChange,
+  onModelChange,
+  configuredModel,
 }: ChatViewProps) {
   const { currentUser } = useAuth()
   const { mode: modeInfo } = useMode()
@@ -191,6 +195,17 @@ export default function ChatView({
   const [exitError, setExitError] = useState<{ exitCode: number; stderr: string[] } | null>(null)
   const [modelUnavailable, setModelUnavailable] = useState<{ message: string } | null>(null)
   const [pickerModel, setPickerModel] = useState('')
+  const [showModelPicker, setShowModelPicker] = useState(false)
+  const [currentModel, setCurrentModel] = useState<string>(configuredModel || '')
+
+  // Keep in sync if the configured model changes while the session is idle.
+  useEffect(() => {
+    if (!currentModel && configuredModel) {
+      setCurrentModel(configuredModel)
+      onModelChange?.(configuredModel)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configuredModel])
   const [showLoginModal, setShowLoginModal] = useState(false)
   const [showPluginManager, setShowPluginManager] = useState(false)
 
@@ -610,7 +625,16 @@ export default function ChatView({
         const event = data.event as Record<string, unknown>
         const eventType = event.type as string
 
-        if (eventType === 'content_block_start') {
+        if (eventType === 'message_start') {
+          // Capture the model reported by Claude Code so the header can show
+          // what's actually running (not just what we asked for).
+          const msg = event.message as { model?: string } | undefined
+          const m = msg?.model
+          if (m && m !== currentModel) {
+            setCurrentModel(m)
+            onModelChange?.(m)
+          }
+        } else if (eventType === 'content_block_start') {
           const block = event.content_block as { type: string }
           if (block.type === 'text') {
             setIsStreaming(true)
@@ -641,7 +665,16 @@ export default function ChatView({
         setStreamingText('')
 
         const msg = data.message as {
+          model?: string
           content: Array<{ type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }>
+        }
+
+        // Assistant messages always carry the model that produced them —
+        // more reliable than message_start alone, which some Claude Code
+        // versions omit or emit under a nested envelope.
+        if (msg?.model && msg.model !== currentModel) {
+          setCurrentModel(msg.model)
+          onModelChange?.(msg.model)
         }
 
         if (msg?.content) {
@@ -754,6 +787,42 @@ export default function ChatView({
           const pct = parseFloat(((usage.input_tokens / 200000) * 100).toFixed(1))
           setContextPct(pct)
         }
+        break
+      }
+
+      case 'session_ended': {
+        // User tried to send a message after the Claude process exited.
+        // Surface a clean exit panel that explains and offers reset.
+        const d = data.data as { message?: string } | undefined
+        const msg = d?.message?.replace(/^SESSION_ENDED:\s*/, '') || 'Claude Code session has ended.'
+        setExitError({ exitCode: 1, stderr: [msg] })
+        setIsStreaming(false)
+        setAwaitingResult(false)
+        setStatus('claude_error')
+        onStatusChange?.('claude_error')
+        onActivityChange?.(false)
+        break
+      }
+
+      case 'session_lost': {
+        // Backend has already cleared the orphaned session ID from chat_sessions.
+        // Force a remount so the next chat launch starts a fresh session
+        // (no --resume), without surfacing the stock "Claude exited" panel
+        // with its misleading "Common causes" boilerplate.
+        if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
+        persistentWs.delete(projectCode)
+        persistentMessages.delete(projectCode)
+        persistentStreamingText.delete(projectCode)
+        setMessages([])
+        setStreamingText('')
+        setExitError(null)
+        setIsStreaming(false)
+        setAwaitingResult(false)
+        setStatus('idle')
+        onStatusChange?.('idle')
+        onActivityChange?.(false)
+        // Slight delay so backend close ordering doesn't race the remount.
+        setTimeout(() => setResetKey(k => k + 1), 200)
         break
       }
 
@@ -946,6 +1015,12 @@ export default function ChatView({
       sendWsMessage('restart', { skipPermissions: false })
     } else if (cmdName === '/plugins') {
       setShowPluginManager(true)
+    } else if (cmdName === '/model') {
+      // Interactive picker: user typed bare "/model" — surface the same
+      // ModelPicker we use for model_unavailable. If they wanted to type a
+      // custom string they'd use "/model <name>" (handled in sendMessage).
+      setPickerModel(currentModel || '')
+      setShowModelPicker(true)
     } else {
       // Other slash commands — send as user message text (keep the / so Claude Code recognizes them)
       setMessages((prev) => [...prev, { role: 'user', text: cmdName }])
@@ -1166,12 +1241,25 @@ export default function ChatView({
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${statusColor.replace('text-', 'bg-')}`} />
           <span className="text-[10px] text-gray-500 font-mono">{status}</span>
+          <button
+            onClick={() => { setPickerModel(currentModel || ''); setShowModelPicker(true) }}
+            title={currentModel
+              ? `Active model: ${currentModel} — click to switch`
+              : 'No project model override — click to set one'}
+            className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono border transition-colors max-w-[160px] truncate ${
+              currentModel
+                ? 'bg-gray-800 text-gray-300 border-gray-700 hover:text-white hover:border-gray-500'
+                : 'bg-gray-800/50 text-gray-500 border-gray-800 hover:text-gray-300 hover:border-gray-600 italic'
+            }`}
+          >
+            {currentModel ? currentModel.replace(/^claude-/, '') : 'set model'}
+          </button>
           {costUsd !== null && (
             <span className="text-[10px] font-mono text-gray-600">
               ${costUsd.toFixed(2)}
             </span>
           )}
-          {contextHealth && (
+          {contextHealth && contextHealth.grade && contextHealth.score > 0 && (
             <span
               className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
                 contextHealth.score >= 75 ? 'bg-green-900/40 text-green-400' :
@@ -1317,6 +1405,50 @@ export default function ChatView({
               <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '300ms' }} />
             </span>
             Thinking...
+          </div>
+        )}
+
+        {/* Interactive /model picker — shown when the user runs bare "/model" */}
+        {showModelPicker && !modelUnavailable && (
+          <div className="rounded-lg bg-indigo-950/60 border border-indigo-800/60 p-3 space-y-2 shrink-0">
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-xs font-medium text-indigo-300">Switch model{currentModel ? ` (now: ${currentModel})` : ''}</span>
+              <button onClick={() => { setShowModelPicker(false); setPickerModel('') }} className="text-gray-600 hover:text-gray-400 text-[10px] shrink-0">cancel</button>
+            </div>
+            <p className="text-[11px] text-indigo-200/80 leading-relaxed">
+              Picks a project-level override. Restarts the current session so Claude Code re-reads it.
+              Prefer typing directly? Use <code className="font-mono text-indigo-100">/model &lt;id&gt;</code>.
+            </p>
+            <div className="flex items-center gap-2">
+              <ModelPicker value={pickerModel} onChange={setPickerModel} placeholder="Pick a model" />
+              <button
+                disabled={!pickerModel}
+                onClick={async () => {
+                  try {
+                    await updateProject(projectId, { model: pickerModel } as Partial<Project>)
+                  } catch (e) {
+                    console.error('failed to save model override', e)
+                  }
+                  if (wsRef.current?.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify({ type: 'kill' }))
+                  }
+                  setShowModelPicker(false)
+                  setPickerModel('')
+                  persistentWs.delete(projectCode)
+                  persistentMessages.delete(projectCode)
+                  persistentStreamingText.delete(projectCode)
+                  setTimeout(() => {
+                    if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
+                    setMessages([])
+                    setStreamingText('')
+                    setResetKey(k => k + 1)
+                  }, 200)
+                }}
+                className="px-2 py-1 text-[10px] font-medium rounded bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white hover:bg-indigo-600"
+              >
+                Save & restart
+              </button>
+            </div>
           </div>
         )}
 

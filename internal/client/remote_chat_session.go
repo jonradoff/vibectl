@@ -86,6 +86,25 @@ func (s *RemoteChatSessionService) MarkDead(ctx context.Context, projectID strin
 	return nil
 }
 
+// ClearSession marks dead AND removes the persisted Claude session ID, so the
+// next launch starts fresh instead of trying to resume an orphaned ID. Falls
+// back to MarkDead if the remote doesn't have the dedicated endpoint — the
+// session ID will reset on the next successful spawn either way.
+func (s *RemoteChatSessionService) ClearSession(ctx context.Context, projectID string) error {
+	resp, err := s.do(ctx, http.MethodPost, "/api/v1/projects/"+projectID+"/chat-session/clear", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return s.MarkDead(ctx, projectID)
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("clear session: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func (s *RemoteChatSessionService) GetResumable(ctx context.Context, projectID string) (*models.ChatSessionState, error) {
 	resp, err := s.do(ctx, http.MethodGet, "/api/v1/projects/"+projectID+"/chat-session/resumable", nil)
 	if err != nil {

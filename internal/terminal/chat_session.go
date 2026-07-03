@@ -29,6 +29,7 @@ type ChatSessionPersister interface {
 	Upsert(ctx context.Context, projectID, claudeSessionID, localPath string, messages []json.RawMessage) error
 	MarkResumable(ctx context.Context, projectID string) error
 	MarkDead(ctx context.Context, projectID string) error
+	ClearSession(ctx context.Context, projectID string) error
 	GetResumable(ctx context.Context, projectID string) (*models.ChatSessionState, error)
 }
 
@@ -59,6 +60,16 @@ type ChatSession struct {
 	stderrMu             sync.Mutex
 	stderrBuf            []string // recent stderr lines, capped at 50
 	proxy                *recordingProxy // optional cache-optimizer trace recorder
+
+	// committed is true once Claude Code has emitted at least one assistant
+	// message, meaning its on-disk conversation log for this session ID exists.
+	// Until then, the session ID is in memory only — persisting it to Mongo
+	// would create an orphan that future --resume calls can't recover from.
+	committed bool
+
+	// sessionLost is true if the orphan-recovery path fired for this spawn.
+	// Suppresses the redundant system_error broadcast on process exit.
+	sessionLost bool
 }
 
 // UsageRecorderFunc is a callback invoked when Claude Code reports token usage.
@@ -74,11 +85,20 @@ func (s *ChatSession) QueueContextUpdate(content string) {
 // SendMessage writes a user message to claude's stdin in stream-json format.
 // If a pending context update is queued, it's prepended to the message.
 func (s *ChatSession) SendMessage(text string) error {
+	// Fail fast if the process has already exited — writing to a dead pipe
+	// produces "write |1: file already closed" which is meaningless to the
+	// user. The frontend will see SESSION_ENDED and offer to reset.
+	select {
+	case <-s.exited:
+		return fmt.Errorf("SESSION_ENDED: Claude Code is no longer running. Reset the session to start a fresh one.")
+	default:
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.stdin == nil {
-		return fmt.Errorf("session stdin closed")
+		return fmt.Errorf("SESSION_ENDED: stdin closed. Reset the session to start a fresh one.")
 	}
 
 	// Prepend pending context update if available
@@ -113,11 +133,17 @@ func (s *ChatSession) SendMessage(text string) error {
 
 // SendControlResponse writes a control_response to claude's stdin (for permission approvals/denials).
 func (s *ChatSession) SendControlResponse(requestID string, response json.RawMessage) error {
+	select {
+	case <-s.exited:
+		return fmt.Errorf("SESSION_ENDED: Claude Code is no longer running")
+	default:
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.stdin == nil {
-		return fmt.Errorf("session stdin closed")
+		return fmt.Errorf("SESSION_ENDED: stdin closed")
 	}
 
 	msg := map[string]interface{}{
@@ -523,6 +549,32 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 					sess.broadcast(data)
 				}
 			}
+			// Orphan session ID: Claude Code can't find the persisted session
+			// (typically because a prior spawn failed before writing the
+			// conversation file). Auto-clear the bad ID so the next launch
+			// starts fresh, and tell the frontend to relaunch.
+			if strings.Contains(lower, "no conversation found with session id") {
+				sess.mu.Lock()
+				sess.sessionLost = true
+				sess.mu.Unlock()
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					if err := m.ChatSessionService.ClearSession(ctx, projectID); err != nil {
+						slog.Error("failed to clear orphaned session ID", "projectID", projectID, "error", err)
+					} else {
+						slog.Info("cleared orphaned session ID after no-conversation-found",
+							"projectID", projectID, "staleSessionID", sess.SessionID)
+					}
+				}()
+				evt := map[string]interface{}{
+					"type": "session_lost",
+					"data": map[string]string{"message": line},
+				}
+				if data, marshalErr := json.Marshal(evt); marshalErr == nil {
+					sess.broadcast(data)
+				}
+			}
 			if strings.Contains(lower, "error") ||
 				strings.Contains(lower, "not logged in") ||
 				strings.Contains(lower, "please run /login") ||
@@ -560,10 +612,15 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 				SessionID string `json:"session_id"`
 			}
 			if err := json.Unmarshal(line, &parsed); err == nil {
+				// Capture session ID in memory immediately so /compact and other
+				// in-process resumes work, but DON'T persist to Mongo yet.
+				// Claude Code only writes the conversation file to disk after
+				// the first assistant turn — persisting earlier risks orphaning
+				// a session ID if Claude exits before completing a turn (e.g.
+				// model_unavailable errors), causing future "no conversation
+				// found" failures on resume.
 				if sess.SessionID == "" && parsed.SessionID != "" {
 					sess.SessionID = parsed.SessionID
-					// Persist immediately when we learn the session ID
-					m.persistSession(sess)
 				}
 
 				// Buffer complete messages (assistant, user/tool_result), not stream deltas
@@ -571,12 +628,23 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 					data := make(json.RawMessage, len(line))
 					copy(data, line)
 					sess.mu.Lock()
+					wasFirstAssistant := parsed.Type == "assistant" && !sess.committed
 					sess.messages = append(sess.messages, data)
 					if len(sess.messages) > 500 {
 						sess.messages = sess.messages[len(sess.messages)-500:]
 					}
 					sess.dirty = true
+					if wasFirstAssistant {
+						sess.committed = true
+					}
 					sess.mu.Unlock()
+
+					// Persist the session ID once Claude Code has actually
+					// committed a conversation to its on-disk log (first
+					// assistant message means the turn completed successfully).
+					if wasFirstAssistant && sess.SessionID != "" {
+						m.persistSession(sess)
+					}
 				}
 
 				// Extract token usage from stream events for usage tracking.
@@ -660,7 +728,12 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 		copy(stderrLines, sess.stderrBuf)
 		sess.stderrMu.Unlock()
 
-		if exitCode != 0 || len(stderrLines) > 0 {
+		sess.mu.Lock()
+		suppressSystemError := sess.sessionLost
+		committed := sess.committed
+		sess.mu.Unlock()
+
+		if (exitCode != 0 || len(stderrLines) > 0) && !suppressSystemError {
 			slog.Error("claude process exited with error",
 				"projectID", projectID,
 				"exitCode", exitCode,
@@ -676,10 +749,21 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 			if data, marshalErr := json.Marshal(sysErr); marshalErr == nil {
 				sess.broadcast(data)
 			}
+		} else if suppressSystemError {
+			slog.Info("suppressed system_error broadcast after session_lost",
+				"projectID", projectID, "exitCode", exitCode)
 		}
 
-		// Final persist on exit
-		m.persistSession(sess)
+		// Only persist on exit if the session was committed (at least one
+		// assistant message). Otherwise the session ID is in-memory only —
+		// writing it now would create an orphan on Mongo with no matching
+		// conversation file on disk.
+		if committed {
+			m.persistSession(sess)
+		} else {
+			slog.Info("skipping final persist for uncommitted session",
+				"projectID", projectID, "sessionID", sess.SessionID, "exitCode", exitCode)
+		}
 
 		// Archive session to history
 		m.archiveSession(sess)
@@ -698,9 +782,10 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 			case <-ticker.C:
 				sess.mu.Lock()
 				isDirty := sess.dirty
+				committed := sess.committed
 				sess.dirty = false
 				sess.mu.Unlock()
-				if isDirty {
+				if isDirty && committed {
 					m.persistSession(sess)
 				}
 			}

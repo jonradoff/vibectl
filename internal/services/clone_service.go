@@ -32,30 +32,43 @@ func NewCloneService(ps *ProjectService, us *UserService, reposDir, systemToken 
 	}
 }
 
+// baseDir returns the per-user workspace directory if set, otherwise falls
+// back to the server-wide reposDir. Paths for clone destinations and new
+// project directories are computed relative to this base, so users on a
+// standalone/dev instance can escape the default /data/repos (typically
+// read-only outside of a container).
+func (s *CloneService) baseDir(workspaceDir string) string {
+	if workspaceDir != "" {
+		return workspaceDir
+	}
+	return s.reposDir
+}
+
 // RepoDir returns the directory where a project's repo would be cloned (legacy, uses project code).
 func (s *CloneService) RepoDir(code string) string {
 	return filepath.Join(s.reposDir, strings.ToLower(code))
 }
 
 // RepoDirForURL returns the deterministic clone directory derived from a GitHub URL.
-// https://github.com/owner/repo → <reposDir>/owner/repo
-func (s *CloneService) RepoDirForURL(githubURL string) string {
+// https://github.com/owner/repo → <base>/owner/repo
+func (s *CloneService) RepoDirForURL(githubURL, workspaceDir string) string {
+	base := s.baseDir(workspaceDir)
 	owner, repo := parseGitHubOwnerRepo(githubURL)
 	if owner == "" || repo == "" {
-		return filepath.Join(s.reposDir, sanitizePath(githubURL))
+		return filepath.Join(base, sanitizePath(githubURL))
 	}
-	return filepath.Join(s.reposDir, owner, repo)
+	return filepath.Join(base, owner, repo)
 }
 
-// SuggestPath returns the server-side path where a GitHub URL would be cloned.
-func (s *CloneService) SuggestPath(githubURL string) string {
-	return s.RepoDirForURL(githubURL)
+// SuggestPath returns the path where a GitHub URL would be cloned for a user.
+func (s *CloneService) SuggestPath(githubURL, workspaceDir string) string {
+	return s.RepoDirForURL(githubURL, workspaceDir)
 }
 
 // SuggestNewPath returns the path for a brand-new (non-cloned) project directory.
-// Convention: <reposDir>/projects/<code_lower>
-func (s *CloneService) SuggestNewPath(code string) string {
-	return filepath.Join(s.reposDir, "projects", strings.ToLower(code))
+// Convention: <base>/projects/<code_lower>
+func (s *CloneService) SuggestNewPath(code, workspaceDir string) string {
+	return filepath.Join(s.baseDir(workspaceDir), "projects", strings.ToLower(code))
 }
 
 // parseGitHubOwnerRepo extracts owner and repo name from a GitHub URL.
@@ -117,7 +130,16 @@ func (s *CloneService) CloneProject(ctx context.Context, projectID string, userI
 		return fmt.Errorf("getting credentials: %w", err)
 	}
 
-	destDir := s.RepoDirForURL(repoURL)
+	// Use the user's workspaceDir for the clone destination when set —
+	// same base path as SuggestPath / SuggestNewPath so what the UI showed
+	// them before Create is what actually gets cloned.
+	var workspaceDir string
+	if !userID.IsZero() {
+		if u, err := s.userService.GetByID(ctx, userID); err == nil && u != nil {
+			workspaceDir = u.WorkspaceDir
+		}
+	}
+	destDir := s.RepoDirForURL(repoURL, workspaceDir)
 
 	// Mark as cloning
 	s.projectService.UpdateCloneStatus(ctx, projectID, "cloning", "")
