@@ -3,6 +3,12 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.14.5 (2026-07-04) — Reset in the Error Panel, Ignore `<synthetic>` Model
+
+### Fixed
+- **Reset Session button in the exit-error panel.** When `SendMessage` / `SendControlResponse` returned `SESSION_ENDED:` (Claude Code process no longer running), the error panel offered no way out — the top-bar Reset button also skipped this case because its guard checked `disconnected | error | exited`, not the `claude_error` status that `session_ended` sets. Added a dedicated Reset button inside the red panel next to the message, and extended the top-bar guard to include `claude_error`. Replaces the old "Common causes: missing `ANTHROPIC_API_KEY`..." boilerplate that didn't apply to this failure mode.
+- **Ignore Claude Code's `<synthetic>` model marker in the active-model chip.** Claude Code emits `<synthetic>` as the `model` field on locally-generated assistant messages — subagent aggregations, tool-result echoes, `/compact` summaries, plan-mode confirmations — which aren't real API calls. The chip now filters out any `<...>` placeholder and keeps the last real model instead of showing `<synthetic>`. `message_start` and `assistant` event handlers both apply the filter.
+
 ## v0.14.4 (2026-07-03) — Session Auto-Recovery, Workspace Dir, Model Chip
 
 ### Session lifecycle: kill the "no conversation found" foot-gun

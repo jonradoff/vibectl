@@ -627,10 +627,13 @@ export default function ChatView({
 
         if (eventType === 'message_start') {
           // Capture the model reported by Claude Code so the header can show
-          // what's actually running (not just what we asked for).
+          // what's actually running (not just what we asked for). Skip Claude
+          // Code's <synthetic> placeholder (locally-generated assistant messages
+          // for tool echoes, subagent aggregation, /compact summaries, plan
+          // mode, etc — not a real Anthropic model).
           const msg = event.message as { model?: string } | undefined
           const m = msg?.model
-          if (m && m !== currentModel) {
+          if (m && !m.startsWith('<') && m !== currentModel) {
             setCurrentModel(m)
             onModelChange?.(m)
           }
@@ -671,8 +674,11 @@ export default function ChatView({
 
         // Assistant messages always carry the model that produced them —
         // more reliable than message_start alone, which some Claude Code
-        // versions omit or emit under a nested envelope.
-        if (msg?.model && msg.model !== currentModel) {
+        // versions omit or emit under a nested envelope. Skip Claude Code's
+        // <synthetic> marker (used for locally-generated assistant messages
+        // like tool echoes, subagent aggregation, /compact summaries, plan
+        // mode — not a real Anthropic model).
+        if (msg?.model && !msg.model.startsWith('<') && msg.model !== currentModel) {
           setCurrentModel(msg.model)
           onModelChange?.(msg.model)
         }
@@ -1271,7 +1277,7 @@ export default function ChatView({
               {contextHealth.grade} {contextHealth.score}
             </span>
           )}
-          {(status === 'disconnected' || status === 'error' || status === 'exited') && (
+          {(status === 'disconnected' || status === 'error' || status === 'exited' || status === 'claude_error') && (
             <button
               onClick={() => {
                 // Clear persistent caches and force a fresh WS connection
@@ -1533,9 +1539,28 @@ export default function ChatView({
                   </button>
                 </div>
               ) : (
-                <p className="text-[10px] text-gray-500">
-                  Common causes: missing <span className="font-mono text-gray-400">ANTHROPIC_API_KEY</span>, stale OAuth token, or Claude Code not installed. Check server logs for details.
-                </p>
+                <div className="flex items-start gap-2">
+                  <p className="text-[10px] text-gray-500 flex-1">
+                    The Claude Code process has stopped. Reset the session to start a fresh one.
+                  </p>
+                  <button
+                    onClick={() => {
+                      persistentWs.delete(projectCode)
+                      persistentMessages.delete(projectCode)
+                      persistentStreamingText.delete(projectCode)
+                      if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
+                      setMessages([])
+                      setStreamingText('')
+                      setExitError(null)
+                      setIsStreaming(false)
+                      setAwaitingResult(false)
+                      setResetKey(k => k + 1)
+                    }}
+                    className="shrink-0 rounded bg-red-800 hover:bg-red-700 px-2.5 py-1 text-xs font-medium text-white transition-colors"
+                  >
+                    Reset Session
+                  </button>
+                </div>
               )}
             </div>
           )
