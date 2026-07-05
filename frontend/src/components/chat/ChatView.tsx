@@ -198,9 +198,13 @@ export default function ChatView({
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [currentModel, setCurrentModel] = useState<string>(configuredModel || '')
 
-  // Keep in sync if the configured model changes while the session is idle.
+  // Keep in sync when the configured model changes — either from empty
+  // (initial seed) or when the picker writes a new project override. Without
+  // the second case the chip would keep showing the previous live model
+  // until the next assistant event fired, which after a Save & restart is
+  // misleading.
   useEffect(() => {
-    if (!currentModel && configuredModel) {
+    if (configuredModel && configuredModel !== currentModel) {
       setCurrentModel(configuredModel)
       onModelChange?.(configuredModel)
     }
@@ -1430,11 +1434,17 @@ export default function ChatView({
               <button
                 disabled={!pickerModel}
                 onClick={async () => {
+                  const chosen = pickerModel
                   try {
-                    await updateProject(projectId, { model: pickerModel } as Partial<Project>)
+                    await updateProject(projectId, { model: chosen } as Partial<Project>)
                   } catch (e) {
                     console.error('failed to save model override', e)
                   }
+                  // Flip the chip immediately — the project query cache
+                  // is stale until React Query refetches, and the next
+                  // assistant event is many seconds away.
+                  setCurrentModel(chosen)
+                  onModelChange?.(chosen)
                   if (wsRef.current?.readyState === WebSocket.OPEN) {
                     wsRef.current.send(JSON.stringify({ type: 'kill' }))
                   }
@@ -1471,11 +1481,15 @@ export default function ChatView({
               <button
                 disabled={!pickerModel}
                 onClick={async () => {
+                  const chosen = pickerModel
                   try {
-                    await updateProject(projectId, { model: pickerModel } as Partial<Project>)
+                    await updateProject(projectId, { model: chosen } as Partial<Project>)
                   } catch (e) {
                     console.error('failed to save model override', e)
                   }
+                  // Flip the chip immediately (see notes on the /model picker).
+                  setCurrentModel(chosen)
+                  onModelChange?.(chosen)
                   // Kill the underlying claude process so the next launch spawns fresh
                   // with the new model. Without this, the chat handler "reconnects to
                   // existing chat session" and never re-reads the model.

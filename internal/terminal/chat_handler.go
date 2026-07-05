@@ -361,8 +361,24 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				slog.Info("reconnecting to existing chat session", "projectID", launch.ProjectCode)
 				activeProjectID = launch.ProjectCode
 
-				// Replay buffered messages.
-				for _, m := range sess.Messages() {
+				// Prefer Claude Code's on-disk conversation log — it holds the
+				// full authoritative transcript. Fall back to the in-memory
+				// buffer only if the file isn't there (fresh session before
+				// the first turn commits to disk).
+				diskMsgs, diskPath, diskErr := loadOnDiskHistory(sess.LocalPath, sess.SessionID)
+				if diskErr != nil {
+					slog.Warn("failed reading on-disk session log, falling back to buffer",
+						"projectID", launch.ProjectCode, "path", diskPath, "error", diskErr)
+				}
+				replay := diskMsgs
+				if len(replay) == 0 {
+					replay = sess.Messages()
+				}
+				slog.Info("replaying session history",
+					"projectID", launch.ProjectCode,
+					"source", map[bool]string{true: "disk", false: "buffer"}[len(diskMsgs) > 0],
+					"messageCount", len(replay))
+				for _, m := range replay {
 					if err := sendRaw(m); err != nil {
 						slog.Error("failed to replay chat message", "error", err)
 						return
@@ -400,8 +416,23 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 						tagSession(sess)
 						activeProjectID = launch.ProjectCode
 
-						// Replay saved messages to the frontend
-						for _, m := range state.Messages {
+						// Prefer the on-disk conversation log for the same reason as
+						// the reconnect path — the DB buffer is capped and can be
+						// missing early events across a server restart.
+						diskMsgs, diskPath, diskErr := loadOnDiskHistory(state.LocalPath, state.ClaudeSessionID)
+						if diskErr != nil {
+							slog.Warn("failed reading on-disk session log, falling back to DB buffer",
+								"projectID", launch.ProjectCode, "path", diskPath, "error", diskErr)
+						}
+						replay := diskMsgs
+						if len(replay) == 0 {
+							replay = state.Messages
+						}
+						slog.Info("replaying session history",
+							"projectID", launch.ProjectCode,
+							"source", map[bool]string{true: "disk", false: "db"}[len(diskMsgs) > 0],
+							"messageCount", len(replay))
+						for _, m := range replay {
 							if err := sendRaw(m); err != nil {
 								slog.Error("failed to replay saved message", "error", err)
 								return
@@ -411,6 +442,47 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 						sendStatus("resumed")
 						readerDone = startReader(sess)
 						continue
+					}
+				}
+			}
+
+			// No live session, no DB record — but Claude Code's on-disk log
+			// may still hold the last conversation for this project (common
+			// after a marked-dead unblock, a fresh install, or a DB reset).
+			// Resume from the newest *.jsonl in the project dir so the user
+			// gets their transcript back and continues in the same thread.
+			if launch.LocalPath != "" {
+				if diskSessionID, diskMTime := latestOnDiskSession(launch.LocalPath); diskSessionID != "" {
+					diskMsgs, diskPath, diskErr := loadOnDiskHistory(launch.LocalPath, diskSessionID)
+					if diskErr != nil {
+						slog.Warn("failed reading on-disk session log",
+							"projectID", launch.ProjectCode, "path", diskPath, "error", diskErr)
+					}
+					if len(diskMsgs) > 0 {
+						sess, resumeErr := h.manager.ResumeSession(
+							launch.ProjectCode, launch.LocalPath, diskSessionID, nil,
+						)
+						if resumeErr != nil {
+							slog.Warn("could not resume on-disk session, starting fresh",
+								"projectID", launch.ProjectCode, "sessionID", diskSessionID, "error", resumeErr)
+						} else {
+							tagSession(sess)
+							activeProjectID = launch.ProjectCode
+							slog.Info("resumed from on-disk history",
+								"projectID", launch.ProjectCode,
+								"sessionID", diskSessionID,
+								"messageCount", len(diskMsgs),
+								"mtime", diskMTime.Format("2006-01-02T15:04:05Z07:00"))
+							for _, m := range diskMsgs {
+								if err := sendRaw(m); err != nil {
+									slog.Error("failed to replay on-disk message", "error", err)
+									return
+								}
+							}
+							sendStatus("resumed")
+							readerDone = startReader(sess)
+							continue
+						}
 					}
 				}
 			}

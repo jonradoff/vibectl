@@ -84,6 +84,18 @@ VibeCtl spawns Claude Code processes in stream-json mode (`-p --input-format str
 - `/fresh` starts a brand new session with no `--resume` — all prior context is lost. Use when the session is poisoned (e.g., oversized images in context).
 - During restart, the WebSocket stays open but there's no active Claude session. Messages sent during this window must be **queued** (via `pendingMessagesRef` / `compactingRef`) and flushed after `restarted` status arrives.
 
+## Session history is on disk — read from there, not the DB buffer
+
+Claude Code writes the authoritative conversation log to `~/.claude/projects/<encodedPath>/<sessionID>.jsonl`, where `<encodedPath>` is the project's local path with every `/` replaced by `-` and a leading `-` (e.g. `/Users/jonradoff/hearthfs` → `-Users-jonradoff-hearthfs`). Each line is one JSON object; only entries with `type: "user"` or `type: "assistant"` are conversation, the rest is housekeeping (queue-operation, etc.) and should be skipped.
+
+On WebSocket attach, vibectl **prefers the on-disk JSONL over its own buffered / DB-persisted replay**:
+
+1. `loadOnDiskHistory(localPath, sessionID)` in `internal/terminal/session_history.go` returns the full transcript.
+2. If Claude Code hasn't committed the current session to disk yet (first turn hasn't completed), the loader returns empty and the caller falls back to the 500-event in-memory buffer or the DB copy.
+3. If no live session and no resumable DB record (e.g. it was marked dead to unblock the user), `latestOnDiskSession(localPath)` picks the newest `*.jsonl` in the project's Claude Code dir and vibectl resumes THAT session via `--resume` — so a reload after a bad state still restores the last real conversation.
+
+Never expand or replace this pattern with a Mongo-only replay: the in-memory buffer is capped at 500 events and the DB copy can lag or be truncated across restarts. Disk is truth.
+
 ## Auth error handling
 
 - Auth errors (401, `authentication_error`) must show the **login UI** (not auto-restart), because auto-restart with bad credentials loops forever.

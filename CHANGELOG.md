@@ -3,6 +3,17 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.14.6 (2026-07-05) — On-Disk Session History, Instant Model Chip Update
+
+### Session history now reads from disk (matches VS Code behavior)
+- **Authoritative replay from Claude Code's own JSONL.** On WebSocket attach, the backend now reads `~/.claude/projects/<encodedPath>/<sessionID>.jsonl` — the same file Claude Code uses for `--resume` — and sends the full transcript to the frontend instead of the 500-event in-memory buffer. Reload the browser and the entire conversation comes back, including everything that happened before the buffer wrap. Both the "reconnecting to existing chat session" and "resuming persisted chat session" paths use disk-first with buffer/DB fallback.
+- **On-disk recovery when the DB record is dead.** If the chat_sessions record was cleared (e.g. after an unblock-and-restart) but Claude Code's history still exists on disk, vibectl picks the newest `*.jsonl` for the project and resumes that session via `--resume <its-id>` — so continued work stays in the same thread instead of starting empty. New helpers `loadOnDiskHistory` and `latestOnDiskSession` live in `internal/terminal/session_history.go`.
+- **Log line for observability.** Each replay logs `source: disk | buffer | db` with `messageCount`, so you can tell at a glance where the transcript came from.
+
+### Model chip flips immediately on picker save
+- Both the `/model` picker and the `model_unavailable` picker now call `setCurrentModel(chosen)` + `onModelChange?.(chosen)` at Save & restart, so the chip reflects the new choice the instant you click — no waiting for the React Query cache to refetch or for the next `message_start` event.
+- The `configuredModel` sync effect now fires whenever the prop changes to a different value, not only on the initial empty→set transition, so the chip stays in sync with per-project overrides across live edits.
+
 ## v0.14.5 (2026-07-04) — Reset in the Error Panel, Ignore `<synthetic>` Model
 
 ### Fixed
