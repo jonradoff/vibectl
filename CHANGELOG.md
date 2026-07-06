@@ -3,6 +3,17 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.14.8 (2026-07-06) — AskUserQuestion UI, Create-time Detection Chooser, Sandbox-aware ECS Pairing
+
+### Added
+- **`AskUserQuestion` inline UI.** New `AskUserQuestionCard` renders the question(s) + options (radios/checkboxes based on `multiSelect`) with an optional "Other" free-text fallback and a preview column when options carry one. Submitting sends a `tool_result_response` over the WebSocket; the backend serialises it as a user-role `tool_result` block via a new `SendToolResult` helper on `ChatSession`. Once answered, the card collapses to a compact "Answered: …" summary. Works for both single and multi-select. Wire-through: `ChatView.handleQuestionAnswer` → `MessageRenderer` → `ToolCallCard` → `AskUserQuestionCard`.
+- **Create-time deployment detection + provider chooser.** When a new project's local path is entered, the ProjectForm now runs `detectDeploymentTargets` alongside `detectProjectScripts`. If multiple providers are detected (fly.toml + AWS), the "🎯 Detected N targets" banner appears with a Preferred Provider chooser (Auto / AWS / Fly.io / …). Selecting AWS auto-fills when it's the only non-legacy provider; otherwise the choice defaults to Auto and can be overridden.
+- **`CreateProjectRequest` now accepts `deployments`, `deployment`, and `preferredProvider`** — the create flow can seed the full multi-target config at project birth, not just via the settings screen afterward.
+- Docs: new **Multi-target deployment detection** section in CLAUDE.md documenting the signals table, resolution order, and endpoint.
+
+### Fixed
+- **Detection no longer misattributes side-concern task-defs to primary envs.** ECS task-def files whose basenames contain any of `sandbox`, `vm`, `microvm`, `lambda`, `sidecar`, or `worker` are now flagged as *secondary* and deprioritised when pairing with `config/<env>.yaml`. Fixes the WING case where all three AWS envs were being paired with `build/ecs/wingman-sandbox.json.liquid` (the MicroVM Lambda) instead of the ECS `wingman.json.liquid`.
+
 ## v0.14.7 (2026-07-06) — Multi-target Deployments, Workspace Scoping, Subagent Model Filter
 
 ### Multi-target deployments (foundation for AWS + legacy Fly, multi-env)

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createProject, createMultiModuleProject, checkDir, ensureDir, detectGitRemote, detectProjectScripts, suggestClonePath, suggestNewPath } from '../../api/client';
+import { createProject, createMultiModuleProject, checkDir, ensureDir, detectGitRemote, detectProjectScripts, detectDeploymentTargets, suggestClonePath, suggestNewPath } from '../../api/client';
+import type { DetectedTarget } from '../../types';
 import type { DetectedScripts } from '../../api/client';
 import type { UnitDefinition } from '../../types';
 
@@ -45,6 +46,9 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
   const [dirExists, setDirExists] = useState<boolean | null>(null);
   const [detectLoading, setDetectLoading] = useState(false);
   const [detectedScripts, setDetectedScripts] = useState<DetectedScripts | null>(null);
+  // Multi-target deployment detection state.
+  const [detectedTargets, setDetectedTargets] = useState<DetectedTarget[] | null>(null);
+  const [preferredProvider, setPreferredProvider] = useState<string>('');
 
   // New project dir mode
   const [newPath, setNewPath] = useState('');
@@ -97,6 +101,26 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
         if (dirResult.exists) {
           const scripts = await detectProjectScripts(localPath.trim());
           setDetectedScripts(scripts);
+          // Also run multi-target detection — this is what feeds the
+          // preferred-provider chooser when both fly.toml and AWS
+          // artifacts (config/*.yaml, ECS task defs) coexist.
+          try {
+            const multi = await detectDeploymentTargets(localPath.trim());
+            setDetectedTargets(multi.targets || []);
+            // Auto-pick a default preferred provider: prefer AWS when
+            // both are present, otherwise the single provider found,
+            // otherwise leave empty (auto).
+            const providers = new Set((multi.targets || []).filter(t => !t.isLegacy).map(t => t.provider || ''));
+            if (providers.size === 1) {
+              setPreferredProvider([...providers][0]);
+            } else if (providers.has('aws')) {
+              setPreferredProvider('aws');
+            } else {
+              setPreferredProvider('');
+            }
+          } catch {
+            setDetectedTargets(null);
+          }
         }
       } catch {
         setDirExists(false);
@@ -152,6 +176,7 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
     setRepoMode('clone');
     setGithubUrl(''); setSuggestedPath('');
     setLocalPath(''); setDetectedRemote(''); setLocalGithubUrl(''); setDirExists(null); setDetectedScripts(null);
+    setDetectedTargets(null); setPreferredProvider('');
     setNewPath('');
     setStep1Error(''); setStep2Error('');
     setSubmitting(false);
@@ -215,9 +240,17 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
       links.localPath = newPath;
     }
 
-    // Build deployment config from detected scripts (local mode only)
+    // Build multi-target deployments (preferred). Fall back to the legacy
+    // single-target `deployment` field for projects with no on-disk targets
+    // (e.g. clone mode before the repo is on disk).
+    let deployments: import('../../types').DeploymentConfig[] | undefined;
     let deployment: import('../../types').DeploymentConfig | undefined;
-    if (repoMode === 'local' && detectedScripts) {
+    if (repoMode === 'local' && detectedTargets && detectedTargets.length > 0) {
+      deployments = detectedTargets.map(({ signals: _s, ...rest }) => {
+        void _s;
+        return rest;
+      });
+    } else if (repoMode === 'local' && detectedScripts) {
       const d: import('../../types').DeploymentConfig = {};
       if (detectedScripts.deployProd)  d.deployProd  = detectedScripts.deployProd;
       if (detectedScripts.startDev)    d.startDev    = detectedScripts.startDev;
@@ -233,7 +266,10 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
         projectType: 'multi', units,
       });
     } else {
-      mutation.mutate({ name: name.trim(), code, description: description.trim(), links, goals: [], deployment });
+      mutation.mutate({
+        name: name.trim(), code, description: description.trim(), links, goals: [],
+        deployment, deployments, preferredProvider: preferredProvider || undefined,
+      });
     }
   }
 
@@ -475,6 +511,52 @@ function ProjectForm({ open, onClose, onCreated }: ProjectFormProps) {
                         )}
                       </div>
                     )}
+
+                    {/* Multi-target deployment detection + preferred-provider chooser */}
+                    {!detectLoading && detectedTargets && detectedTargets.length > 0 && (() => {
+                      const providers = new Set(detectedTargets.filter(t => !t.isLegacy).map(t => t.provider || ''));
+                      const ambiguous = providers.size > 1 || (providers.size === 1 && detectedTargets.some(t => t.isLegacy));
+                      return (
+                        <div className="mt-2 rounded-lg bg-indigo-900/20 border border-indigo-700/40 px-3 py-2 space-y-2">
+                          <p className="text-[11px] font-semibold text-indigo-300">
+                            🎯 Detected {detectedTargets.length} deployment target{detectedTargets.length === 1 ? '' : 's'}
+                          </p>
+                          <div className="space-y-1">
+                            {detectedTargets.map((t, i) => (
+                              <div key={i} className="text-[11px] font-mono text-indigo-200/80">
+                                <span className="text-indigo-100">{t.name}</span>{' '}
+                                <span className="text-indigo-400">({t.provider})</span>
+                                {t.isLegacy && <span className="ml-1 text-amber-400/80">legacy</span>}
+                                {t.signals && t.signals.length > 0 && (
+                                  <span className="text-indigo-300/50"> · from: {t.signals.slice(0, 2).join(', ')}{t.signals.length > 2 ? '…' : ''}</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                          {ambiguous && (
+                            <div className="pt-2 border-t border-indigo-800/40">
+                              <label className="block text-[11px] text-indigo-200 mb-1">Which provider should be the default for header actions?</label>
+                              <div className="flex flex-wrap gap-2">
+                                {[
+                                  { value: '', label: 'Auto' },
+                                  ...Array.from(providers).map(p => ({ value: p, label: p === 'aws' ? 'AWS' : p === 'flyio' ? 'Fly.io' : p })),
+                                ].map((opt) => (
+                                  <button
+                                    key={opt.value}
+                                    type="button"
+                                    onClick={() => setPreferredProvider(opt.value)}
+                                    className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${preferredProvider === opt.value ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                ))}
+                              </div>
+                              <p className="text-[10px] text-indigo-300/60 mt-1">Legacy targets are always excluded from Auto. You can change this later in project settings.</p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div>
                     <label className="block text-sm text-gray-300 mb-1.5">

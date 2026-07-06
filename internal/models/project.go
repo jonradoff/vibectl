@@ -244,6 +244,14 @@ type CreateProjectRequest struct {
 	// Multi-module creation
 	ProjectType string           `json:"projectType,omitempty"` // "multi" to create a multi-module project
 	Units       []UnitDefinition `json:"units,omitempty"`       // initial units (only when projectType="multi")
+
+	// Deployment configuration seeded at create time — either the legacy
+	// single-target Deployment (kept for older frontends) or the new
+	// Deployments array with PreferredProvider. The service prefers
+	// Deployments when non-empty.
+	Deployment        *DeploymentConfig  `json:"deployment,omitempty"`
+	Deployments       []DeploymentConfig `json:"deployments,omitempty"`
+	PreferredProvider string             `json:"preferredProvider,omitempty"`
 }
 
 type UpdateProjectRequest struct {

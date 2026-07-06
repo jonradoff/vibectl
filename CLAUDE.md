@@ -65,7 +65,24 @@ When a `fly.toml` is also present, the Fly app name is extracted and used to der
 Auto-detection is run:
 - During project creation (for "Use local path" mode, where the directory already exists)
 - As a background step immediately after creation in Clone/New modes
-- On demand via the "⚡ Examine fly.toml" and "⚡ Detect start.sh" buttons in project Settings
+- On demand via the "🔄 Re-detect targets" button in project Settings → Deployment
+
+## Multi-target deployment detection
+
+Since v0.14.7, projects support **multiple deployment targets** — AWS envs, legacy Fly, etc. Detection runs against these signals and returns one target per env:
+
+| Signal | Produces |
+|---|---|
+| `fly.toml` at repo root | `fly-<appname>` target, provider `flyio`. Auto-marked `isLegacy: true` when AWS targets are also detected. |
+| `build/ecs/*.json*`, `deploy/ecs/*.json*`, `.aws/ecs/*.json*`, or root-level `task-definition*.json` / `taskdef*.json` | ECS/Fargate signal. Files whose names contain `sandbox`, `vm`, `microvm`, `lambda`, `sidecar`, or `worker` are treated as **secondary** and deprioritised — the primary task-def is what gets paired with envs. |
+| `config/*.yaml` (excluding `local`, `example`, `fly-*`) | One `aws-<env>` target per file — the filename is the env name. Each is paired with a task-def by filename match, falling back to the first primary task-def. |
+| `.github/workflows/*.yml` containing `aws ecs update-service` or `aws deploy create-deployment` | The command line is lifted into `deployProd` for AWS targets that don't already have one. |
+| `aws.md` / `AWS.md` / `docs/aws.md` | Surfaced as a docs pointer (`awsDocPath`) — **not** treated as config. |
+| `deploy.sh`, `start.sh`, `stop.sh` | Populated on the default target. |
+
+**Resolution order for header actions**: `IsDefault` flag → `PreferredProvider` on the project → first non-legacy target → first target. Set via the Preferred Provider dropdown in project Settings and the create-time chooser when multiple providers are detected.
+
+**Endpoint**: `GET /api/v1/detect-deployment-targets?path=<abs>`. Local under delegation (path lookups need the local filesystem). Returns `{ targets: [...], signals: {...}, awsDocPath: "..." }`.
 
 # Claude Code Auth & Session Management
 
@@ -106,6 +123,7 @@ Never expand or replace this pattern with a Mongo-only replay: the in-memory buf
 
 - Default: `--permission-mode acceptEdits` (auto-approves reads/edits, blocks dangerous ops).
 - Plan mode tools (`EnterPlanMode`, `ExitPlanMode`) must be in `--allowedTools` — otherwise `acceptEdits` silently denies them and plan mode gets stuck.
+- `AskUserQuestion` must also be in `--allowedTools`, for the same reason. When Claude Code calls it, the frontend renders the question(s) + options inline as an `AskUserQuestionCard` and sends the answer back over the WebSocket as a `tool_result_response` message (which vibectl writes to Claude's stdin as a user-role `tool_result` block via `SendToolResult`).
 - `--dangerously-skip-permissions` is used when the user sets permissions to "auto" via `/permissions auto`.
 
 ## Model selection

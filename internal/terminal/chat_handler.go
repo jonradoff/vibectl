@@ -543,6 +543,35 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				go h.promptLogger(activeProjectID, userMsg.Text)
 			}
 
+		case "tool_result_response":
+			// Frontend-supplied answer to a client-side tool call (currently
+			// AskUserQuestion). Sends a user-role message with a single
+			// tool_result content block so the assistant unblocks.
+			var tr struct {
+				ToolUseID string `json:"toolUseId"`
+				Content   string `json:"content"`
+				IsError   bool   `json:"isError,omitempty"`
+			}
+			if err := json.Unmarshal(msg.Data, &tr); err != nil {
+				slog.Error("invalid tool_result_response", "error", err)
+				continue
+			}
+			if activeProjectID == "" || tr.ToolUseID == "" {
+				continue
+			}
+			sess := h.manager.GetSession(activeProjectID)
+			if sess == nil {
+				continue
+			}
+			if err := sess.SendToolResult(tr.ToolUseID, tr.Content, tr.IsError); err != nil {
+				slog.Error("failed to send tool result", "projectID", activeProjectID, "error", err)
+				if strings.HasPrefix(err.Error(), "SESSION_ENDED") {
+					sendJSON("session_ended", map[string]string{"message": err.Error()})
+				} else {
+					sendJSON("error", map[string]string{"message": err.Error()})
+				}
+			}
+
 		case "interrupt":
 			// Send SIGINT to gracefully stop the running claude process.
 			if activeProjectID == "" {

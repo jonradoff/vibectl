@@ -311,36 +311,71 @@ func collectConfigEnvs(root string) []configEnv {
 	return out
 }
 
+// secondaryTaskDefKeywords marks task-def files that are almost never the
+// primary service definition — sandbox/VM/lambda side concerns, adjacent
+// runtimes, etc. When pairing config envs with a task-def, we deprioritise
+// these so we don't misattribute the main service's env to a sidecar.
+var secondaryTaskDefKeywords = []string{"sandbox", "vm", "microvm", "lambda", "sidecar", "worker"}
+
+// isSecondaryTaskDef returns true if the given path's basename matches any of
+// the secondary keywords (case-insensitive).
+func isSecondaryTaskDef(path string) bool {
+	lower := strings.ToLower(path)
+	for _, kw := range secondaryTaskDefKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // buildAWSTargets pairs config envs with a task-def file (best-effort filename
 // match) and returns one target per env. If no config envs were detected but
-// task-defs exist, returns a single "aws" target using the first task-def.
+// task-defs exist, returns a single "aws" target using the first primary task-def.
 func buildAWSTargets(envs []configEnv, taskDefs []string) []DetectedTarget {
+	// Split into primary vs secondary so the fallback picks the main one.
+	var primary, secondary []string
+	for _, td := range taskDefs {
+		if isSecondaryTaskDef(td) {
+			secondary = append(secondary, td)
+		} else {
+			primary = append(primary, td)
+		}
+	}
+	// Prefer primary as the fallback pool; only fall back to secondary if
+	// nothing else is available.
+	fallbackPool := primary
+	if len(fallbackPool) == 0 {
+		fallbackPool = secondary
+	}
+
 	if len(envs) == 0 {
-		if len(taskDefs) == 0 {
+		if len(fallbackPool) == 0 {
 			return nil
 		}
 		return []DetectedTarget{{
 			DeploymentConfig: models.DeploymentConfig{
 				Name:     "aws",
 				Provider: "aws",
-				TaskDef:  taskDefs[0],
+				TaskDef:  fallbackPool[0],
 			},
-			Signals: []string{taskDefs[0]},
+			Signals: []string{fallbackPool[0]},
 		}}
 	}
 	var out []DetectedTarget
 	for _, env := range envs {
-		// Best-effort: pick a task-def whose filename mentions the env, else
-		// fall back to the first task-def (which is usually a shared template).
+		// Best-effort: pick a task-def whose filename mentions the env AND
+		// isn't a secondary (sandbox/VM/etc). If nothing matches by name,
+		// fall back to the primary pool.
 		taskDef := ""
-		for _, td := range taskDefs {
+		for _, td := range primary {
 			if strings.Contains(strings.ToLower(td), strings.ToLower(env.Name)) {
 				taskDef = td
 				break
 			}
 		}
-		if taskDef == "" && len(taskDefs) > 0 {
-			taskDef = taskDefs[0]
+		if taskDef == "" && len(fallbackPool) > 0 {
+			taskDef = fallbackPool[0]
 		}
 		signals := []string{env.Path}
 		if taskDef != "" {

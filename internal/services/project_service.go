@@ -197,15 +197,18 @@ func (s *ProjectService) Create(ctx context.Context, req *models.CreateProjectRe
 	}
 
 	project := models.Project{
-		Name:         req.Name,
-		Code:         req.Code,
-		Description:  req.Description,
-		Links:        req.Links,
-		Goals:        goals,
-		ProjectType:  req.ProjectType,
-		IssueCounter: 0,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		Name:              req.Name,
+		Code:              req.Code,
+		Description:       req.Description,
+		Links:             req.Links,
+		Goals:             goals,
+		ProjectType:       req.ProjectType,
+		Deployment:        req.Deployment,
+		Deployments:       req.Deployments,
+		PreferredProvider: req.PreferredProvider,
+		IssueCounter:      0,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 
 	result, err := s.collection.InsertOne(ctx, project)

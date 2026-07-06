@@ -1135,6 +1135,20 @@ export default function ChatView({
     ))
   }, [sendWsMessage])
 
+  // Tracks AskUserQuestion tool_use_ids that have already been answered, so
+  // the inline form doesn't re-render after the user submits.
+  const [answeredQuestions, setAnsweredQuestions] = useState<Record<string, Record<string, string | string[]>>>({})
+
+  const handleQuestionAnswer = useCallback((toolUseId: string, answers: Record<string, string | string[]>) => {
+    if (!toolUseId) return
+    // Serialize answers as a JSON string in the tool_result content —
+    // Claude Code accepts either a string or an array of blocks; a JSON
+    // string is the safest cross-version choice.
+    const payload = JSON.stringify({ answers })
+    sendWsMessage('tool_result_response', { toolUseId, content: payload })
+    setAnsweredQuestions((prev) => ({ ...prev, [toolUseId]: answers }))
+  }, [sendWsMessage])
+
   const handleSetPermissionMode = useCallback((mode: 'accept-all' | 'approve') => {
     setPermissionMode(mode)
     // Restart the session with the new permission mode
@@ -1398,7 +1412,7 @@ export default function ChatView({
               })
             }} />
           }
-          return <MessageRenderer key={i} message={msg} compact={compact} onControlResponse={handleControlResponse} onPlanResponse={handlePlanResponse} />
+          return <MessageRenderer key={i} message={msg} compact={compact} onControlResponse={handleControlResponse} onPlanResponse={handlePlanResponse} onQuestionAnswer={handleQuestionAnswer} answeredQuestions={answeredQuestions} />
         })}
 
         {isStreaming && streamingText && (
@@ -1992,10 +2006,12 @@ function PermissionPrompt({ message, onRespond, compact }: {
   )
 }
 
-const MessageRenderer = memo(function MessageRenderer({ message, compact, onControlResponse, onPlanResponse }: {
+const MessageRenderer = memo(function MessageRenderer({ message, compact, onControlResponse, onPlanResponse, onQuestionAnswer, answeredQuestions }: {
   message: ChatMessage; compact?: boolean
   onControlResponse?: (requestId: string, behavior: 'allow' | 'deny', message?: string) => void
   onPlanResponse?: (requestId: string, accept: boolean, feedback?: string) => void
+  onQuestionAnswer?: (toolUseId: string, answers: Record<string, string | string[]>) => void
+  answeredQuestions?: Record<string, Record<string, string | string[]>>
 }) {
   if (message.role === 'user') {
     return (
@@ -2038,7 +2054,7 @@ const MessageRenderer = memo(function MessageRenderer({ message, compact, onCont
           )
         }
         if (block.type === 'tool_use') {
-          return <ToolCallCard key={i} block={block} compact={compact} />
+          return <ToolCallCard key={i} block={block} compact={compact} onQuestionAnswer={onQuestionAnswer} answeredQuestions={answeredQuestions} />
         }
         return null
       })}
@@ -2080,13 +2096,173 @@ const PlanToolCard = memo(function PlanToolCard({ block, compact }: { block: Too
   )
 })
 
-const ToolCallCard = memo(function ToolCallCard({ block, compact }: { block: ToolUseBlock; compact?: boolean }) {
+// Assistant-driven question tool. Renders each question with its options as
+// radios (or checkboxes when multiSelect), plus a free-text "Other" fallback
+// and a preview column when an option carries one. On submit, sends the
+// answers map back to Claude Code as a tool_result via the WebSocket.
+interface AskQuestion {
+  question: string
+  header?: string
+  multiSelect?: boolean
+  options: Array<{ label: string; description?: string; preview?: string }>
+}
+function AskUserQuestionCard({ block, compact, onSubmit, answered }: {
+  block: ToolUseBlock
+  compact?: boolean
+  onSubmit?: (toolUseId: string, answers: Record<string, string | string[]>) => void
+  answered?: Record<string, string | string[]>
+}) {
+  const questions = ((block.input.questions as AskQuestion[] | undefined) || []).filter(q => q && q.question && Array.isArray(q.options))
+  const [selections, setSelections] = useState<Record<string, Set<string>>>(() => {
+    const init: Record<string, Set<string>> = {}
+    for (const q of questions) init[q.question] = new Set<string>()
+    return init
+  })
+  const [others, setOthers] = useState<Record<string, string>>({})
+
+  if (questions.length === 0) return null
+
+  const isAnswered = !!answered
+
+  if (isAnswered) {
+    return (
+      <div className="rounded-lg border border-emerald-800/50 bg-emerald-900/10 p-3">
+        <div className="flex items-center gap-1.5 mb-2">
+          <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider">Answered</span>
+          <div className="flex-1 h-px bg-emerald-800/30" />
+        </div>
+        {questions.map((q, i) => {
+          const a = answered?.[q.question]
+          const shown = Array.isArray(a) ? a.join(', ') : (a ?? '')
+          return (
+            <div key={i} className={`${compact ? 'text-[11px]' : 'text-xs'} mb-1`}>
+              <span className="text-gray-500">{q.header || q.question}: </span>
+              <span className="text-emerald-300 font-medium">{shown}</span>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  const toggle = (question: string, label: string, multi: boolean) => {
+    setSelections(prev => {
+      const cur = new Set(prev[question] || [])
+      if (multi) {
+        if (cur.has(label)) cur.delete(label); else cur.add(label)
+      } else {
+        cur.clear(); cur.add(label)
+      }
+      return { ...prev, [question]: cur }
+    })
+  }
+
+  const submit = () => {
+    if (!onSubmit) return
+    const answers: Record<string, string | string[]> = {}
+    for (const q of questions) {
+      const picked = Array.from(selections[q.question] || [])
+      // Merge "Other" free-text if provided.
+      const other = (others[q.question] || '').trim()
+      const final = other ? [...picked, other] : picked
+      if (q.multiSelect) {
+        answers[q.question] = final
+      } else {
+        answers[q.question] = final[0] || ''
+      }
+    }
+    onSubmit(block.id, answers)
+  }
+
+  const allAnsweredable = questions.every(q => {
+    const picks = selections[q.question]
+    const other = (others[q.question] || '').trim()
+    return (picks && picks.size > 0) || other.length > 0
+  })
+
+  return (
+    <div className="rounded-lg border border-indigo-700/50 bg-indigo-950/40 p-3 space-y-3">
+      <div className="flex items-center gap-1.5">
+        <span className="text-[10px] font-semibold text-indigo-300 uppercase tracking-wider">Question{questions.length > 1 ? 's' : ''}</span>
+        <div className="flex-1 h-px bg-indigo-800/40" />
+      </div>
+      {questions.map((q, qi) => {
+        const multi = !!q.multiSelect
+        return (
+          <div key={qi} className="space-y-2">
+            {q.header && <div className="text-[10px] font-semibold text-indigo-400 uppercase tracking-wide">{q.header}</div>}
+            <div className={`${compact ? 'text-xs' : 'text-sm'} text-gray-200`}>{q.question}</div>
+            <div className="space-y-1.5">
+              {q.options.map((opt, oi) => {
+                const checked = (selections[q.question] || new Set<string>()).has(opt.label)
+                return (
+                  <label key={oi} className={`flex items-start gap-2 rounded px-2 py-1.5 cursor-pointer transition-colors ${checked ? 'bg-indigo-800/40 border border-indigo-600/50' : 'hover:bg-gray-800/60 border border-transparent'}`}>
+                    <input
+                      type={multi ? 'checkbox' : 'radio'}
+                      name={`q-${block.id}-${qi}`}
+                      checked={checked}
+                      onChange={() => toggle(q.question, opt.label, multi)}
+                      className="mt-0.5"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-gray-200 text-[12px] font-medium">{opt.label}</div>
+                      {opt.description && <div className="text-gray-500 text-[11px] leading-snug">{opt.description}</div>}
+                      {opt.preview && (
+                        <pre className="mt-1 text-[10px] font-mono text-indigo-200/80 bg-black/40 rounded p-1.5 overflow-x-auto whitespace-pre">{opt.preview}</pre>
+                      )}
+                    </div>
+                  </label>
+                )
+              })}
+              <input
+                type="text"
+                value={others[q.question] || ''}
+                onChange={(e) => setOthers(prev => ({ ...prev, [q.question]: e.target.value }))}
+                placeholder="Other (free-text)…"
+                className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-200 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+          </div>
+        )
+      })}
+      <div className="flex items-center justify-end gap-2 pt-1">
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!allAnsweredable}
+          className="rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium px-3 py-1.5 transition-colors"
+        >
+          Send answer{questions.length > 1 ? 's' : ''}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+const ToolCallCard = memo(function ToolCallCard({ block, compact, onQuestionAnswer, answeredQuestions }: {
+  block: ToolUseBlock
+  compact?: boolean
+  onQuestionAnswer?: (toolUseId: string, answers: Record<string, string | string[]>) => void
+  answeredQuestions?: Record<string, Record<string, string | string[]>>
+}) {
   const [open, setOpen] = useState(false)
   const [showDiff, setShowDiff] = useState(false)
 
   // Plan mode tools get a special renderer
   if (PLAN_TOOL_NAMES.has(block.name)) {
     return <PlanToolCard block={block} compact={compact} />
+  }
+
+  // AskUserQuestion → interactive form the user can answer inline.
+  if (block.name === 'AskUserQuestion') {
+    return (
+      <AskUserQuestionCard
+        block={block}
+        compact={compact}
+        onSubmit={onQuestionAnswer}
+        answered={answeredQuestions?.[block.id]}
+      />
+    )
   }
 
   const toolIcon = getToolIcon(block.name)

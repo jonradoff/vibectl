@@ -131,6 +131,54 @@ func (s *ChatSession) SendMessage(text string) error {
 	return nil
 }
 
+// SendToolResult writes a user-role message with a single tool_result content
+// block to claude's stdin. Used by the frontend to complete client-side tool
+// calls (currently AskUserQuestion) so the assistant can continue instead of
+// waiting on a tool result that never arrives.
+//
+// content is opaque to us — Claude expects either a string or an array of
+// content blocks. Pass whatever the tool spec calls for; the AskUserQuestion
+// answer, for example, is a JSON string of the answers map.
+func (s *ChatSession) SendToolResult(toolUseID, content string, isError bool) error {
+	select {
+	case <-s.exited:
+		return fmt.Errorf("SESSION_ENDED: Claude Code is no longer running")
+	default:
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.stdin == nil {
+		return fmt.Errorf("SESSION_ENDED: stdin closed")
+	}
+
+	block := map[string]interface{}{
+		"type":         "tool_result",
+		"tool_use_id":  toolUseID,
+		"content":      content,
+	}
+	if isError {
+		block["is_error"] = true
+	}
+	msg := map[string]interface{}{
+		"type": "user",
+		"message": map[string]interface{}{
+			"role":    "user",
+			"content": []interface{}{block},
+		},
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal tool result: %w", err)
+	}
+	data = append(data, '\n')
+	if _, err := s.stdin.Write(data); err != nil {
+		return fmt.Errorf("write to stdin: %w", err)
+	}
+	return nil
+}
+
 // SendControlResponse writes a control_response to claude's stdin (for permission approvals/denials).
 func (s *ChatSession) SendControlResponse(requestID string, response json.RawMessage) error {
 	select {
