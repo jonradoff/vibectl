@@ -54,16 +54,32 @@ type HealthKPI struct {
 }
 
 type DeploymentConfig struct {
-	Provider    string `json:"provider,omitempty" bson:"provider,omitempty"`       // "flyio", "aws", "vercel", "manual", etc.
+	// Name identifies the target (e.g. "aws-prod", "aws-staging", "fly-legacy").
+	// Empty on legacy single-target projects; the migration reader assigns "default".
+	Name        string `json:"name,omitempty" bson:"name,omitempty"`
+	Provider    string `json:"provider,omitempty" bson:"provider,omitempty"` // "flyio", "aws", "vercel", "manual", etc.
+	IsDefault   bool   `json:"isDefault,omitempty" bson:"isDefault,omitempty"`
+	IsLegacy    bool   `json:"isLegacy,omitempty" bson:"isLegacy,omitempty"` // Hidden from default lists (e.g. an old Fly deploy retained alongside a live AWS one)
 	StartDev    string `json:"startDev,omitempty" bson:"startDev,omitempty"`
 	StopDev     string `json:"stopDev,omitempty" bson:"stopDev,omitempty"`
 	DeployProd  string `json:"deployProd,omitempty" bson:"deployProd,omitempty"`
 	RestartProd string `json:"restartProd,omitempty" bson:"restartProd,omitempty"`
 	StartProd   string `json:"startProd,omitempty" bson:"startProd,omitempty"`
 	ViewLogs    string `json:"viewLogs,omitempty" bson:"viewLogs,omitempty"`
-	FlyApp      string `json:"flyApp,omitempty" bson:"flyApp,omitempty"`
-	FlyRegion   string `json:"flyRegion,omitempty" bson:"flyRegion,omitempty"`
-	Notes       string `json:"notes,omitempty" bson:"notes,omitempty"`
+
+	// Fly-specific
+	FlyApp    string `json:"flyApp,omitempty" bson:"flyApp,omitempty"`
+	FlyRegion string `json:"flyRegion,omitempty" bson:"flyRegion,omitempty"`
+
+	// AWS ECS/Fargate-specific
+	AWSAccount string `json:"awsAccount,omitempty" bson:"awsAccount,omitempty"`
+	AWSRegion  string `json:"awsRegion,omitempty" bson:"awsRegion,omitempty"`
+	AWSCluster string `json:"awsCluster,omitempty" bson:"awsCluster,omitempty"`
+	AWSService string `json:"awsService,omitempty" bson:"awsService,omitempty"`
+	TaskDef    string `json:"taskDef,omitempty" bson:"taskDef,omitempty"` // Repo-relative path to the task-def JSON (or Liquid template)
+	ConfigFile string `json:"configFile,omitempty" bson:"configFile,omitempty"` // Repo-relative path to config/<env>.yaml
+
+	Notes string `json:"notes,omitempty" bson:"notes,omitempty"`
 }
 
 type RecurringTheme struct {
@@ -99,7 +115,9 @@ type Project struct {
 	Links                 ProjectLinks       `json:"links" bson:"links"`
 	Goals                 []string           `json:"goals" bson:"goals"`
 	HealthCheck           *HealthCheckConfig `json:"healthCheck,omitempty" bson:"healthCheck,omitempty"`
-	Deployment            *DeploymentConfig  `json:"deployment,omitempty" bson:"deployment,omitempty"`
+	Deployment            *DeploymentConfig  `json:"deployment,omitempty" bson:"deployment,omitempty"` // Legacy single-target — use EffectiveDeployments() to read.
+	Deployments           []DeploymentConfig `json:"deployments,omitempty" bson:"deployments,omitempty"` // Multi-target; empty on legacy projects.
+	PreferredProvider     string             `json:"preferredProvider,omitempty" bson:"preferredProvider,omitempty"` // "aws", "flyio", or "" for auto (first non-legacy target wins).
 	Webhooks              []WebhookConfig    `json:"webhooks,omitempty" bson:"webhooks,omitempty"`
 	CloneStatus           string             `json:"cloneStatus,omitempty" bson:"cloneStatus,omitempty"`
 	CloneError            string             `json:"cloneError,omitempty" bson:"cloneError,omitempty"`
@@ -130,6 +148,60 @@ type Project struct {
 
 // IsMultiModule returns true if this is a multi-module orchestrator project.
 func (p *Project) IsMultiModule() bool { return p.ProjectType == "multi" }
+
+// EffectiveDeployments returns the multi-target array if set, otherwise wraps
+// the legacy single-target Deployment into a one-element array with a default
+// name/isDefault flag. Handlers should always call this instead of reading
+// either field directly, so old projects keep working while new ones use the
+// array shape.
+func (p *Project) EffectiveDeployments() []DeploymentConfig {
+	if len(p.Deployments) > 0 {
+		return p.Deployments
+	}
+	if p.Deployment != nil {
+		d := *p.Deployment
+		if d.Name == "" {
+			d.Name = "default"
+		}
+		d.IsDefault = true
+		return []DeploymentConfig{d}
+	}
+	return nil
+}
+
+// DefaultDeployment returns the deployment target the project's header
+// action buttons should act on. Resolution order:
+//
+//  1. If any target has IsDefault set, that wins.
+//  2. Otherwise, if PreferredProvider is set, pick the first non-legacy
+//     target matching that provider.
+//  3. Otherwise, first non-legacy target.
+//  4. Otherwise, first target of any kind.
+//  5. Nil if there are no targets.
+func (p *Project) DefaultDeployment() *DeploymentConfig {
+	all := p.EffectiveDeployments()
+	if len(all) == 0 {
+		return nil
+	}
+	for i := range all {
+		if all[i].IsDefault {
+			return &all[i]
+		}
+	}
+	if p.PreferredProvider != "" {
+		for i := range all {
+			if all[i].Provider == p.PreferredProvider && !all[i].IsLegacy {
+				return &all[i]
+			}
+		}
+	}
+	for i := range all {
+		if !all[i].IsLegacy {
+			return &all[i]
+		}
+	}
+	return &all[0]
+}
 
 // IsUnit returns true if this project is a unit within a multi-module project.
 func (p *Project) IsUnit() bool { return p.ParentID != nil }
@@ -180,7 +252,9 @@ type UpdateProjectRequest struct {
 	Links       *ProjectLinks      `json:"links,omitempty"`
 	Goals       *[]string          `json:"goals,omitempty"`
 	HealthCheck *HealthCheckConfig `json:"healthCheck,omitempty"`
-	Deployment  *DeploymentConfig  `json:"deployment,omitempty"`
+	Deployment        *DeploymentConfig   `json:"deployment,omitempty"`
+	Deployments       *[]DeploymentConfig `json:"deployments,omitempty"`
+	PreferredProvider *string             `json:"preferredProvider,omitempty"`
 	Webhooks    *[]WebhookConfig   `json:"webhooks,omitempty"`
 	Tags        *[]string          `json:"tags,omitempty"`
 	Inactive    *bool              `json:"inactive,omitempty"`

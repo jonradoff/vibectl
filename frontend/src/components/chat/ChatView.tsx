@@ -632,12 +632,12 @@ export default function ChatView({
         if (eventType === 'message_start') {
           // Capture the model reported by Claude Code so the header can show
           // what's actually running (not just what we asked for). Skip Claude
-          // Code's <synthetic> placeholder (locally-generated assistant messages
-          // for tool echoes, subagent aggregation, /compact summaries, plan
-          // mode, etc — not a real Anthropic model).
+          // Code's <synthetic> placeholder and subagent runs (isSidechain=true)
+          // whose model would displace the primary agent's on the chip.
+          const isSidechain = (data as { isSidechain?: boolean }).isSidechain === true
           const msg = event.message as { model?: string } | undefined
           const m = msg?.model
-          if (m && !m.startsWith('<') && m !== currentModel) {
+          if (m && !m.startsWith('<') && !isSidechain && m !== currentModel) {
             setCurrentModel(m)
             onModelChange?.(m)
           }
@@ -678,11 +678,14 @@ export default function ChatView({
 
         // Assistant messages always carry the model that produced them —
         // more reliable than message_start alone, which some Claude Code
-        // versions omit or emit under a nested envelope. Skip Claude Code's
-        // <synthetic> marker (used for locally-generated assistant messages
-        // like tool echoes, subagent aggregation, /compact summaries, plan
-        // mode — not a real Anthropic model).
-        if (msg?.model && !msg.model.startsWith('<') && msg.model !== currentModel) {
+        // versions omit or emit under a nested envelope. Skip:
+        //  - Claude Code's <synthetic> marker (locally-generated messages
+        //    like tool echoes, subagent aggregation, /compact summaries).
+        //  - Subagent (Task tool) responses, marked with isSidechain=true.
+        //    Those run Haiku by default and would overwrite the real
+        //    primary model (Opus/Sonnet/Fable) with the subagent's model.
+        const isSidechain = (data as { isSidechain?: boolean }).isSidechain === true
+        if (msg?.model && !msg.model.startsWith('<') && !isSidechain && msg.model !== currentModel) {
           setCurrentModel(msg.model)
           onModelChange?.(msg.model)
         }

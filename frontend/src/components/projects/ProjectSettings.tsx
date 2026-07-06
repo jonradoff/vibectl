@@ -1,8 +1,22 @@
 import { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { updateProject, deleteProject, detectFlyToml } from '../../api/client';
-import type { Project, CustomLink, HealthCheckConfig, DeploymentConfig, WebhookConfig } from '../../types';
+import { updateProject, deleteProject, detectDeploymentTargets } from '../../api/client';
+import type { Project, CustomLink, HealthCheckConfig, DeploymentConfig, DetectedTarget, WebhookConfig } from '../../types';
+
+// effectiveDeployments folds the legacy single `deployment` into the array
+// shape so the form always works with one uniform data type.
+function effectiveDeployments(p: Project): DeploymentConfig[] {
+  if (p.deployments && p.deployments.length > 0) return p.deployments;
+  if (p.deployment) {
+    return [{
+      ...p.deployment,
+      name: p.deployment.name || 'default',
+      isDefault: true,
+    }];
+  }
+  return [];
+}
 
 const WEBHOOK_EVENTS = [
   { value: 'p0_issue_created', label: 'P0 Issue Created' },
@@ -35,9 +49,15 @@ function ProjectSettings({ project }: ProjectSettingsProps) {
       monitorEnv: '',
     }
   );
-  const [deployment, setDeployment] = useState<DeploymentConfig>(
-    project.deployment || {}
-  );
+  // Multi-target deployment state. The legacy single-target `deployment` field
+  // is migrated into the array on mount; save writes back to `deployments`.
+  const [deployments, setDeployments] = useState<DeploymentConfig[]>(effectiveDeployments(project));
+  const [preferredProvider, setPreferredProvider] = useState<string>(project.preferredProvider || '');
+
+  // Multi-target detection state — populated by "Re-detect targets".
+  const [detecting, setDetecting] = useState(false);
+  const [detectedTargets, setDetectedTargets] = useState<DetectedTarget[] | null>(null);
+  const [awsDocPath, setAwsDocPath] = useState<string>('');
   const [webhooks, setWebhooks] = useState<WebhookConfig[]>(project.webhooks || []);
   const [newWebhookUrl, setNewWebhookUrl] = useState('');
   const [newWebhookEvents, setNewWebhookEvents] = useState<string[]>([]);
@@ -46,10 +66,7 @@ function ProjectSettings({ project }: ProjectSettingsProps) {
   // Toast state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  // Fly.toml detection state
-  const [flyDetecting, setFlyDetecting] = useState(false);
-  const [flyDetected, setFlyDetected] = useState<{ appName: string; deployProd: string; startProd: string; restartProd: string; viewLogs: string } | null>(null);
-  const [flyNotFound, setFlyNotFound] = useState(false);
+
 
   // Danger zone state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -66,7 +83,9 @@ function ProjectSettings({ project }: ProjectSettingsProps) {
     setHealthCheck(
       project.healthCheck || { frontend: {}, backend: {}, monitorEnv: '' }
     );
-    setDeployment(project.deployment || {});
+    setDeployments(effectiveDeployments(project));
+    setPreferredProvider(project.preferredProvider || '');
+    setDetectedTargets(null);
     setWebhooks(project.webhooks || []);
   }, [project]);
 
@@ -90,7 +109,8 @@ function ProjectSettings({ project }: ProjectSettingsProps) {
         },
         goals,
         healthCheck,
-        deployment,
+        deployments,
+        preferredProvider,
         webhooks: webhooks.length > 0 ? webhooks : [],
       }),
     onSuccess: () => {
@@ -385,161 +405,261 @@ function ProjectSettings({ project }: ProjectSettingsProps) {
             </div>
           </div>
 
-          {/* Deployment */}
+          {/* Deployment — multi-target */}
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-3">Deployment</label>
-
-            <div className="mb-3">
-              <label className="block text-xs font-medium text-gray-400 mb-1">Provider</label>
-              <select
-                value={deployment.provider || ''}
-                onChange={(e) => setDeployment({ ...deployment, provider: e.target.value })}
-                className="w-full max-w-xs bg-gray-700 border border-gray-600 text-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
-              >
-                <option value="">None</option>
-                <option value="flyio">Fly.io</option>
-                <option value="aws">AWS</option>
-                <option value="vercel">Vercel</option>
-                <option value="manual">Manual</option>
-                <option value="other">Other</option>
-              </select>
+            <div className="flex items-center justify-between mb-3">
+              <label className="block text-sm font-medium text-gray-300">Deployment Targets</label>
+              {localPath && (
+                <button
+                  type="button"
+                  disabled={detecting}
+                  onClick={async () => {
+                    setDetecting(true);
+                    try {
+                      const res = await detectDeploymentTargets(localPath);
+                      setDetectedTargets(res.targets || []);
+                      setAwsDocPath(res.awsDocPath || '');
+                    } catch {
+                      setDetectedTargets([]);
+                    } finally {
+                      setDetecting(false);
+                    }
+                  }}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                >
+                  {detecting ? 'Detecting…' : '🔄 Re-detect targets'}
+                </button>
+              )}
             </div>
 
-            {/* Fly.toml detection banner */}
-            {localPath && (
-              <div className="mb-3">
-                {!flyDetected && !flyNotFound && (
-                  <button
-                    type="button"
-                    disabled={flyDetecting}
-                    onClick={async () => {
-                      setFlyDetecting(true);
-                      setFlyNotFound(false);
-                      try {
-                        const res = await detectFlyToml(localPath);
-                        if (res.found && res.appName) {
-                          setFlyDetected({
-                            appName: res.appName,
-                            deployProd: res.deployProd!,
-                            startProd: res.startProd!,
-                            restartProd: res.restartProd!,
-                            viewLogs: res.viewLogs!,
-                          });
-                        } else {
-                          setFlyNotFound(true);
-                        }
-                      } catch {
-                        setFlyNotFound(true);
-                      } finally {
-                        setFlyDetecting(false);
-                      }
-                    }}
-                    className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-                  >
-                    {flyDetecting ? 'Examining…' : '🔍 Examine fly.toml'}
-                  </button>
+            {/* Preferred provider (drives which target is default for header actions) */}
+            <div className="mb-3">
+              <label className="block text-xs font-medium text-gray-400 mb-1">Preferred Provider</label>
+              <select
+                value={preferredProvider}
+                onChange={(e) => setPreferredProvider(e.target.value)}
+                className="w-full max-w-xs bg-gray-700 border border-gray-600 text-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+              >
+                <option value="">Auto (first non-legacy)</option>
+                <option value="aws">AWS</option>
+                <option value="flyio">Fly.io</option>
+                <option value="vercel">Vercel</option>
+                <option value="manual">Manual</option>
+              </select>
+              <p className="text-[10px] text-gray-500 mt-1">
+                When multiple providers coexist (e.g. AWS + legacy Fly), this picks which one the project card's header actions target.
+              </p>
+            </div>
+
+            {/* Detection banner */}
+            {detectedTargets !== null && (
+              <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-3 mb-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-indigo-300">
+                    Detected {detectedTargets.length} candidate{detectedTargets.length === 1 ? '' : 's'}
+                    {awsDocPath && (
+                      <span className="ml-2 text-[10px] text-indigo-200/70">
+                        (AWS docs: <span className="font-mono">{awsDocPath}</span>)
+                      </span>
+                    )}
+                  </p>
+                  <button type="button" onClick={() => setDetectedTargets(null)} className="text-gray-500 hover:text-gray-400 text-xs">✕</button>
+                </div>
+                {detectedTargets.length === 0 && (
+                  <p className="text-[11px] text-gray-400">No fly.toml, ECS task-defs, or config/*.yaml envs found in <span className="font-mono">{localPath}</span>.</p>
                 )}
-                {flyNotFound && (
-                  <p className="text-xs text-gray-500">No fly.toml found in <span className="font-mono">{localPath}</span>.</p>
-                )}
-                {flyDetected && (
-                  <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-3 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-semibold text-indigo-300">
-                        fly.toml detected — app: <span className="font-mono">{flyDetected.appName}</span>
-                      </p>
-                      <button type="button" onClick={() => setFlyDetected(null)} className="text-gray-500 hover:text-gray-400 text-xs">✕</button>
+                {detectedTargets.map((t, i) => {
+                  const alreadyAdded = deployments.some((d) => d.name === t.name);
+                  return (
+                    <div key={i} className="rounded bg-black/20 p-2 flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-mono text-indigo-100">
+                          {t.name} <span className="text-indigo-400">({t.provider})</span>
+                          {t.isLegacy && <span className="ml-1 text-[10px] text-amber-400">legacy</span>}
+                        </p>
+                        {t.signals && t.signals.length > 0 && (
+                          <p className="text-[10px] text-indigo-200/60 font-mono truncate">from: {t.signals.join(', ')}</p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        disabled={alreadyAdded}
+                        onClick={() => {
+                          const { signals: _s, ...rest } = t; void _s;
+                          setDeployments([...deployments, rest]);
+                        }}
+                        className="shrink-0 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed text-white text-[11px] font-medium px-2 py-1 transition-colors"
+                      >
+                        {alreadyAdded ? 'Added' : 'Add'}
+                      </button>
                     </div>
-                    <div className="space-y-1 text-[10px] font-mono text-indigo-200/70">
-                      <div>deployProd: <span className="text-indigo-100">{flyDetected.deployProd}</span></div>
-                      <div>startProd: <span className="text-indigo-100">{flyDetected.startProd}</span></div>
-                      <div>restartProd: <span className="text-indigo-100">{flyDetected.restartProd}</span></div>
-                      <div>viewLogs: <span className="text-indigo-100">{flyDetected.viewLogs}</span></div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDeployment({
-                          ...deployment,
-                          provider: 'flyio',
-                          flyApp: flyDetected.appName,
-                          deployProd: flyDetected.deployProd,
-                          startProd: flyDetected.startProd,
-                          restartProd: flyDetected.restartProd,
-                          viewLogs: flyDetected.viewLogs,
-                        });
-                        setFlyDetected(null);
-                      }}
-                      className="w-full rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium py-1.5 transition-colors"
-                    >
-                      Apply these commands
-                    </button>
-                  </div>
-                )}
+                  );
+                })}
               </div>
             )}
 
-            <div className="space-y-3 rounded bg-gray-700/50 p-3 mb-3">
-              <p className="text-xs font-medium text-gray-400 mb-1">Commands</p>
-              {[
-                { key: 'startDev' as const, label: 'Start Dev', placeholder: 'npm run dev' },
-                { key: 'stopDev' as const, label: 'Stop Dev', placeholder: 'kill process or docker-compose down' },
-                { key: 'deployProd' as const, label: 'Deploy Production', placeholder: 'fly deploy' },
-                { key: 'startProd' as const, label: 'Start Production', placeholder: 'fly apps start myapp' },
-                { key: 'restartProd' as const, label: 'Restart Production', placeholder: 'fly apps restart myapp' },
-                { key: 'viewLogs' as const, label: 'View Logs', placeholder: 'fly logs -a myapp' },
-              ].map((cmd) => (
-                <div key={cmd.key}>
-                  <label className="block text-xs text-gray-500 mb-1">{cmd.label}</label>
-                  <input
-                    type="text"
-                    value={deployment[cmd.key] || ''}
-                    onChange={(e) => setDeployment({ ...deployment, [cmd.key]: e.target.value })}
-                    placeholder={cmd.placeholder}
-                    className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-indigo-500"
-                  />
+            {/* Target list */}
+            {deployments.length === 0 && (
+              <p className="text-xs text-gray-500 mb-3">No deployment targets configured. Click Re-detect targets above, or add one below.</p>
+            )}
+
+            <div className="space-y-3">
+              {deployments.map((target, idx) => (
+                <div key={idx} className={`rounded border p-3 space-y-2 ${target.isLegacy ? 'border-gray-700 bg-gray-800/40' : 'border-gray-600 bg-gray-700/50'}`}>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={target.name || ''}
+                      placeholder="target name (e.g. aws-prod)"
+                      onChange={(e) => {
+                        const next = [...deployments]; next[idx] = { ...target, name: e.target.value }; setDeployments(next);
+                      }}
+                      className="flex-1 bg-gray-800 border border-gray-600 text-gray-100 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:border-indigo-500"
+                    />
+                    <select
+                      value={target.provider || ''}
+                      onChange={(e) => {
+                        const next = [...deployments]; next[idx] = { ...target, provider: e.target.value }; setDeployments(next);
+                      }}
+                      className="bg-gray-800 border border-gray-600 text-gray-100 rounded px-2 py-1 text-xs focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="">(provider)</option>
+                      <option value="flyio">Fly.io</option>
+                      <option value="aws">AWS</option>
+                      <option value="vercel">Vercel</option>
+                      <option value="manual">Manual</option>
+                      <option value="other">Other</option>
+                    </select>
+                    <label className="text-[10px] text-gray-400 flex items-center gap-1 cursor-pointer" title="Header buttons act on this target">
+                      <input
+                        type="checkbox"
+                        checked={!!target.isDefault}
+                        onChange={(e) => {
+                          const next = deployments.map((d, i) => ({ ...d, isDefault: i === idx ? e.target.checked : (e.target.checked ? false : d.isDefault) }));
+                          setDeployments(next);
+                        }}
+                      />
+                      default
+                    </label>
+                    <label className="text-[10px] text-gray-400 flex items-center gap-1 cursor-pointer" title="Hidden from default lists">
+                      <input
+                        type="checkbox"
+                        checked={!!target.isLegacy}
+                        onChange={(e) => {
+                          const next = [...deployments]; next[idx] = { ...target, isLegacy: e.target.checked }; setDeployments(next);
+                        }}
+                      />
+                      legacy
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setDeployments(deployments.filter((_, i) => i !== idx))}
+                      className="text-gray-500 hover:text-red-400 text-xs"
+                      title="Remove target"
+                    >✕</button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {([
+                      { key: 'startDev' as const, label: 'Start Dev', placeholder: 'npm run dev' },
+                      { key: 'stopDev' as const, label: 'Stop Dev', placeholder: 'docker-compose down' },
+                      { key: 'deployProd' as const, label: 'Deploy', placeholder: 'aws ecs update-service …' },
+                      { key: 'restartProd' as const, label: 'Restart', placeholder: 'aws ecs update-service --force-new-deployment …' },
+                      { key: 'startProd' as const, label: 'Start Prod', placeholder: 'fly apps start myapp' },
+                      { key: 'viewLogs' as const, label: 'View Logs', placeholder: 'aws logs tail …' },
+                    ]).map((cmd) => (
+                      <div key={cmd.key}>
+                        <label className="block text-[10px] text-gray-500 mb-0.5">{cmd.label}</label>
+                        <input
+                          type="text"
+                          value={target[cmd.key] || ''}
+                          onChange={(e) => {
+                            const next = [...deployments]; next[idx] = { ...target, [cmd.key]: e.target.value }; setDeployments(next);
+                          }}
+                          placeholder={cmd.placeholder}
+                          className="w-full bg-gray-800 border border-gray-600 text-gray-100 rounded px-2 py-1 text-[11px] font-mono focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  {target.provider === 'aws' && (
+                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-700">
+                      {([
+                        { key: 'awsAccount' as const, label: 'Account ID', placeholder: '802749365172' },
+                        { key: 'awsRegion' as const, label: 'Region', placeholder: 'us-east-1' },
+                        { key: 'awsCluster' as const, label: 'Cluster', placeholder: 'wingman-cluster' },
+                        { key: 'awsService' as const, label: 'Service', placeholder: 'wingman-prod' },
+                        { key: 'taskDef' as const, label: 'Task Def Path', placeholder: 'build/ecs/wingman.json.liquid' },
+                        { key: 'configFile' as const, label: 'Config File', placeholder: 'config/prod.yaml' },
+                      ]).map((cmd) => (
+                        <div key={cmd.key}>
+                          <label className="block text-[10px] text-gray-500 mb-0.5">{cmd.label}</label>
+                          <input
+                            type="text"
+                            value={target[cmd.key] || ''}
+                            onChange={(e) => {
+                              const next = [...deployments]; next[idx] = { ...target, [cmd.key]: e.target.value }; setDeployments(next);
+                            }}
+                            placeholder={cmd.placeholder}
+                            className="w-full bg-gray-800 border border-gray-600 text-gray-100 rounded px-2 py-1 text-[11px] font-mono focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {target.provider === 'flyio' && (
+                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-700">
+                      <div>
+                        <label className="block text-[10px] text-gray-500 mb-0.5">Fly App</label>
+                        <input
+                          type="text"
+                          value={target.flyApp || ''}
+                          onChange={(e) => {
+                            const next = [...deployments]; next[idx] = { ...target, flyApp: e.target.value }; setDeployments(next);
+                          }}
+                          placeholder="my-app"
+                          className="w-full bg-gray-800 border border-gray-600 text-gray-100 rounded px-2 py-1 text-[11px] font-mono focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-gray-500 mb-0.5">Region</label>
+                        <input
+                          type="text"
+                          value={target.flyRegion || ''}
+                          onChange={(e) => {
+                            const next = [...deployments]; next[idx] = { ...target, flyRegion: e.target.value }; setDeployments(next);
+                          }}
+                          placeholder="auto"
+                          className="w-full bg-gray-800 border border-gray-600 text-gray-100 rounded px-2 py-1 text-[11px] font-mono focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-[10px] text-gray-500 mb-0.5">Notes</label>
+                    <textarea
+                      value={target.notes || ''}
+                      onChange={(e) => {
+                        const next = [...deployments]; next[idx] = { ...target, notes: e.target.value }; setDeployments(next);
+                      }}
+                      rows={2}
+                      placeholder="Any target-specific notes…"
+                      className="w-full bg-gray-800 border border-gray-600 text-gray-100 rounded px-2 py-1 text-[11px] focus:outline-none focus:border-indigo-500 resize-y"
+                    />
+                  </div>
                 </div>
               ))}
             </div>
 
-            {deployment.provider === 'flyio' && (
-              <div className="rounded bg-gray-700/50 p-3 mb-3">
-                <p className="text-xs font-medium text-gray-400 mb-2">Fly.io</p>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">App Name</label>
-                    <input
-                      type="text"
-                      value={deployment.flyApp || ''}
-                      onChange={(e) => setDeployment({ ...deployment, flyApp: e.target.value })}
-                      placeholder="my-app"
-                      className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">Region</label>
-                    <input
-                      type="text"
-                      value={deployment.flyRegion || ''}
-                      onChange={(e) => setDeployment({ ...deployment, flyRegion: e.target.value })}
-                      placeholder="auto"
-                      className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Deployment Notes</label>
-              <textarea
-                value={deployment.notes || ''}
-                onChange={(e) => setDeployment({ ...deployment, notes: e.target.value })}
-                rows={3}
-                placeholder="Any additional deployment notes (markdown supported)..."
-                className="w-full bg-gray-700 border border-gray-600 text-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 resize-y"
-              />
-            </div>
+            <button
+              type="button"
+              onClick={() => setDeployments([...deployments, { name: 'target-' + (deployments.length + 1) }])}
+              className="mt-3 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              + Add target
+            </button>
           </div>
 
           {/* Error message */}

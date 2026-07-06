@@ -402,9 +402,15 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 		// but blocks dangerous operations (rm, etc). The default mode silently
 		// denies everything in non-interactive (-p) mode.
 		// Also allow plan mode tools — they're safe (just change Claude's output mode).
-		// Without this, acceptEdits silently denies them and plan mode gets stuck.
+		// Also allow AskUserQuestion — it's a UI-surface tool the assistant uses
+		// to gather clarification from the user. Without allowlisting it,
+		// acceptEdits silently denies the tool call and the user never sees
+		// the question, giving the appearance that the assistant just skipped
+		// past it. The frontend renders the question inline in the chat.
+		// Without this, acceptEdits silently denies them and plan mode / question
+		// prompts get stuck.
 		args = append(args, "--permission-mode", "acceptEdits",
-			"--allowedTools", "EnterPlanMode ExitPlanMode")
+			"--allowedTools", "EnterPlanMode ExitPlanMode AskUserQuestion")
 	}
 	args = append(args, extraArgs...)
 

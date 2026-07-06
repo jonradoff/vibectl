@@ -606,6 +606,11 @@ export interface DetectedScripts {
 export const detectProjectScripts = (path: string) =>
   request<DetectedScripts>(`/detect-project-scripts?path=${encodeURIComponent(path)}`);
 
+// Multi-target detection — returns candidate deployment targets suitable for
+// projects with more than one env (AWS dev/staging/prod + legacy Fly, etc).
+export const detectDeploymentTargets = (path: string) =>
+  request<import('../types').DetectDeploymentResponse>(`/detect-deployment-targets?path=${encodeURIComponent(path)}`);
+
 export const suggestClonePath = (githubUrl: string) =>
   request<{ path: string }>(`/clone/suggest-path?url=${encodeURIComponent(githubUrl)}`);
 export const suggestNewPath = (code: string) =>

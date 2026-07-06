@@ -277,6 +277,12 @@ func (s *ProjectService) Update(ctx context.Context, id string, req *models.Upda
 	if req.Deployment != nil {
 		setFields = append(setFields, bson.E{Key: "deployment", Value: *req.Deployment})
 	}
+	if req.Deployments != nil {
+		setFields = append(setFields, bson.E{Key: "deployments", Value: *req.Deployments})
+	}
+	if req.PreferredProvider != nil {
+		setFields = append(setFields, bson.E{Key: "preferredProvider", Value: *req.PreferredProvider})
+	}
 	if req.Webhooks != nil {
 		setFields = append(setFields, bson.E{Key: "webhooks", Value: *req.Webhooks})
 	}

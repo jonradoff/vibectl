@@ -3,6 +3,20 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.14.7 (2026-07-06) — Multi-target Deployments, Workspace Scoping, Subagent Model Filter
+
+### Multi-target deployments (foundation for AWS + legacy Fly, multi-env)
+- **New `Deployments []DeploymentConfig` array on Project** with per-target `name`, `isDefault`, `isLegacy`, plus provider-specific fields for AWS (`awsAccount`, `awsRegion`, `awsCluster`, `awsService`, `taskDef`, `configFile`) and Fly (existing). Legacy `project.deployment` is still read and folded in via `EffectiveDeployments()` — no migration required for existing single-target projects.
+- **New `preferredProvider` on Project** — when multiple targets coexist, this picks which one the project card's header actions target. `DefaultDeployment()` honors `IsDefault` first, then `PreferredProvider`, then first-non-legacy.
+- **New `GET /api/v1/detect-deployment-targets`** — scans a project dir for fly.toml, ECS task-def JSONs (`build/ecs/*.json*`, `deploy/ecs/*.json*`, `.aws/ecs/*.json*`, or root-level `task-definition*.json`), `config/*.yaml` env files, and `.github/workflows/*.yml` deploy commands. Returns a list of candidate targets — one per env — with the `.github` workflow's `aws ecs update-service` line lifted as `deployProd` when found. Fly is auto-marked `isLegacy` when AWS candidates exist alongside. Local route under delegation.
+- **ProjectSettings redesigned** as a list of deployment targets with per-target commands, provider-specific fields, `default`/`legacy` toggles, and a "🔄 Re-detect targets" button that surfaces detected candidates with per-target Add.
+- **Preferred Provider dropdown** in the settings panel.
+
+### Fixes
+- **Model chip no longer flips to Haiku from subagent runs.** Assistant events with `isSidechain: true` (Task-tool subagent conversations, which run Haiku by default) are now filtered out of the model tracker — the chip stays on the primary agent's model (Opus/Sonnet/Fable).
+- **Workspace card no longer pulls unrelated on-disk sessions.** The v0.14.6 disk-recovery path scanned the newest `~/.claude/projects/-Users-<name>/*.jsonl` when a project's DB record was empty — for the Workspace card, whose `localPath` is $HOME, this incorrectly surfaced sessions from ad-hoc `claude` runs across every other project. Recovery is now skipped for `projectCode === "__workspace__"`.
+- **`AskUserQuestion` allowlisted** on Claude Code spawn (`--allowedTools AskUserQuestion`). Previously the `acceptEdits` permission mode silently denied it, so the assistant appeared to skip past questions instead of asking them. Inline UI to render/answer is a follow-up.
+
 ## v0.14.6 (2026-07-05) — On-Disk Session History, Instant Model Chip Update
 
 ### Session history now reads from disk (matches VS Code behavior)

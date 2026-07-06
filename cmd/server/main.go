@@ -710,6 +710,7 @@ func main() {
 			r.Get("/detect-start-sh", filesystemHandler.DetectStartSh)
 			r.Get("/detect-deploy-sh", filesystemHandler.DetectDeploySh)
 			r.Get("/detect-project-scripts", filesystemHandler.DetectProjectScripts)
+			r.Get("/detect-deployment-targets", filesystemHandler.DetectDeploymentTargets)
 			r.Mount("/clone", cloneHandler.GlobalRoutes())
 			r.Mount("/ci", ciHandler.BulkRoutes())
 

@@ -21,6 +21,7 @@ var localPrefixes = []string{
 	"/api/v1/detect-start-sh",
 	"/api/v1/detect-deploy-sh",
 	"/api/v1/detect-project-scripts",
+	"/api/v1/detect-deployment-targets",
 	// Clone path suggestions ("/clone/new-path", "/clone/suggest-path") depend
 	// on the local user's workspaceDir and target the local filesystem — they
 	// must not be delegated to a remote that has no visibility into either.

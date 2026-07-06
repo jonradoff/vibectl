@@ -451,7 +451,13 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			// after a marked-dead unblock, a fresh install, or a DB reset).
 			// Resume from the newest *.jsonl in the project dir so the user
 			// gets their transcript back and continues in the same thread.
-			if launch.LocalPath != "" {
+			//
+			// Skip for the Workspace card: it targets $HOME, whose Claude Code
+			// project directory (~/.claude/projects/-Users-<name>/) collects
+			// sessions from every ad-hoc `claude` run in that dir, so the
+			// "newest .jsonl" would randomly pull in unrelated work from any
+			// other project the user happened to work on from their home dir.
+			if launch.LocalPath != "" && launch.ProjectCode != "__workspace__" {
 				if diskSessionID, diskMTime := latestOnDiskSession(launch.LocalPath); diskSessionID != "" {
 					diskMsgs, diskPath, diskErr := loadOnDiskHistory(launch.LocalPath, diskSessionID)
 					if diskErr != nil {

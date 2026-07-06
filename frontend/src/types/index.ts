@@ -77,6 +77,8 @@ export interface Project {
   goals: string[];
   healthCheck?: HealthCheckConfig;
   deployment?: DeploymentConfig;
+  deployments?: DeploymentConfig[];
+  preferredProvider?: string;
   webhooks?: WebhookConfig[];
   issueCounter: number;
   archived: boolean;
@@ -293,7 +295,10 @@ export interface PMReviewResult {
 }
 
 export interface DeploymentConfig {
+  name?: string;
   provider?: string;
+  isDefault?: boolean;
+  isLegacy?: boolean;
   startDev?: string;
   stopDev?: string;
   deployProd?: string;
@@ -302,7 +307,23 @@ export interface DeploymentConfig {
   viewLogs?: string;
   flyApp?: string;
   flyRegion?: string;
+  awsAccount?: string;
+  awsRegion?: string;
+  awsCluster?: string;
+  awsService?: string;
+  taskDef?: string;
+  configFile?: string;
   notes?: string;
+}
+
+export interface DetectedTarget extends DeploymentConfig {
+  signals?: string[];
+}
+
+export interface DetectDeploymentResponse {
+  targets: DetectedTarget[];
+  signals: Record<string, boolean>;
+  awsDocPath?: string;
 }
 
 export interface Decision {
