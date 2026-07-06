@@ -96,10 +96,49 @@ func (h *FilesystemHandler) DetectDeploymentTargets(w http.ResponseWriter, r *ht
 		resp.Signals["config-envs"] = true
 	}
 
+	// --- 3b) per-provider deploy scripts -------------------------------------
+	// If the repo ships convenience wrappers like scripts/deploy-aws.sh,
+	// scripts/restart-aws.sh, scripts/logs-aws.sh, we pre-populate the
+	// corresponding commands on each detected AWS target — passing the env
+	// name as the first arg. Same idea for Fly (deploy-fly.sh etc).
+	awsDeployScript := firstExisting(absPath,
+		filepath.Join("scripts", "deploy-aws.sh"),
+		filepath.Join("scripts", "aws-deploy.sh"),
+	)
+	awsRestartScript := firstExisting(absPath,
+		filepath.Join("scripts", "restart-aws.sh"),
+		filepath.Join("scripts", "aws-restart.sh"),
+	)
+	awsLogsScript := firstExisting(absPath,
+		filepath.Join("scripts", "logs-aws.sh"),
+		filepath.Join("scripts", "aws-logs.sh"),
+		filepath.Join("scripts", "tail-aws.sh"),
+	)
+	if awsDeployScript != "" || awsRestartScript != "" || awsLogsScript != "" {
+		resp.Signals["aws-scripts"] = true
+	}
+
 	// --- Build AWS targets — one per config env, paired with a task-def
 	// when we can find a filename match; otherwise use the first task-def
 	// as the shared template. ------------------------------------------------
 	awsTargets := buildAWSTargets(configEnvs, taskDefPaths)
+
+	// Populate script-based commands on the AWS targets.
+	for i := range awsTargets {
+		envArg := strings.TrimPrefix(awsTargets[i].Name, "aws-")
+		if awsDeployScript != "" && awsTargets[i].DeployProd == "" {
+			awsTargets[i].DeployProd = "./" + awsDeployScript + " " + envArg
+			awsTargets[i].Signals = append(awsTargets[i].Signals, awsDeployScript)
+		}
+		if awsRestartScript != "" && awsTargets[i].RestartProd == "" {
+			awsTargets[i].RestartProd = "./" + awsRestartScript + " " + envArg
+			awsTargets[i].Signals = append(awsTargets[i].Signals, awsRestartScript)
+		}
+		if awsLogsScript != "" && awsTargets[i].ViewLogs == "" {
+			awsTargets[i].ViewLogs = "./" + awsLogsScript + " " + envArg
+			awsTargets[i].Signals = append(awsTargets[i].Signals, awsLogsScript)
+		}
+	}
 
 	// --- 4) deploy.sh / start.sh / stop.sh -----------------------------------
 	deployShFound := fileExists(filepath.Join(absPath, "deploy.sh"))
@@ -430,6 +469,18 @@ func findWorkflowECSDeployCommand(root string) string {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+// firstExisting checks each candidate path (repo-relative) against the given
+// root and returns the first one that exists, or "" if none do. Used to pick
+// among convention names (e.g. deploy-aws.sh vs aws-deploy.sh).
+func firstExisting(root string, candidates ...string) string {
+	for _, rel := range candidates {
+		if fileExists(filepath.Join(root, rel)) {
+			return rel
+		}
+	}
+	return ""
 }
 
 // Compile-time assertion — avoids drift if the shared JSON encoder changes.

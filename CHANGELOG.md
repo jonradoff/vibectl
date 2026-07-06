@@ -3,6 +3,12 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.14.9 (2026-07-06) — Script-based AWS Command Auto-Population
+
+### Added
+- **Deployment detection recognises AWS wrapper scripts.** If `scripts/deploy-aws.sh`, `scripts/restart-aws.sh`, or `scripts/logs-aws.sh` exist (also accepts `aws-deploy.sh` / `aws-restart.sh` / `aws-logs.sh` / `tail-aws.sh` variants), the corresponding `deployProd`, `restartProd`, and `viewLogs` fields on every detected AWS target are pre-populated as `./scripts/<name> <env>` — where `<env>` is stripped from the target name (`aws-prod` → `prod`). Lets repos ship thin CLI wrappers over their real CI/CD without hand-typing commands into vibectl for each env.
+- Docs: added the script convention row to the multi-target detection signals table in CLAUDE.md.
+
 ## v0.14.8 (2026-07-06) — AskUserQuestion UI, Create-time Detection Chooser, Sandbox-aware ECS Pairing
 
 ### Added

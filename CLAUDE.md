@@ -79,6 +79,7 @@ Since v0.14.7, projects support **multiple deployment targets** — AWS envs, le
 | `.github/workflows/*.yml` containing `aws ecs update-service` or `aws deploy create-deployment` | The command line is lifted into `deployProd` for AWS targets that don't already have one. |
 | `aws.md` / `AWS.md` / `docs/aws.md` | Surfaced as a docs pointer (`awsDocPath`) — **not** treated as config. |
 | `deploy.sh`, `start.sh`, `stop.sh` | Populated on the default target. |
+| `scripts/deploy-aws.sh`, `scripts/restart-aws.sh`, `scripts/logs-aws.sh` (or `aws-deploy.sh` etc.) | If any AWS convenience wrapper scripts exist, they auto-populate `deployProd` / `restartProd` / `viewLogs` on every detected AWS target with the env name as the first argument, e.g. `./scripts/deploy-aws.sh prod`. |
 
 **Resolution order for header actions**: `IsDefault` flag → `PreferredProvider` on the project → first non-legacy target → first target. Set via the Preferred Provider dropdown in project Settings and the create-time chooser when multiple providers are detected.
 
