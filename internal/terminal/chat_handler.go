@@ -458,6 +458,76 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			// "newest .jsonl" would randomly pull in unrelated work from any
 			// other project the user happened to work on from their home dir.
 			if launch.LocalPath != "" && launch.ProjectCode != "__workspace__" {
+				// ----- Fallback A: chat_sessions has a dead sessionId -----
+				// If our chat_sessions doc still records a claudeSessionId even
+				// though it's marked dead, try to find that file anywhere under
+				// ~/.claude/projects/*/ — the JSONL may exist under an old
+				// encoded-dir name (project directory was renamed/moved).
+				if h.manager.ChatSessionService != nil {
+					if lastID, err := h.manager.ChatSessionService.GetLastSessionID(r.Context(), launch.ProjectCode); err == nil && lastID != "" {
+						if msgs, path, err := loadOnDiskHistory(launch.LocalPath, lastID); err == nil && len(msgs) > 0 {
+							sess, resumeErr := h.manager.ResumeSession(launch.ProjectCode, launch.LocalPath, lastID, nil)
+							if resumeErr == nil {
+								tagSession(sess)
+								activeProjectID = launch.ProjectCode
+								slog.Info("resumed via chat_sessions.claudeSessionId cross-dir fallback",
+									"projectID", launch.ProjectCode, "sessionID", lastID, "path", path, "messageCount", len(msgs))
+								for _, m := range msgs {
+									if err := sendRaw(m); err != nil {
+										slog.Error("failed to replay on-disk message", "error", err)
+										return
+									}
+								}
+								sendStatus("resumed")
+								readerDone = startReader(sess)
+								continue
+							}
+							slog.Warn("could not resume via chat_sessions fallback, trying more",
+								"projectID", launch.ProjectCode, "sessionID", lastID, "error", resumeErr)
+						}
+					}
+				}
+
+				// ----- Fallback B: session IDs from history archive -----
+				// The chat_history archive keeps a record of every session we
+				// ever committed. Try the most recent N — cross-dir searched —
+				// so a project that's been marked dead AND had its localPath
+				// moved AND has no chat_sessions record still restores.
+				archiveFallbackDone := false
+				if h.manager.ChatHistoryService != nil {
+					if ids, err := h.manager.ChatHistoryService.RecentSessionIDs(r.Context(), launch.ProjectCode, 5); err == nil {
+						for _, id := range ids {
+							msgs, path, err := loadOnDiskHistory(launch.LocalPath, id)
+							if err != nil || len(msgs) == 0 {
+								continue
+							}
+							sess, resumeErr := h.manager.ResumeSession(launch.ProjectCode, launch.LocalPath, id, nil)
+							if resumeErr != nil {
+								slog.Warn("history archive fallback: could not resume",
+									"projectID", launch.ProjectCode, "sessionID", id, "error", resumeErr)
+								continue
+							}
+							tagSession(sess)
+							activeProjectID = launch.ProjectCode
+							slog.Info("resumed via chat_history archive cross-dir fallback",
+								"projectID", launch.ProjectCode, "sessionID", id, "path", path, "messageCount", len(msgs))
+							for _, m := range msgs {
+								if err := sendRaw(m); err != nil {
+									slog.Error("failed to replay on-disk message", "error", err)
+									return
+								}
+							}
+							sendStatus("resumed")
+							readerDone = startReader(sess)
+							archiveFallbackDone = true
+							break
+						}
+					}
+				}
+				if archiveFallbackDone {
+					continue // outer message-loop, don't run the direct-path lookup below
+				}
+
 				if diskSessionID, diskMTime := latestOnDiskSession(launch.LocalPath); diskSessionID != "" {
 					diskMsgs, diskPath, diskErr := loadOnDiskHistory(launch.LocalPath, diskSessionID)
 					if diskErr != nil {

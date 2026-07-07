@@ -31,11 +31,21 @@ type ChatSessionPersister interface {
 	MarkDead(ctx context.Context, projectID string) error
 	ClearSession(ctx context.Context, projectID string) error
 	GetResumable(ctx context.Context, projectID string) (*models.ChatSessionState, error)
+	// GetLastSessionID returns the claudeSessionId on the chat_sessions doc
+	// regardless of status. Used to attempt on-disk fallback recovery for
+	// sessions that have been marked dead (the JSONL may still exist under
+	// an old/moved directory encoding).
+	GetLastSessionID(ctx context.Context, projectID string) (string, error)
 }
 
 // ChatHistoryArchiver is the persistence interface for completed chat session history.
 type ChatHistoryArchiver interface {
 	Archive(ctx context.Context, projectID, claudeSessionID string, messages []json.RawMessage, startedAt time.Time, userID *bson.ObjectID, userName string) error
+	// RecentSessionIDs returns the last `limit` claudeSessionIds this project
+	// ever had, newest first. Used to recover an on-disk transcript when the
+	// active chat_sessions record is dead/missing but Claude Code's on-disk
+	// history still exists (possibly under a moved/renamed encoded dir).
+	RecentSessionIDs(ctx context.Context, projectID string, limit int) ([]string, error)
 }
 
 // ChatSession represents a claude code process running in stream-json mode.

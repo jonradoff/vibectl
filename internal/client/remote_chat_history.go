@@ -59,3 +59,12 @@ func (s *RemoteChatHistoryService) Archive(ctx context.Context, projectID, claud
 	}
 	return nil
 }
+
+// RecentSessionIDs is a best-effort remote lookup. Client mode's remote
+// server doesn't currently expose a dedicated endpoint for this. Return
+// an empty slice — the on-disk fallback path falls through to the
+// direct-encoded latestOnDiskSession lookup, which is the pre-fallback
+// behaviour and safe.
+func (s *RemoteChatHistoryService) RecentSessionIDs(ctx context.Context, projectID string, limit int) ([]string, error) {
+	return nil, nil
+}

@@ -283,6 +283,26 @@ func main() {
 	chatManager.MaxActiveClaude = cfg.MaxActiveClaude
 	reaperStop := make(chan struct{})
 	chatManager.StartIdleReaper(reaperStop)
+
+	// Startup on-disk consistency check — logs (but does not repair) any
+	// chat_sessions records whose claudeSessionId doesn't match the expected
+	// on-disk JSONL location. Cross-dir fallback helps spot moved projects.
+	terminal.RunOnDiskConsistencyCheck(func(ctx context.Context) []terminal.SessionSummary {
+		rows, err := chatSessionService.ListAllSessionRows(ctx)
+		if err != nil {
+			slog.Warn("consistency check: list rows failed", "error", err)
+			return nil
+		}
+		out := make([]terminal.SessionSummary, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, terminal.SessionSummary{
+				ProjectCode:     r.ProjectCode,
+				ClaudeSessionID: r.ClaudeSessionID,
+				LocalPath:       r.LocalPath,
+			})
+		}
+		return out
+	})
 	if cfg.RecordTraces {
 		if cfg.RecordingProxyCmd == "" {
 			slog.Warn("VIBECTL_RECORD_TRACES=1 but VIBECTL_RECORDING_PROXY_CMD is unset — recording disabled")

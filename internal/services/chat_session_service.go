@@ -78,6 +78,53 @@ func (s *ChatSessionService) MarkDead(ctx context.Context, projectCode string) e
 	return err
 }
 
+// SessionRow is a tiny projection used by the on-disk consistency check.
+type SessionRow struct {
+	ProjectCode     string `bson:"projectCode"`
+	ClaudeSessionID string `bson:"claudeSessionId"`
+	LocalPath       string `bson:"localPath"`
+}
+
+// ListAllSessionRows returns every chat_sessions doc's (projectCode,
+// claudeSessionId, localPath) tuple regardless of status. Used at startup
+// to verify each session's on-disk log is where we expect it.
+func (s *ChatSessionService) ListAllSessionRows(ctx context.Context) ([]SessionRow, error) {
+	opts := options.Find().SetProjection(bson.D{
+		{Key: "projectCode", Value: 1},
+		{Key: "claudeSessionId", Value: 1},
+		{Key: "localPath", Value: 1},
+	})
+	cursor, err := s.collection.Find(ctx, bson.D{}, opts)
+	if err != nil {
+		return nil, fmt.Errorf("list all session rows: %w", err)
+	}
+	defer cursor.Close(ctx)
+	var out []SessionRow
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, fmt.Errorf("decode session rows: %w", err)
+	}
+	return out, nil
+}
+
+// GetLastSessionID returns whatever claudeSessionId is on the chat_sessions
+// doc for this project regardless of status. Callers use this to attempt an
+// on-disk fallback recovery even from a session that's been marked dead —
+// the JSONL may still exist under an old/moved directory encoding.
+func (s *ChatSessionService) GetLastSessionID(ctx context.Context, projectCode string) (string, error) {
+	filter := bson.D{{Key: "projectCode", Value: projectCode}}
+	opts := options.FindOne().SetProjection(bson.D{{Key: "claudeSessionId", Value: 1}})
+	var row struct {
+		ClaudeSessionID string `bson:"claudeSessionId"`
+	}
+	if err := s.collection.FindOne(ctx, filter, opts).Decode(&row); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return "", nil
+		}
+		return "", err
+	}
+	return row.ClaudeSessionID, nil
+}
+
 // ClearSession marks dead AND removes claudeSessionId. Use when the persisted
 // session ID is known to be orphaned (e.g. Claude Code reports "no conversation
 // found with session ID"), so the next launch starts fresh instead of trying

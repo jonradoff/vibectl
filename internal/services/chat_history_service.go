@@ -82,6 +82,46 @@ func (s *ChatHistoryService) ListByProject(ctx context.Context, projectCode stri
 	return results, nil
 }
 
+// RecentSessionIDs returns the last `limit` archived Claude session IDs for
+// this project (newest first). Used as a fallback path when the DB has no
+// active/resumable record but the user *has* worked on this project before —
+// the caller can try each ID against the on-disk JSONLs and resume the
+// newest one that still exists on disk.
+func (s *ChatHistoryService) RecentSessionIDs(ctx context.Context, projectCode string, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	filter := bson.D{
+		{Key: "projectCode", Value: projectCode},
+		{Key: "claudeSessionId", Value: bson.D{{Key: "$ne", Value: ""}}},
+	}
+	opts := options.Find().
+		SetSort(bson.D{{Key: "endedAt", Value: -1}}).
+		SetLimit(int64(limit)).
+		SetProjection(bson.D{{Key: "claudeSessionId", Value: 1}})
+	cursor, err := s.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("find recent session ids: %w", err)
+	}
+	defer cursor.Close(ctx)
+	var rows []struct {
+		ClaudeSessionID string `bson:"claudeSessionId"`
+	}
+	if err := cursor.All(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("decode recent session ids: %w", err)
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.ClaudeSessionID == "" || seen[r.ClaudeSessionID] {
+			continue
+		}
+		seen[r.ClaudeSessionID] = true
+		out = append(out, r.ClaudeSessionID)
+	}
+	return out, nil
+}
+
 // GetByID returns a full history entry with messages.
 func (s *ChatHistoryService) GetByID(ctx context.Context, id string) (*models.ChatHistoryEntry, error) {
 	objID, err := bson.ObjectIDFromHex(id)

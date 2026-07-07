@@ -86,6 +86,16 @@ func (s *RemoteChatSessionService) MarkDead(ctx context.Context, projectID strin
 	return nil
 }
 
+// GetLastSessionID is a best-effort remote lookup. Client mode's remote
+// server doesn't currently expose a dedicated endpoint for the "return the
+// last known claudeSessionId regardless of status" query — the existing
+// GetResumable already returns the ID when status is resumable or active.
+// Return "" here; the caller's fallback logic will then rely on the
+// history-archive session-id search, which is provider-agnostic.
+func (s *RemoteChatSessionService) GetLastSessionID(ctx context.Context, projectID string) (string, error) {
+	return "", nil
+}
+
 // ClearSession marks dead AND removes the persisted Claude session ID, so the
 // next launch starts fresh instead of trying to resume an orphaned ID. Falls
 // back to MarkDead if the remote doesn't have the dedicated endpoint — the
