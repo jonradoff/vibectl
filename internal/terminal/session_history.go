@@ -9,6 +9,30 @@ import (
 	"time"
 )
 
+// findSessionAnywhere searches every ~/.claude/projects/*/<sessionID>.jsonl
+// for a match and returns the first hit. Used as a fallback when the direct
+// encoded-path lookup misses — typically because the vibectl project's
+// localPath was renamed/moved after the conversation was already recorded
+// under the old encoding. Returns "" if no match exists.
+func findSessionAnywhere(home, sessionID string) string {
+	root := filepath.Join(home, ".claude", "projects")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+	fname := sessionID + ".jsonl"
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(root, e.Name(), fname)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
 // encodedProjectDir returns the ~/.claude/projects/<encoded>/ directory for
 // a given local path. Returns "" if the home dir isn't resolvable.
 func encodedProjectDir(localPath string) string {
@@ -70,9 +94,14 @@ func latestOnDiskSession(localPath string) (sessionID string, mtime time.Time) {
 // The file contains one JSON object per line; we keep only "user" and
 // "assistant" entries (skipping housekeeping like queue-operation).
 //
-// Returns (messages, path, error). If the file doesn't exist, returns an
-// empty slice with err == nil — callers should fall back to the in-memory
-// buffer in that case.
+// Fallback: if the file isn't found at the expected encoded-path dir (e.g.
+// the project's localPath was moved/renamed after the conversation was
+// recorded), scan all ~/.claude/projects/*/<sessionID>.jsonl for a match.
+// This lets a moved project keep its history without any manual surgery.
+//
+// Returns (messages, path, error). If the file doesn't exist anywhere,
+// returns an empty slice with err == nil — callers should fall back to the
+// in-memory buffer in that case.
 func loadOnDiskHistory(localPath, sessionID string) ([]json.RawMessage, string, error) {
 	if localPath == "" || sessionID == "" {
 		return nil, "", nil
@@ -91,9 +120,19 @@ func loadOnDiskHistory(localPath, sessionID string) ([]json.RawMessage, string, 
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, path, nil
+			// Cross-dir fallback for moved/renamed projects.
+			if alt := findSessionAnywhere(home, sessionID); alt != "" {
+				path = alt
+				f, err = os.Open(alt)
+				if err != nil {
+					return nil, path, err
+				}
+			} else {
+				return nil, path, nil
+			}
+		} else {
+			return nil, path, err
 		}
-		return nil, path, err
 	}
 	defer f.Close()
 
