@@ -509,9 +509,11 @@ func (m *ChatManager) PreserveCurrentTokenForAllSessions(token string) {
 // startProcess is the shared logic for spawning a claude process.
 // extraArgs are appended after the standard flags (e.g. --resume <id>).
 func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...string) (*ChatSession, error) {
-	// Enforce the concurrency cap before spawning. Reaps the longest-idle
-	// unsubscribed session(s) to make room; no-op if MaxActiveClaude <= 0.
-	m.EnforceMaxActiveClaude()
+	// NOTE: MaxActiveClaude cap is enforced by the public entrypoints
+	// (StartSession / ResumeSession) BEFORE they acquire m.mu.Lock —
+	// gatherReapCandidates and reapSession both need m.mu themselves and
+	// Go's RWMutex is not reentrant. Do NOT call m.EnforceMaxActiveClaude()
+	// from inside startProcess.
 
 	args := []string{
 		"-p",
@@ -982,6 +984,12 @@ func (m *ChatManager) archiveSession(sess *ChatSession) {
 
 // StartSession spawns a claude process in stream-json mode.
 func (m *ChatManager) StartSession(projectID, localPath string) (*ChatSession, error) {
+	// Enforce the concurrency cap BEFORE we hold m.mu — the cap enforcement
+	// may need to reap other sessions and reapSession → KillSession takes
+	// m.mu.Lock itself. Go's RWMutex is not reentrant, so acquiring it here
+	// first would deadlock.
+	m.EnforceMaxActiveClaude()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1018,6 +1026,9 @@ func (s *ChatSession) SetUser(userID *bson.ObjectID, userName string) {
 
 // ResumeSession spawns a claude process that resumes a previous session by ID.
 func (m *ChatManager) ResumeSession(projectID, localPath, claudeSessionID string, savedMessages []json.RawMessage) (*ChatSession, error) {
+	// Enforce cap before taking m.mu — same reason as StartSession.
+	m.EnforceMaxActiveClaude()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
