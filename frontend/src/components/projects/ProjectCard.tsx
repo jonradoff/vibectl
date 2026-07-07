@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 // react-router-dom not needed — issue detail shown inline
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listIssues, updateProject, createIssue, transitionIssueStatus, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode, checkDir, getGitStatus, gitCommit } from '../../api/client'
+import { listIssues, updateProject, createIssue, transitionIssueStatus, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, resetChatSession, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode, checkDir, getGitStatus, gitCommit } from '../../api/client'
 import type { Intent } from '../../types'
 import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, DeploymentConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ActivityLogEntry } from '../../types'
 import { statusTransitions, typeColors, priorityColors } from '../../types'
@@ -596,7 +596,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
           </div>
         )}
         {activeTab === 'history' && (
-          <ChatHistoryTab projectCode={project.code} currentSession={currentSession} />
+          <ChatHistoryTab projectCode={project.code} projectId={project.id} currentSession={currentSession} />
         )}
         {activeTab === 'health' && (
           <CompactHealthChecks project={project} results={healthResults} />
@@ -1960,9 +1960,30 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
   )
 }
 
-function ChatHistoryTab({ projectCode, currentSession }: { projectCode: string; currentSession: ChatSessionSnapshot | null }) {
+function ChatHistoryTab({ projectCode, projectId, currentSession }: { projectCode: string; projectId: string; currentSession: ChatSessionSnapshot | null }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [viewingCurrent, setViewingCurrent] = useState(false)
+  const [showResetModal, setShowResetModal] = useState(false)
+  const [resetting, setResetting] = useState(false)
+  const [resetError, setResetError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+
+  const doReset = async () => {
+    setResetting(true)
+    setResetError(null)
+    try {
+      await resetChatSession(projectId)
+      // The next chat WS launch will spawn fresh (no --resume). Force React
+      // Query to refetch history so a newly-archived session appears once
+      // the ended one's archive job completes.
+      queryClient.invalidateQueries({ queryKey: ['chatHistory', projectCode] })
+      setShowResetModal(false)
+    } catch (e) {
+      setResetError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setResetting(false)
+    }
+  }
 
   const { data: history, isLoading } = useQuery({
     queryKey: ['chatHistory', projectCode],
@@ -2034,6 +2055,31 @@ function ChatHistoryTab({ projectCode, currentSession }: { projectCode: string; 
   // List view
   return (
     <div className="overflow-y-auto h-full">
+      {/* Restart Session — hard reset for stuck terminals */}
+      <div className="border-b border-gray-700/30 bg-gray-800/40 px-3 py-2 flex items-center justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] text-gray-300 font-medium">Restart terminal</div>
+          <div className="text-[10px] text-gray-500 leading-snug">
+            Kills the current Claude Code process and starts a fresh session. Use when the terminal is stuck (permissions, MCP glitch, etc.).
+          </div>
+        </div>
+        <button
+          onClick={() => setShowResetModal(true)}
+          className="shrink-0 rounded bg-red-900/40 hover:bg-red-900/60 border border-red-700/40 px-2.5 py-1 text-[11px] font-medium text-red-300 transition-colors"
+        >
+          Restart Session
+        </button>
+      </div>
+
+      {showResetModal && (
+        <RestartSessionModal
+          onCancel={() => { setShowResetModal(false); setResetError(null) }}
+          onConfirm={doReset}
+          submitting={resetting}
+          error={resetError}
+        />
+      )}
+
       {/* Current session at the top */}
       {hasCurrentMessages && (
         <button
@@ -3007,6 +3053,55 @@ function FlyTomlSuggestionsModal({ appName, suggestions, current, onApply, onClo
           <button onClick={handleApply} disabled={acceptedCount === 0}
             className="rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 px-4 py-2 text-xs font-medium text-white transition-colors">
             Apply {acceptedCount > 0 ? `(${acceptedCount})` : ''}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Confirmation modal for the Session History "Restart Session" button —
+// a hard reset that kills the running Claude Code subprocess and clears the
+// persisted claudeSessionId so the next launch spawns truly fresh (no --resume).
+function RestartSessionModal({ onCancel, onConfirm, submitting, error }: {
+  onCancel: () => void
+  onConfirm: () => void
+  submitting: boolean
+  error: string | null
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+      <div className="w-full max-w-sm rounded-xl bg-gray-800 shadow-2xl border border-gray-700">
+        <div className="px-6 py-5">
+          <h3 className="text-sm font-semibold text-white mb-2">Restart terminal session?</h3>
+          <p className="text-xs text-gray-400 leading-relaxed">
+            This will kill the running Claude Code subprocess and start a completely fresh session on your next message.
+          </p>
+          <ul className="mt-3 text-[11px] text-gray-400 list-disc pl-4 space-y-1">
+            <li>The conversation on disk is <span className="text-gray-200">preserved</span> — past sessions stay visible in this tab.</li>
+            <li>Your MCP servers, plugins, and permissions reload from scratch.</li>
+            <li>No <code className="font-mono text-gray-300">--resume</code>; the new session starts with a clean context.</li>
+          </ul>
+          {error && (
+            <div className="mt-3 rounded-lg border border-red-700/50 bg-red-900/10 px-3 py-2">
+              <p className="text-xs text-red-300">{error}</p>
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 px-6 pb-5">
+          <button
+            onClick={onCancel}
+            disabled={submitting}
+            className="rounded-lg px-4 py-2 text-xs text-gray-400 hover:text-gray-200 disabled:opacity-50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={submitting}
+            className="rounded-lg bg-red-700 hover:bg-red-600 disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2 text-xs font-medium text-white transition-colors"
+          >
+            {submitting ? 'Restarting…' : 'Restart Session'}
           </button>
         </div>
       </div>

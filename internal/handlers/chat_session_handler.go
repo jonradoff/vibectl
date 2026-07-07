@@ -16,6 +16,11 @@ import (
 type ChatSessionHandler struct {
 	svc *services.ChatSessionService
 	chs *services.ChatHistoryService
+	// ResetSession is an optional hook that performs a user-initiated hard
+	// reset: kill the Claude Code subprocess (as a reap so the frontend
+	// silently remounts), then clear the persisted claudeSessionId. Wired
+	// to chatManager.ResetSession in cmd/server/main.go.
+	ResetSession func(projectID string) error
 }
 
 func NewChatSessionHandler(svc *services.ChatSessionService, chs *services.ChatHistoryService) *ChatSessionHandler {
@@ -30,7 +35,33 @@ func (h *ChatSessionHandler) Routes() func(chi.Router) {
 		r.Post("/mark-dead", h.MarkDead)
 		r.Get("/resumable", h.GetResumable)
 		r.Post("/archive", h.Archive)
+		r.Post("/reset", h.Reset)
 	}
+}
+
+// Reset performs a hard reset: kills the running Claude Code subprocess (if
+// any) and clears the persisted claudeSessionId so the next launch spawns a
+// truly fresh session with no --resume. Used for cases where the terminal is
+// stuck (permissions issue, MCP glitch, etc.) and the user just wants to
+// start over. The on-disk conversation log survives, so history remains
+// browsable in the Session History tab.
+func (h *ChatSessionHandler) Reset(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "id")
+
+	// The manager's ResetSession does both parts (kill + clear) with the
+	// right suppress-system_error / broadcast-session_reaped semantics. If
+	// the hook isn't wired (should never happen in prod), fall back to
+	// clearing DB state so the next launch is at least free of stale IDs.
+	if h.ResetSession != nil {
+		if err := h.ResetSession(projectID); err != nil {
+			middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "RESET_ERROR")
+			return
+		}
+	} else if err := h.svc.ClearSession(r.Context(), projectID); err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "RESET_ERROR")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type upsertRequest struct {

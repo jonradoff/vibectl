@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"sort"
@@ -192,6 +193,28 @@ func (m *ChatManager) reapSession(s *ChatSession, reason string) {
 	if err := m.KillSession(s.ProjectCode); err != nil {
 		slog.Warn("reap: KillSession failed", "projectID", s.ProjectCode, "error", err)
 	}
+}
+
+// ResetSession is the user-initiated hard reset. It behaves like a reap
+// (broadcasts session_reaped for silent frontend remount, suppresses the
+// misleading system_error on exit) and additionally clears the persisted
+// claudeSessionId so the next launch spawns fresh WITHOUT --resume — the
+// point of a user-initiated reset is a genuinely clean slate.
+//
+// Idempotent: safe to call when no live session exists.
+func (m *ChatManager) ResetSession(projectID string) error {
+	m.mu.RLock()
+	sess, ok := m.sessions[projectID]
+	m.mu.RUnlock()
+	if ok && sess.IsAlive() {
+		m.reapSession(sess, "user-reset")
+	}
+	if m.ChatSessionService == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.ChatSessionService.ClearSession(ctx, projectID)
 }
 
 // EnforceMaxActiveClaude reaps the longest-idle unsubscribed session(s) until

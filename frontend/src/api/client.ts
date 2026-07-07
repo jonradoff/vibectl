@@ -488,6 +488,13 @@ export const listChatHistory = (projectId: string) =>
 export const getChatHistoryEntry = (historyId: string) =>
   request<ChatHistoryEntry>(`/chat-history/${historyId}`);
 
+// Hard reset — kills the running Claude Code subprocess (if any) and clears
+// the persisted claudeSessionId so the next launch spawns truly fresh with
+// no --resume. On-disk conversation log survives, so past history remains
+// browsable. Idempotent.
+export const resetChatSession = (projectId: string) =>
+  request<void>(`/projects/${projectId}/chat-session/reset`, { method: 'POST' });
+
 // ---- VIBECTL.md ----
 export const generateVibectlMd = (projectId: string) =>
   request<{ generated: boolean }>(`/projects/${projectId}/vibectl-md/generate`, { method: 'POST' });
