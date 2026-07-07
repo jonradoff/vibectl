@@ -279,6 +279,10 @@ func main() {
 	chatManager.RecordingProxyCmd = cfg.RecordingProxyCmd
 	chatManager.RecordingProxyDir = cfg.RecordingProxyDir
 	chatManager.RecordingProxyOutputDir = cfg.RecordingProxyOutputDir
+	chatManager.IdleReapAfter = cfg.IdleReapAfter
+	chatManager.MaxActiveClaude = cfg.MaxActiveClaude
+	reaperStop := make(chan struct{})
+	chatManager.StartIdleReaper(reaperStop)
 	if cfg.RecordTraces {
 		if cfg.RecordingProxyCmd == "" {
 			slog.Warn("VIBECTL_RECORD_TRACES=1 but VIBECTL_RECORDING_PROXY_CMD is unset — recording disabled")
@@ -716,6 +720,14 @@ func main() {
 
 			// Admin endpoints
 			r.Post("/admin/rebuild", adminHandler.Rebuild)
+			r.Get("/admin/session-stats", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"sessions":        chatManager.SnapshotSessions(),
+					"idleReapAfter":   cfg.IdleReapAfter.String(),
+					"maxActiveClaude": cfg.MaxActiveClaude,
+				})
+			})
 			r.Get("/admin/self-info", adminHandler.SelfInfo)
 			r.Get("/admin/claude-auth-status", adminHandler.ClaudeAuthStatus)
 			r.Get("/admin/claude-login", adminHandler.ClaudeLogin)

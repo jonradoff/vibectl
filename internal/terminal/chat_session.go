@@ -70,6 +70,63 @@ type ChatSession struct {
 	// sessionLost is true if the orphan-recovery path fired for this spawn.
 	// Suppresses the redundant system_error broadcast on process exit.
 	sessionLost bool
+
+	// lastActivity is the wall-clock time of the most recent stdin write OR
+	// stdout event. The idle reaper uses it to decide when a session's Claude
+	// Code subprocess is safe to SIGTERM to free memory (each subprocess is
+	// 300-500 MB of resident RAM). Guarded by mu.
+	lastActivity time.Time
+
+	// reapedForIdle is set to true by the reaper before it signals the
+	// process, so the exit goroutine can suppress the misleading
+	// "Claude exited with error" broadcast and instead emit a typed event
+	// telling the frontend a fresh spawn will occur on the next user message.
+	reapedForIdle bool
+}
+
+// TouchActivity marks the session as active NOW. Called whenever the user
+// sends stdin OR whenever claude emits stdout — either counts as "the user is
+// interacting with this project."
+func (s *ChatSession) TouchActivity() {
+	s.mu.Lock()
+	s.lastActivity = time.Now()
+	s.mu.Unlock()
+}
+
+// IdleFor returns how long the session has been quiet.
+func (s *ChatSession) IdleFor() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastActivity.IsZero() {
+		return 0
+	}
+	return time.Since(s.lastActivity)
+}
+
+// SubscriberCount returns how many WebSocket clients are currently attached.
+// Used by the reaper to skip sessions with an active viewer.
+func (s *ChatSession) SubscriberCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Prune closed subscribers on the way through so the count is accurate.
+	alive := s.subscribers[:0]
+	for _, sub := range s.subscribers {
+		select {
+		case <-sub.done:
+			// closed
+		default:
+			alive = append(alive, sub)
+		}
+	}
+	s.subscribers = alive
+	return len(alive)
+}
+
+// ReapedForIdle returns true if the reaper is / has terminated this session.
+func (s *ChatSession) ReapedForIdle() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reapedForIdle
 }
 
 // UsageRecorderFunc is a callback invoked when Claude Code reports token usage.
@@ -127,6 +184,7 @@ func (s *ChatSession) SendMessage(text string) error {
 	if _, err := s.stdin.Write(data); err != nil {
 		return fmt.Errorf("write to stdin: %w", err)
 	}
+	s.lastActivity = time.Now()
 
 	return nil
 }
@@ -176,6 +234,7 @@ func (s *ChatSession) SendToolResult(toolUseID, content string, isError bool) er
 	if _, err := s.stdin.Write(data); err != nil {
 		return fmt.Errorf("write to stdin: %w", err)
 	}
+	s.lastActivity = time.Now()
 	return nil
 }
 
@@ -355,6 +414,20 @@ type ChatManager struct {
 	// override first, then falls back to global settings.DefaultModel. Wired
 	// in cmd/server/main.go.
 	ModelResolver func(projectID string) string
+
+	// Idle reaper — SIGTERMs Claude Code subprocesses that have been quiet
+	// (no stdin write, no stdout event) for IdleReapAfter with no attached
+	// WebSocket subscribers. Each subprocess holds 300-500 MB of RAM, so an
+	// idle user with 20 open project cards otherwise burns 6-10 GB.
+	// Frontend gets a session_reaped event and silently unmounts; the next
+	// message spawns a fresh --resume session from the on-disk JSONL.
+	//
+	// IdleReapAfter <= 0 disables the reaper. Default 20 min.
+	IdleReapAfter time.Duration
+	// MaxActiveClaude, if > 0, caps the concurrent Claude Code subprocesses.
+	// When a new spawn would exceed this, the least-recently-active idle
+	// session is reaped first. 0 = unlimited.
+	MaxActiveClaude int
 }
 
 // NewChatManager creates a new chat session manager.
@@ -436,6 +509,10 @@ func (m *ChatManager) PreserveCurrentTokenForAllSessions(token string) {
 // startProcess is the shared logic for spawning a claude process.
 // extraArgs are appended after the standard flags (e.g. --resume <id>).
 func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...string) (*ChatSession, error) {
+	// Enforce the concurrency cap before spawning. Reaps the longest-idle
+	// unsubscribed session(s) to make room; no-op if MaxActiveClaude <= 0.
+	m.EnforceMaxActiveClaude()
+
 	args := []string{
 		"-p",
 		"--input-format", "stream-json",
@@ -554,15 +631,16 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 	}
 
 	sess := &ChatSession{
-		ID:          spawnID,
-		ProjectCode: projectID,
-		LocalPath:   localPath,
-		TokenHash:   tokenHash,
-		StartedAt:   time.Now().UTC(),
-		Cmd:         cmd,
-		stdin:       stdinPipe,
-		exited:      make(chan struct{}),
-		proxy:       proxy,
+		ID:           spawnID,
+		ProjectCode:  projectID,
+		LocalPath:    localPath,
+		TokenHash:    tokenHash,
+		StartedAt:    time.Now().UTC(),
+		lastActivity: time.Now(),
+		Cmd:          cmd,
+		stdin:        stdinPipe,
+		exited:       make(chan struct{}),
+		proxy:        proxy,
 	}
 
 	// stderrDone is closed when the stderr goroutine has fully drained.
@@ -659,6 +737,10 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 			if len(line) == 0 {
 				continue
 			}
+
+			// Any stdout activity means claude is working — reset the idle
+			// timer so the reaper doesn't kill an active session.
+			sess.TouchActivity()
 
 			// Buffer non-stream events for reconnection replay.
 			var parsed struct {
@@ -783,7 +865,7 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 		sess.stderrMu.Unlock()
 
 		sess.mu.Lock()
-		suppressSystemError := sess.sessionLost
+		suppressSystemError := sess.sessionLost || sess.reapedForIdle
 		committed := sess.committed
 		sess.mu.Unlock()
 

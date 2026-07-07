@@ -102,6 +102,18 @@ VibeCtl spawns Claude Code processes in stream-json mode (`-p --input-format str
 - `/fresh` starts a brand new session with no `--resume` — all prior context is lost. Use when the session is poisoned (e.g., oversized images in context).
 - During restart, the WebSocket stays open but there's no active Claude session. Messages sent during this window must be **queued** (via `pendingMessagesRef` / `compactingRef`) and flushed after `restarted` status arrives.
 
+## Concurrency resilience: idle-reaper + max-active cap
+
+Each Claude Code subprocess is a full Node.js runtime with the project's MCP servers loaded — typically **300–500 MB resident**. Twenty open project cards silently hold 6–10 GB of RAM even when no one's typing, which triggers macOS memory pressure and eventually gets Vite or vibectl-server OOM-killed. To keep vibectl healthy under real usage vibectl runs a background **idle reaper**:
+
+- **`ChatManager.StartIdleReaper`** launches a goroutine (interval: quarter of the reap window, min 10 s, max 30 s) that checks every live session. Any session whose `lastActivity` (touched on every stdin write AND every stdout event) is older than `IdleReapAfter` **and** has zero attached WebSocket subscribers gets `SIGTERM`ed. Default 20 min; set `VIBECTL_IDLE_REAP_MINUTES` to change, negative or `0` disables.
+- **`ChatManager.MaxActiveClaude`** (env: `VIBECTL_MAX_ACTIVE_CLAUDE`) optionally caps concurrent subprocesses. Enforced at every spawn via `EnforceMaxActiveClaude()` — the longest-idle unsubscribed session is reaped to make room. `0` = unlimited (default).
+- Reap sets `sess.reapedForIdle = true`, broadcasts a **`session_reaped`** typed WS event, and calls `KillSession`. The exit-goroutine's `suppressSystemError` check unions `sessionLost || reapedForIdle` so the frontend never sees the misleading "Claude exited with error" panel for a reap.
+- Frontend `ChatView` handles `session_reaped` alongside `session_lost` with a silent remount — the *buffered messages are kept* (unlike lost, which throws them out) because the on-disk JSONL will authoritatively hydrate the transcript on the next launch. User's next prompt spawns a fresh Claude Code via `--resume <sessionID>` and continues in the same conversation.
+- **`GET /api/v1/admin/session-stats`** returns a snapshot: `{sessions: [...per-session fields including idleSeconds, subscribers, pid, reapedForIdle...], idleReapAfter, maxActiveClaude}`. Use it to observe reaper behavior; feed it into monitoring if needed.
+
+Design property: reaping is **always safe** because the on-disk conversation log (`~/.claude/projects/<encoded>/<sessionID>.jsonl`) survives the SIGTERM and gets replayed authoritatively on the next launch. Users lose nothing but the seconds it takes to respawn.
+
 ## Session history is on disk — read from there, not the DB buffer
 
 Claude Code writes the authoritative conversation log to `~/.claude/projects/<encodedPath>/<sessionID>.jsonl`, where `<encodedPath>` is the project's local path with every `/` replaced by `-` and a leading `-` (e.g. `/Users/jonradoff/hearthfs` → `-Users-jonradoff-hearthfs`). Each line is one JSON object; only entries with `type: "user"` or `type: "assistant"` are conversation, the rest is housekeeping (queue-operation, etc.) and should be skipped.

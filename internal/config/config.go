@@ -2,7 +2,9 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Version is set at build time via ldflags.
@@ -41,6 +43,12 @@ type Config struct {
 	RecordingProxyCmd       string
 	RecordingProxyDir       string
 	RecordingProxyOutputDir string
+
+	// Resilience — cap memory pressure from long-running / abandoned chat
+	// sessions. Each Claude Code subprocess holds 300-500 MB, so 20 idle
+	// project cards can quietly consume 6-10 GB. The reaper releases them.
+	IdleReapAfter   time.Duration // 0 disables; default 20 min
+	MaxActiveClaude int           // 0 = unlimited
 }
 
 func Load() *Config {
@@ -94,7 +102,41 @@ func Load() *Config {
 		RecordingProxyCmd:       getEnv("VIBECTL_RECORDING_PROXY_CMD", ""),
 		RecordingProxyDir:       getEnv("VIBECTL_RECORDING_PROXY_DIR", ""),
 		RecordingProxyOutputDir: traceOutputDir,
+
+		IdleReapAfter:   parseMinutes("VIBECTL_IDLE_REAP_MINUTES", 20),
+		MaxActiveClaude: parseIntEnv("VIBECTL_MAX_ACTIVE_CLAUDE", 0),
 	}
+}
+
+// parseMinutes reads an integer minutes value from env and returns a Duration.
+// A negative value disables the feature (returned as -1 * time.Second so
+// consumers can check "<= 0" cleanly).
+func parseMinutes(key string, fallback int) time.Duration {
+	v := getEnv(key, "")
+	if v == "" {
+		return time.Duration(fallback) * time.Minute
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return time.Duration(fallback) * time.Minute
+	}
+	if n <= 0 {
+		return -1 * time.Second // disabled
+	}
+	return time.Duration(n) * time.Minute
+}
+
+// parseIntEnv reads an integer env var with a fallback.
+func parseIntEnv(key string, fallback int) int {
+	v := getEnv(key, "")
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 func getEnv(key, fallback string) string {

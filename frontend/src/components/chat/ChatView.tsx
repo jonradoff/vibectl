@@ -817,17 +817,25 @@ export default function ChatView({
         break
       }
 
-      case 'session_lost': {
-        // Backend has already cleared the orphaned session ID from chat_sessions.
-        // Force a remount so the next chat launch starts a fresh session
-        // (no --resume), without surfacing the stock "Claude exited" panel
-        // with its misleading "Common causes" boilerplate.
+      case 'session_lost':
+      case 'session_reaped': {
+        // session_lost — backend cleared an orphaned Claude session ID.
+        // session_reaped — backend killed an idle Claude to free memory;
+        // full transcript stays on disk and will be replayed on next launch.
+        // Both paths: silent remount, no scary exit panel. Preserve buffered
+        // messages so the user's transcript doesn't disappear on a reap —
+        // the on-disk replay will authoritatively hydrate it either way.
         if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
         persistentWs.delete(projectCode)
-        persistentMessages.delete(projectCode)
-        persistentStreamingText.delete(projectCode)
-        setMessages([])
-        setStreamingText('')
+        if (data.type === 'session_lost') {
+          // A lost session is unrecoverable — clear the buffer so we don't
+          // show stale content pointing at a session ID Claude Code doesn't
+          // know about anymore.
+          persistentMessages.delete(projectCode)
+          persistentStreamingText.delete(projectCode)
+          setMessages([])
+          setStreamingText('')
+        }
         setExitError(null)
         setIsStreaming(false)
         setAwaitingResult(false)

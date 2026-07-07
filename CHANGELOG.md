@@ -3,6 +3,23 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.14.10 (2026-07-07) — Concurrency Resilience: Idle Reaper + Max-Active Cap
+
+### Why
+Each Claude Code subprocess holds 300–500 MB (Node runtime + MCP servers). Twenty open project cards silently consume 6–10 GB even when idle, triggering macOS memory pressure that OOM-kills Vite or vibectl-server. This release makes vibectl reclaim that memory transparently while the user's transcript stays intact.
+
+### Added
+- **Idle reaper.** A background goroutine on `ChatManager` checks every live session periodically (interval: quarter of the reap window, clamped to 10–30 s). Any session whose `lastActivity` is older than `IdleReapAfter` AND has zero WebSocket subscribers gets `SIGTERM`ed. Default 20 min; env `VIBECTL_IDLE_REAP_MINUTES` overrides, negative/zero disables. New `SessionStat` fields (`lastActivity`, `idleSeconds`, `subscribers`, `pid`, `reapedForIdle`).
+- **Concurrency cap.** `VIBECTL_MAX_ACTIVE_CLAUDE` (default 0 = unlimited) caps concurrent Claude Code subprocesses. Enforced at every spawn via `EnforceMaxActiveClaude()` — evicts the longest-idle unsubscribed session to make room; falls through gracefully if every session has an active viewer.
+- **`session_reaped` typed WS event.** ChatView handles it alongside `session_lost` with a silent remount — **buffered messages preserved** because the on-disk JSONL authoritatively hydrates on the next launch. No scary exit panel.
+- **`GET /api/v1/admin/session-stats`.** Returns per-session snapshots (sorted by idle time) plus effective reaper settings. Feed into monitoring or check by hand.
+- **`ChatSession.TouchActivity()`** called on every stdin write (SendMessage, SendToolResult, SendControlResponse) and every stdout scanner line.
+- **`ChatSession.SubscriberCount()`** now prunes closed subscribers as a side effect, so subscriber-count reads are accurate without a separate reaper pass.
+- Docs: new **Concurrency resilience** section in CLAUDE.md documenting the reaper design, config knobs, and the safety property (reaping is lossless because on-disk history survives).
+
+### Fixed
+- Exit goroutine no longer emits `system_error` when the exit was caused by a reap (previously it would have shown a misleading "Claude exited with error" panel). `suppressSystemError = sessionLost || reapedForIdle`.
+
 ## v0.14.9 (2026-07-06) — Script-based AWS Command Auto-Population
 
 ### Added
