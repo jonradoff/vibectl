@@ -33,6 +33,47 @@ func findSessionAnywhere(home, sessionID string) string {
 	return ""
 }
 
+// ensureSessionLinkedAtExpectedPath makes a session's JSONL discoverable at
+// the expected encoded-path location for a given local path, by symlinking
+// the actually-found file (from a cross-dir search) into the direct-encoded
+// dir. This lets `claude --resume <sessionID>` succeed after a project move
+// — without the link, Claude Code refuses because it only looks under the
+// current cwd's encoded dir.
+//
+// Idempotent: no-op when foundPath already IS the expected path or the link
+// already exists.
+func ensureSessionLinkedAtExpectedPath(localPath, sessionID, foundPath string) error {
+	if localPath == "" || sessionID == "" || foundPath == "" {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	encoded := strings.ReplaceAll(localPath, "/", "-")
+	if !strings.HasPrefix(encoded, "-") {
+		encoded = "-" + encoded
+	}
+	dir := filepath.Join(home, ".claude", "projects", encoded)
+	link := filepath.Join(dir, sessionID+".jsonl")
+
+	// Already at the expected path — nothing to do.
+	if foundPath == link {
+		return nil
+	}
+	// Already exists (link or file). If a symlink, assume it's ours and OK;
+	// if a real file, don't overwrite it — Claude Code has a session at that
+	// location already, so `--resume` will follow it, not ours.
+	if info, err := os.Lstat(link); err == nil {
+		_ = info
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.Symlink(foundPath, link)
+}
+
 // encodedProjectDir returns the ~/.claude/projects/<encoded>/ directory for
 // a given local path. Returns "" if the home dir isn't resolvable.
 func encodedProjectDir(localPath string) string {

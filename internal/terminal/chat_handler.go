@@ -466,6 +466,15 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				if h.manager.ChatSessionService != nil {
 					if lastID, err := h.manager.ChatSessionService.GetLastSessionID(r.Context(), launch.ProjectCode); err == nil && lastID != "" {
 						if msgs, path, err := loadOnDiskHistory(launch.LocalPath, lastID); err == nil && len(msgs) > 0 {
+							// Symlink the JSONL into the expected encoded dir so
+							// `claude --resume <id>` finds it under the current
+							// cwd. Without this the resume fails "no conversation
+							// found" and the session dies immediately after
+							// history replays to the frontend.
+							if err := ensureSessionLinkedAtExpectedPath(launch.LocalPath, lastID, path); err != nil {
+								slog.Warn("failed to symlink session at expected path",
+									"projectID", launch.ProjectCode, "sessionID", lastID, "error", err)
+							}
 							sess, resumeErr := h.manager.ResumeSession(launch.ProjectCode, launch.LocalPath, lastID, nil)
 							if resumeErr == nil {
 								tagSession(sess)
@@ -500,6 +509,10 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 							msgs, path, err := loadOnDiskHistory(launch.LocalPath, id)
 							if err != nil || len(msgs) == 0 {
 								continue
+							}
+							if err := ensureSessionLinkedAtExpectedPath(launch.LocalPath, id, path); err != nil {
+								slog.Warn("failed to symlink session at expected path",
+									"projectID", launch.ProjectCode, "sessionID", id, "error", err)
 							}
 							sess, resumeErr := h.manager.ResumeSession(launch.ProjectCode, launch.LocalPath, id, nil)
 							if resumeErr != nil {
