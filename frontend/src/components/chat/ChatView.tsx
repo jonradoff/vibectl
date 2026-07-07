@@ -817,33 +817,46 @@ export default function ChatView({
         break
       }
 
-      case 'session_lost':
-      case 'session_reaped': {
-        // session_lost — backend cleared an orphaned Claude session ID.
-        // session_reaped — backend killed an idle Claude to free memory;
-        // full transcript stays on disk and will be replayed on next launch.
-        // Both paths: silent remount, no scary exit panel. Preserve buffered
-        // messages so the user's transcript doesn't disappear on a reap —
-        // the on-disk replay will authoritatively hydrate it either way.
+      case 'session_lost': {
+        // Orphan cleared — the session ID pointed at nothing on disk. Reset
+        // everything and force a fresh spawn on the next mount.
         if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
         persistentWs.delete(projectCode)
-        if (data.type === 'session_lost') {
-          // A lost session is unrecoverable — clear the buffer so we don't
-          // show stale content pointing at a session ID Claude Code doesn't
-          // know about anymore.
-          persistentMessages.delete(projectCode)
-          persistentStreamingText.delete(projectCode)
-          setMessages([])
-          setStreamingText('')
-        }
+        persistentMessages.delete(projectCode)
+        persistentStreamingText.delete(projectCode)
+        setMessages([])
+        setStreamingText('')
         setExitError(null)
         setIsStreaming(false)
         setAwaitingResult(false)
         setStatus('idle')
         onStatusChange?.('idle')
         onActivityChange?.(false)
-        // Slight delay so backend close ordering doesn't race the remount.
         setTimeout(() => setResetKey(k => k + 1), 200)
+        break
+      }
+
+      case 'session_reaped': {
+        // Backend killed the Claude Code subprocess to free memory. The
+        // transcript is intact on disk and re-hydrates on next launch.
+        //
+        // Do NOT auto-remount here. Previously we bumped resetKey which
+        // reopened the WS which triggered a new spawn — which under a
+        // busy user's cap enforcement immediately caused another reap on
+        // some other project card, cascading into a whole-app spawn/reap
+        // storm that starved the browser and triggered React's max-
+        // update-depth guard. Instead we go into an "idle" state with the
+        // transcript still visible; the WS effect will re-fire on the
+        // next user interaction that bumps resetKey (Reset Session, /fresh,
+        // sending a queued message via reconnect).
+        if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
+        persistentWs.delete(projectCode)
+        setExitError(null)
+        setIsStreaming(false)
+        setAwaitingResult(false)
+        setStatus('reaped')
+        onStatusChange?.('reaped')
+        onActivityChange?.(false)
         break
       }
 
@@ -1306,7 +1319,7 @@ export default function ChatView({
               {contextHealth.grade} {contextHealth.score}
             </span>
           )}
-          {(status === 'disconnected' || status === 'error' || status === 'exited' || status === 'claude_error') && (
+          {(status === 'disconnected' || status === 'error' || status === 'exited' || status === 'claude_error' || status === 'reaped') && (
             <button
               onClick={() => {
                 // Clear persistent caches and force a fresh WS connection

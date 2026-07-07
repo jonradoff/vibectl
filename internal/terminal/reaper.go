@@ -126,13 +126,13 @@ func (m *ChatManager) reapIdle() {
 	}
 }
 
-// reapGracePeriod protects newly-spawned sessions from being reaped before
-// their WebSocket subscriber has had time to attach. Without this, the cap
-// enforcer at spawn time (when it looks at other-project spawns as reap
-// candidates) will happily kill a session that spawned <1s ago just because
-// no subscriber has connected yet, causing the frontend chat window to hang
-// waiting on a session that no longer exists.
-const reapGracePeriod = 30 * time.Second
+// reapGracePeriod protects sessions from being reaped for the first N minutes
+// of their life. Set generously — the cost of missing a memory reclamation
+// opportunity is much lower than the cost of ping-ponging every card in a
+// busy user's session (spawn → cap-reap → auto-remount on frontend → new
+// spawn → cap-reap somewhere else → ...). Only sessions that are truly quiet
+// past this window are eligible for reaping.
+const reapGracePeriod = 5 * time.Minute
 
 // gatherReapCandidates snapshots every live session with its idle time and
 // subscriber state — used by both the periodic reaper and the concurrency-cap
