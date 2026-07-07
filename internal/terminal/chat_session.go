@@ -572,6 +572,28 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 		cmd.Dir = home
 	}
 	env := os.Environ()
+
+	// CRITICAL COST SAFEGUARD:
+	// Claude Code, if it sees ANTHROPIC_API_KEY in its env, will bill every
+	// call against the API key instead of the user's OAuth (Pro/Team)
+	// subscription. Vibectl sets ANTHROPIC_API_KEY in its own env for the
+	// server-side AI agents (triage, PM review, intent extraction, model
+	// list). That key must NOT leak into the Claude Code subprocess.
+	//
+	// Same for ANTHROPIC_AUTH_TOKEN — Claude Code accepts it as an alias.
+	//
+	// Removing these forces Claude Code to fall back to the OAuth flow it
+	// manages itself via ~/.claude/.credentials.json + keychain, which is
+	// what the user actually pays for on their subscription.
+	filtered := env[:0]
+	for _, e := range env {
+		if strings.HasPrefix(e, "ANTHROPIC_API_KEY=") ||
+			strings.HasPrefix(e, "ANTHROPIC_AUTH_TOKEN=") {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	env = filtered
 	// Per-project token takes priority (account switching via /login).
 	// Falls back to globally stored token file.
 	// Do NOT read from keychain here — let Claude Code handle its own auth
