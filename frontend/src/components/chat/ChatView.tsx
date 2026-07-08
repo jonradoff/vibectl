@@ -127,6 +127,23 @@ const persistentWs = new Map<string, WebSocket>()
 const persistentMessages = new Map<string, ChatMessage[]>()
 const persistentStreamingText = new Map<string, string>()
 
+// killChatConnection tears down the cached WS + message buffer for a project
+// so the next ChatView mount opens a genuinely fresh connection (and sends a
+// fresh `launch` message on ws.onopen). Used by the Session History Restart
+// button — without this call, the chatViewKey bump remounts ChatView but the
+// mount effect finds the still-open WS in persistentWs and reattaches to it,
+// silently skipping the launch, leaving the server with no activeProjectID
+// and the user with a "disconnected, typing does nothing" window.
+export function killChatConnection(projectCode: string) {
+  const ws = persistentWs.get(projectCode)
+  if (ws) {
+    try { ws.close() } catch { /* ignore */ }
+    persistentWs.delete(projectCode)
+  }
+  persistentMessages.delete(projectCode)
+  persistentStreamingText.delete(projectCode)
+}
+
 export default function ChatView({
   projectId,
   projectCode,

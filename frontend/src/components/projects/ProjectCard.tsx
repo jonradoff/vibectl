@@ -6,7 +6,7 @@ import { listIssues, updateProject, createIssue, transitionIssueStatus, archiveP
 import type { Intent } from '../../types'
 import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, DeploymentConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ActivityLogEntry } from '../../types'
 import { statusTransitions, typeColors, priorityColors } from '../../types'
-import ChatView from '../chat/ChatView'
+import ChatView, { killChatConnection } from '../chat/ChatView'
 import UserShellView from '../terminal/UserShellView'
 import type { ChatSessionSnapshot } from '../chat/ChatView'
 import { ModelPicker } from '../shared/ModelPicker'
@@ -1986,6 +1986,11 @@ function ChatHistoryTab({ projectCode, currentSession, onSessionReset }: { proje
       // Query to refetch history so a newly-archived session appears once
       // the ended one's archive job completes.
       queryClient.invalidateQueries({ queryKey: ['chatHistory', projectCode] })
+      // Tear down the cached WS BEFORE bumping the remount key. Without
+      // this the remount reattaches to the surviving WS (persistentWs
+      // cache) and never sends a fresh `launch`, so the server sits with
+      // no activeProjectID and the user types into a dead window.
+      killChatConnection(projectCode)
       // Bump the parent's chatViewKey so ChatView unmounts and remounts —
       // the WebSocket reconnects, the backend sees a fresh chat_launch,
       // and (because ClearSession just set noResume: true) skips all the
