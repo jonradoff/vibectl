@@ -118,6 +118,23 @@ func (e *IntentExtractor) ExtractFromSession(ctx context.Context, entry *models.
 		return fmt.Errorf("no AI client configured")
 	}
 
+	// COST GUARD: skip if we've already extracted intents for this session.
+	// Without this, every session re-archive (from reap/restart/session_lost
+	// cycles) triggers another full Haiku pass over the entire session
+	// content. Today's post-mortem showed the same session getting extracted
+	// 3-4 times in a minute — each pass is a large Haiku call over the full
+	// message history.
+	if entry.ClaudeSessionID != "" {
+		existing, _ := e.intentService.GetBySessionID(ctx, entry.ClaudeSessionID)
+		if len(existing) > 0 {
+			slog.Info("skipping intent extraction — sessionID already analyzed",
+				"sessionID", entry.ClaudeSessionID,
+				"projectCode", entry.ProjectCode,
+				"existingIntents", len(existing))
+			return nil
+		}
+	}
+
 	slog.Info("extracting intent", "sessionID", entry.ClaudeSessionID, "projectCode", entry.ProjectCode, "messages", len(entry.Messages))
 
 	summary := e.buildSummary(ctx, entry)
