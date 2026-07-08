@@ -3,6 +3,20 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v0.14.12 (2026-07-08) — /login Account Picker, Session Reset Finisher
+
+### Why
+Two follow-on fixes to yesterday's release: `/login` still couldn't reach a personal Claude.ai account when the same email had a Team org (the authorize page never showed both), and the Session History Restart flow left the chat window stuck disconnected — the backend correctly reset the session but the frontend silently reattached to the pre-reset WebSocket instead of opening a fresh one.
+
+### Fixed
+- **`/login` picker for Anthropic's two authorization servers.** Anthropic runs two separate authorization backends and any single authorize page only lists accounts homed on that backend — `platform.claude.com/oauth/authorize` (Team, Org, Console/API-backed) vs `claude.com/cai/oauth/authorize` (personal Claude.ai Max/Pro). A user with both on the same email can never see both on one page. Real Claude Code (the `claude` CLI, including the VSCode extension that wraps it) prompts the user which to route to before opening the browser; vibectl now does the same. Chose "Claude.ai" for personal Max/Pro, "Anthropic Console" for org accounts. `authSource` field on the `login_start` WS message; `generatePKCELogin(authSource)` picks the URL. Token endpoint (`platform.claude.com/v1/oauth/token`), client_id, redirect_uri, scopes, PKCE, and state unchanged — both authorize origins post to the same token endpoint.
+- **Session Reset now actually reconnects.** Symptom: after clicking Session History → Restart, the chat window showed the old transcript and typing did nothing. Log showed the server-side reset succeeding (`skipping final persist — session was user-reset`, POST returning 204) but no `chat_launch` was ever received afterward, and the user's next keystroke arrived as `user_message for unknown session projectID=STPL`. Root cause: `ChatView` caches its WebSocket in a module-level `persistentWs` Map keyed by projectCode, and its unmount cleanup deliberately leaves the WS open so fullscreen toggles don't drop it. The `chatViewKey` remount from Reset found the still-open WS and reattached to it — no new connection, no fresh `launch`, no `activeProjectID` set on the server-side WS handler. New exported `killChatConnection(projectCode)` helper closes the cached WS and drops the message/streaming buffers; `ChatHistoryTab.doReset` calls it right after the successful POST and before bumping `chatViewKey`, so the remount opens a genuinely new WS, sends the launch, and hits the `noResume` gate cleanly.
+- **`ChatHistoryTab` no longer passes an unused `projectId` prop.** Local `tsc --noEmit` allowed it but Fly's `tsc -b` (composite project mode) treats it as an error and rejected the previous deploy. Dropped.
+
+### Docs
+- CLAUDE.md unchanged — the fixes restore documented behavior; no new invariants.
+- README.md unchanged.
+
 ## v0.14.11 (2026-07-08) — Cost Guards, Session Reset, OAuth Fixes
 
 ### Why
