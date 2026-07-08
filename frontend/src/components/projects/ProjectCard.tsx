@@ -604,7 +604,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
           </div>
         )}
         {activeTab === 'history' && (
-          <ChatHistoryTab projectCode={project.code} projectId={project.id} currentSession={currentSession} onSessionReset={() => setChatViewKey(k => k + 1)} />
+          <ChatHistoryTab projectCode={project.code} currentSession={currentSession} onSessionReset={() => setChatViewKey(k => k + 1)} />
         )}
         {activeTab === 'health' && (
           <CompactHealthChecks project={project} results={healthResults} />
@@ -1968,7 +1968,7 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
   )
 }
 
-function ChatHistoryTab({ projectCode, projectId, currentSession, onSessionReset }: { projectCode: string; projectId: string; currentSession: ChatSessionSnapshot | null; onSessionReset?: () => void }) {
+function ChatHistoryTab({ projectCode, currentSession, onSessionReset }: { projectCode: string; currentSession: ChatSessionSnapshot | null; onSessionReset?: () => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [viewingCurrent, setViewingCurrent] = useState(false)
   const [showResetModal, setShowResetModal] = useState(false)
