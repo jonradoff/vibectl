@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -150,8 +151,19 @@ func (s *ChatSessionService) ClearSession(ctx context.Context, projectCode strin
 		}},
 		{Key: "$unset", Value: bson.D{{Key: "claudeSessionId", Value: ""}}},
 	}
-	_, err := s.collection.UpdateOne(ctx, filter, update)
-	return err
+	res, err := s.collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+	// Loud warning if 0 documents matched — the earlier LOOM reset silently
+	// failed for weeks because the frontend was passing project.id (Mongo
+	// ObjectID) while chat_sessions is keyed on the human-readable code.
+	// If a reset does nothing, we want to see it in logs.
+	if res.MatchedCount == 0 {
+		slog.Warn("ClearSession matched 0 documents — projectCode mismatch?",
+			"projectCode", projectCode)
+	}
+	return nil
 }
 
 // IsResetFlagged reports whether ClearSession was called for this project

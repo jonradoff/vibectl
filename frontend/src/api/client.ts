@@ -492,8 +492,12 @@ export const getChatHistoryEntry = (historyId: string) =>
 // the persisted claudeSessionId so the next launch spawns truly fresh with
 // no --resume. On-disk conversation log survives, so past history remains
 // browsable. Idempotent.
-export const resetChatSession = (projectId: string) =>
-  request<void>(`/projects/${projectId}/chat-session/reset`, { method: 'POST' });
+// The reset endpoint's URL segment is /projects/{id}/... but the value
+// downstream (ChatManager.sessions map key, ChatSessionService filter)
+// is the human-readable projectCode, NOT the Mongo ObjectID. Passing
+// the ObjectID here silently no-ops. Take projectCode explicitly.
+export const resetChatSession = (projectCode: string) =>
+  request<void>(`/projects/${projectCode}/chat-session/reset`, { method: 'POST' });
 
 // ---- VIBECTL.md ----
 export const generateVibectlMd = (projectId: string) =>

@@ -1980,7 +1980,8 @@ function ChatHistoryTab({ projectCode, projectId, currentSession, onSessionReset
     setResetting(true)
     setResetError(null)
     try {
-      await resetChatSession(projectId)
+      // projectCode, NOT projectId — see resetChatSession comment.
+      await resetChatSession(projectCode)
       // The next chat WS launch will spawn fresh (no --resume). Force React
       // Query to refetch history so a newly-archived session appears once
       // the ended one's archive job completes.
