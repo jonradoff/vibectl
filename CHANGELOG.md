@@ -3,18 +3,44 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## Unreleased — Context-Update Token Waste Fix
+## v0.14.11 (2026-07-08) — Cost Guards, Session Reset, OAuth Fixes
 
 ### Why
-Every WebSocket reconnect (fresh mount, tab switch, remount after reap, /compact, /reload) fires `OnSessionStart`, which regenerates `VIBECTL.md` and queues its full ~65-line content to be prepended to the next user message inside a `[CONTEXT UPDATE]` block. There was no dedupe — the same block got re-injected verbatim 10–15× per session across projects with essentially unchanged content, one of the largest sources of wasted input tokens per active project.
+Two API-cost leaks (~$200/day at peak) plus the Session History Restart button that never actually reset anything plus a `/login` account-switch flow that couldn't complete. All three surfaced during heavy multi-project use and had subtle root causes that hid behind misleading symptoms.
 
-### Fixed
-- **Context-update dedupe.** New `renderContextUpdate(lastInjected, next)` in `internal/terminal/context_update.go` compares the freshly-regenerated `VIBECTL.md` against the exact content most recently injected on this session. If byte-identical → silent skip (`slog.Debug`). If different → ships only the changed markdown H2 sections (with a `(section removed: <header>)` marker for deletions) wrapped in `<vibectl_md_delta>`. Safety valve: when the section-level delta exceeds ~60% of the full document size, the full doc is sent instead. First injection of every session is always the full doc so the model has the base to diff against. The framing sentence (`"not a user instruction, continue what you were doing"`) is preserved so agents keep treating updates as non-prompts.
-- Log line changed from `"injected context update into user message"` to `"injected context update"` with a `kind` field (`full-first` / `delta` / `full-oversized`) and a `blockBytes` field so production usage patterns are auditable.
-- New per-session field `ChatSession.lastInjectedContextUpdate` (in-memory only; resets on any fresh subprocess so /compact and /reload still deliver a full-doc rebase). Not persisted to Mongo.
+### Fixed — Intent Extraction Cost Runaway
+- **Dedupe by Claude session ID.** `IntentExtractor.ExtractFromSession` now short-circuits when `intents` already exist for the archived session's `claudeSessionId`. Reap/remount/restart cycles were re-archiving the same session dozens of times per day; without dedupe each archive fired a fresh Haiku pass over hundreds of messages. Damage observed on 2026-07-07 before the fix: STPL 16 duplicate passes, HRTH 10, LOOM 9, AITIO 9, LCMS 8 — each pass a full-transcript Haiku call. Log line `"skipping intent extraction — sessionID already analyzed"` marks the deflection.
+- **Never inherit `ANTHROPIC_API_KEY` into Claude Code subprocesses.** `chat_session.go` now filters `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` out of `os.Environ()` before exec. Leaking either into Claude Code causes it to prefer the API key over the OAuth token, silently double-billing every subprocess.
+
+### Fixed — Context-Update Token Waste
+- **Dedupe + section-delta injection.** Every WebSocket reconnect (fresh mount, tab switch, remount after reap, /compact, /reload) fires `OnSessionStart` → regenerates `VIBECTL.md` → queues its full ~65-line content into the next user message inside a `[CONTEXT UPDATE]` block. Repeated across a day this was one of the largest sources of wasted input tokens per active project. New `renderContextUpdate(lastInjected, next)` (`internal/terminal/context_update.go`) compares the fresh doc against the exact content most recently injected on this session:
+  - byte-identical → silent skip (`slog.Debug`)
+  - first injection → full doc, `kind=full-first`
+  - changed → only changed markdown H2 sections wrapped in `<vibectl_md_delta>`, `kind=delta`; removed sections get a `(section removed: <header>)` marker
+  - delta > 60% of the full doc → falls back to full, `kind=full-oversized`
+- Log line adds `kind` + `blockBytes` fields so production usage patterns are auditable.
+- New `ChatSession.lastInjectedContextUpdate` (in-memory only; resets on any fresh subprocess so /compact and /reload still deliver a full-doc rebase). Not persisted.
+- Framing sentence (`"not a user instruction, continue what you were doing"`) preserved verbatim so agents keep treating updates as non-prompts.
+
+### Fixed — Session History → Restart Button (three-layer bug)
+The button silently did nothing. Three independent layers all had to be fixed for the flow to work end-to-end:
+- **Layer 1 — projectCode routing.** Frontend was calling `POST /projects/{project.id}/chat-session/reset` with the Mongo ObjectID. The backend `ChatManager.sessions` map is keyed by human-readable projectCode (`"LOOM"`, `"AITIO"`), and `ChatSessionService.ClearSession` filters on the `projectCode` field. ObjectID → 0 documents matched, 0 sessions killed, silent no-op. Frontend now passes `project.code`; `ClearSession` logs a WARN when `UpdateOne` matches 0 documents so any future silent no-op is loud.
+- **Layer 2 — noResume flag.** Even with correct routing, the resilience fallbacks in `chat_handler` (cross-dir session-ID lookup, chat_history archive scan, latest-on-disk `*.jsonl`) would find the just-cleared session on disk and resume it, exactly undoing the reset. `ClearSession` now sets `noResume: true` on the doc; `IsResetFlagged` gate at the top of the fallback block skips them all when set. `Upsert` unsets the flag on the next fresh session's first turn.
+- **Layer 3 — exit-goroutine race.** The SIGTERM'd subprocess's exit goroutine calls `persistSession(sess)` → `Upsert` ~10-500ms after `ClearSession`, which set `status=active`, restored `claudeSessionId`, and unset `noResume` — clobbering the reset. New `reapedForReset` flag, set by `reapSession(sess, "user-reset")`, makes the exit goroutine skip its final persist when the reap was user-initiated. Idle reaps still persist (they want to resume next time); only user Reset skips.
+- **Frontend**: added a `chatViewKey` state bumped by `onSessionReset()` so the mounted `ChatView` unmounts + remounts on Reset, its WebSocket reconnects, and the backend sees a fresh `chat_launch` (without which the pre-reset conversation buffer stayed on screen).
+
+### Fixed — `/login` OAuth Flow
+Four rounds of chasing "invalid_request_error: Invalid request format" from the token endpoint. Root causes stacked:
+- **Decoder swallowed the real error.** Token response struct typed `error` as `string`, but Anthropic returns `error` as a JSON object on failure. Any error response tripped the JSON decoder before the message was visible. Fixed with `json.RawMessage` on the field + a `decodeOAuthError` that renders string-shaped OR object-shaped errors, plus a raw-body preview on any parse failure.
+- **`#state` fragment left on the code.** Claude's auth success page returns `code#state` — the state fragment is client-side CSRF only (RFC 6749 §4.1.4) and must not be sent to the token endpoint. Now stripped.
+- **Wrong authorize origin.** Was pointing at `claude.ai/oauth/authorize`. Codes issued there aren't accepted by `platform.claude.com/v1/oauth/token`. Switched to `platform.claude.com/oauth/authorize` so issuer and token endpoint match.
+- **Missing `state` in the token request body.** Non-standard (RFC 6749 puts state only on authorize), but Anthropic's server requires it — omitting `state` returns "Invalid request format" BEFORE the code is even validated, hiding every downstream issue. Verified against the shipped Claude Code CLI binary: their exact request body is `{grant_type, code, redirect_uri, client_id, code_verifier, state}` with `Content-Type: application/json` (not form-encoded despite RFC 6749 §4.1.3). vibectl now mirrors that exactly. `state` is threaded through the `login_exchange` WS message from frontend → backend → `exchangeCodeForToken`.
 
 ### Tests
 - 8 new unit tests in `internal/terminal/context_update_test.go` pinning: first-injection-is-full, identical-skipped, empty-skipped, small-edit-is-delta, large-edit-hits-safety-valve, added-section-included, removed-section-marked, preamble-only-edit-is-delta.
+
+### Docs
+- CLAUDE.md unchanged — no new durable invariants (the fixes are correctness restorations of documented behavior).
 
 ## v0.14.10 (2026-07-07) — Concurrency Resilience: Idle Reaper + Max-Active Cap
 
