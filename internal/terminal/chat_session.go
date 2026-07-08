@@ -98,6 +98,13 @@ type ChatSession struct {
 	// "Claude exited with error" broadcast and instead emit a typed event
 	// telling the frontend a fresh spawn will occur on the next user message.
 	reapedForIdle bool
+
+	// reapedForReset is set to true when the user pressed Session History →
+	// Restart. Same suppression as reapedForIdle, plus the exit goroutine
+	// SKIPS its final persistSession call — that Upsert would clobber the
+	// noResume flag and re-set claudeSessionId that ClearSession just wiped,
+	// silently undoing the whole point of the reset.
+	reapedForReset bool
 }
 
 // TouchActivity marks the session as active NOW. Called whenever the user
@@ -907,6 +914,7 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 		sess.mu.Lock()
 		suppressSystemError := sess.sessionLost || sess.reapedForIdle
 		committed := sess.committed
+		reapedForReset := sess.reapedForReset
 		sess.mu.Unlock()
 
 		if (exitCode != 0 || len(stderrLines) > 0) && !suppressSystemError {
@@ -934,9 +942,18 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 		// assistant message). Otherwise the session ID is in-memory only —
 		// writing it now would create an orphan on Mongo with no matching
 		// conversation file on disk.
-		if committed {
+		//
+		// ALSO skip when reapedForReset: the whole point of a user-initiated
+		// Reset is that ClearSession just wrote noResume:true and unset
+		// claudeSessionId. persistSession would Upsert them right back and
+		// silently undo the reset.
+		switch {
+		case reapedForReset:
+			slog.Info("skipping final persist — session was user-reset",
+				"projectID", projectID, "sessionID", sess.SessionID)
+		case committed:
 			m.persistSession(sess)
-		} else {
+		default:
 			slog.Info("skipping final persist for uncommitted session",
 				"projectID", projectID, "sessionID", sess.SessionID, "exitCode", exitCode)
 		}

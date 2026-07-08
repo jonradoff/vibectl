@@ -176,6 +176,12 @@ func (m *ChatManager) reapSession(s *ChatSession, reason string) {
 		return // already reaped, nothing to do
 	}
 	s.reapedForIdle = true
+	// A user-initiated Reset must additionally skip the exit goroutine's
+	// final persistSession — otherwise the Upsert races against
+	// ClearSession and undoes the noResume flag / restores claudeSessionId.
+	if reason == "user-reset" {
+		s.reapedForReset = true
+	}
 	pid := 0
 	if s.Cmd != nil && s.Cmd.Process != nil {
 		pid = s.Cmd.Process.Pid
