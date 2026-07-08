@@ -1434,31 +1434,34 @@ func generatePKCELogin() *PKCELoginParams {
 	}
 }
 
-// exchangeCodeForToken exchanges an OAuth authorization code for an access token.
-func exchangeCodeForToken(code, codeVerifier, clientID, redirectURI string) (string, error) {
+// exchangeCodeForToken exchanges an OAuth authorization code for an access
+// token. Mirrors Claude Code CLI's exact wire format (verified against the
+// shipped binary): JSON body containing grant_type, code, redirect_uri,
+// client_id, code_verifier, AND state. The `state` field is non-standard
+// for a token endpoint (RFC 6749 puts state only on the authorize request)
+// but Anthropic's server requires it — omitting state returns
+// "invalid_request_error: Invalid request format" before the code is even
+// validated.
+func exchangeCodeForToken(code, codeVerifier, clientID, redirectURI, state string) (string, error) {
 	// Claude's auth success page returns codes in "code#state" format —
-	// the state fragment is a CSRF token for the client and MUST NOT be
-	// sent to the token endpoint (RFC 6749 §4.1.4). Anthropic rejects
-	// the whole request with "invalid_request_error: Invalid request
-	// format" if you leave it attached. Strip anything after the '#'.
+	// the state fragment there is client-side CSRF validation only, not
+	// part of the code, so strip anything after the '#' before posting.
 	if i := strings.Index(code, "#"); i >= 0 {
 		code = code[:i]
 	}
 	code = strings.TrimSpace(code)
 
-	// RFC 6749 §4.1.3 mandates application/x-www-form-urlencoded for the
-	// token endpoint. Anthropic returns "invalid_request_error: Invalid
-	// request format" for JSON bodies. Encode as form data.
-	form := url.Values{
-		"grant_type":    []string{"authorization_code"},
-		"code":          []string{code},
-		"redirect_uri":  []string{redirectURI},
-		"client_id":     []string{clientID},
-		"code_verifier": []string{codeVerifier},
-	}
+	payload, _ := json.Marshal(map[string]string{
+		"grant_type":    "authorization_code",
+		"code":          code,
+		"redirect_uri":  redirectURI,
+		"client_id":     clientID,
+		"code_verifier": codeVerifier,
+		"state":         state,
+	})
 
-	req, _ := http.NewRequest("POST", "https://platform.claude.com/v1/oauth/token", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req, _ := http.NewRequest("POST", "https://platform.claude.com/v1/oauth/token", strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "claude-code/1.0.0")
 	req.Header.Set("anthropic-client-name", "claude-code")
 	req.Header.Set("anthropic-client-version", "1.0.0")

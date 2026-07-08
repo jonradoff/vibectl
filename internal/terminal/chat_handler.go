@@ -953,6 +953,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				CodeVerifier string `json:"codeVerifier"`
 				ClientID     string `json:"clientId"`
 				RedirectURI  string `json:"redirectUri"`
+				State        string `json:"state"`
 				ProjectCode  string `json:"projectCode"`
 				LocalPath    string `json:"localPath"`
 			}
@@ -961,7 +962,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				continue
 			}
 
-			token, exchangeErr := exchangeCodeForToken(exchangeMsg.Code, exchangeMsg.CodeVerifier, exchangeMsg.ClientID, exchangeMsg.RedirectURI)
+			token, exchangeErr := exchangeCodeForToken(exchangeMsg.Code, exchangeMsg.CodeVerifier, exchangeMsg.ClientID, exchangeMsg.RedirectURI, exchangeMsg.State)
 			if exchangeErr != nil {
 				sendJSON("login_status", map[string]string{"status": "error", "message": exchangeErr.Error()})
 				continue

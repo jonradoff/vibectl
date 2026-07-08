@@ -1428,6 +1428,7 @@ export default function ChatView({
                 codeVerifier: pkce.codeVerifier,
                 clientId: pkce.clientId,
                 redirectUri: pkce.redirectUri,
+                state: pkce.state,
                 projectCode: projectCode,
                 localPath: localPath,
               })
