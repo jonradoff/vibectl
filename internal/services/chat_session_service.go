@@ -40,14 +40,19 @@ func (s *ChatSessionService) EnsureIndexes(ctx context.Context) error {
 // Upsert creates or updates the persisted chat session for a project.
 func (s *ChatSessionService) Upsert(ctx context.Context, projectCode, claudeSessionID, localPath string, messages []json.RawMessage) error {
 	filter := bson.D{{Key: "projectCode", Value: projectCode}}
-	update := bson.D{{Key: "$set", Value: bson.D{
-		{Key: "projectCode", Value: projectCode},
-		{Key: "claudeSessionId", Value: claudeSessionID},
-		{Key: "localPath", Value: localPath},
-		{Key: "messages", Value: messages},
-		{Key: "status", Value: "active"},
-		{Key: "updatedAt", Value: time.Now().UTC()},
-	}}}
+	update := bson.D{
+		{Key: "$set", Value: bson.D{
+			{Key: "projectCode", Value: projectCode},
+			{Key: "claudeSessionId", Value: claudeSessionID},
+			{Key: "localPath", Value: localPath},
+			{Key: "messages", Value: messages},
+			{Key: "status", Value: "active"},
+			{Key: "updatedAt", Value: time.Now().UTC()},
+		}},
+		// A live session was born — clear the user-reset noResume gate so
+		// future resumable/reap flows can restore it normally.
+		{Key: "$unset", Value: bson.D{{Key: "noResume", Value: ""}}},
+	}
 	opts := options.UpdateOne().SetUpsert(true)
 	_, err := s.collection.UpdateOne(ctx, filter, update, opts)
 	if err != nil {
@@ -129,17 +134,43 @@ func (s *ChatSessionService) GetLastSessionID(ctx context.Context, projectCode s
 // session ID is known to be orphaned (e.g. Claude Code reports "no conversation
 // found with session ID"), so the next launch starts fresh instead of trying
 // to resume the dead ID again.
+//
+// Also sets noResume: true so the resilience fallbacks in chat_handler
+// (cross-dir session lookup, chat_history archive scan, latest-on-disk) skip
+// this project until the next successful fresh spawn (Upsert clears the flag).
+// Without this, a user-initiated Reset would immediately be undone by the
+// fallbacks finding the just-abandoned session on disk and resuming it.
 func (s *ChatSessionService) ClearSession(ctx context.Context, projectCode string) error {
 	filter := bson.D{{Key: "projectCode", Value: projectCode}}
 	update := bson.D{
 		{Key: "$set", Value: bson.D{
 			{Key: "status", Value: "dead"},
+			{Key: "noResume", Value: true},
 			{Key: "updatedAt", Value: time.Now().UTC()},
 		}},
 		{Key: "$unset", Value: bson.D{{Key: "claudeSessionId", Value: ""}}},
 	}
 	_, err := s.collection.UpdateOne(ctx, filter, update)
 	return err
+}
+
+// IsResetFlagged reports whether ClearSession was called for this project
+// and no fresh session has been born since (Upsert clears the flag). When
+// true, the chat_handler skips all on-disk fallbacks and goes straight to
+// a fresh spawn — the point of a user-initiated Reset is a clean slate.
+func (s *ChatSessionService) IsResetFlagged(ctx context.Context, projectCode string) (bool, error) {
+	filter := bson.D{{Key: "projectCode", Value: projectCode}}
+	opts := options.FindOne().SetProjection(bson.D{{Key: "noResume", Value: 1}})
+	var row struct {
+		NoResume bool `bson:"noResume"`
+	}
+	if err := s.collection.FindOne(ctx, filter, opts).Decode(&row); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return false, nil
+		}
+		return false, err
+	}
+	return row.NoResume, nil
 }
 
 // GetResumable returns the resumable session for a project, or nil if none exists.

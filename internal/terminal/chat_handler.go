@@ -457,7 +457,26 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			// sessions from every ad-hoc `claude` run in that dir, so the
 			// "newest .jsonl" would randomly pull in unrelated work from any
 			// other project the user happened to work on from their home dir.
-			if launch.LocalPath != "" && launch.ProjectCode != "__workspace__" {
+			// If the user just pressed Reset (Session History → Restart), the
+			// chat_sessions doc carries noResume: true. Honor that by skipping
+			// every fallback below — the whole point of the reset is a genuinely
+			// fresh Claude Code spawn with no --resume against any prior session.
+			// The flag is cleared automatically when the fresh session's Upsert
+			// runs on first turn.
+			resetFlagged := false
+			if h.manager.ChatSessionService != nil {
+				if flagged, err := h.manager.ChatSessionService.IsResetFlagged(r.Context(), launch.ProjectCode); err == nil {
+					resetFlagged = flagged
+				} else {
+					slog.Warn("could not check reset flag; proceeding with fallbacks",
+						"projectID", launch.ProjectCode, "error", err)
+				}
+			}
+			if resetFlagged {
+				slog.Info("user-reset flag set; skipping on-disk fallbacks and spawning fresh",
+					"projectID", launch.ProjectCode)
+			}
+			if !resetFlagged && launch.LocalPath != "" && launch.ProjectCode != "__workspace__" {
 				// ----- Fallback A: chat_sessions has a dead sessionId -----
 				// If our chat_sessions doc still records a claudeSessionId even
 				// though it's marked dead, try to find that file anywhere under

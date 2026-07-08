@@ -115,6 +115,18 @@ func (s *RemoteChatSessionService) ClearSession(ctx context.Context, projectID s
 	return nil
 }
 
+// IsResetFlagged reports whether the remote chat_sessions doc carries
+// noResume: true (set by ClearSession when the user pressed Restart in
+// Session History). Delegated mode: the remote server doesn't currently
+// expose a dedicated endpoint for this. Return false — worst case, the
+// on-disk fallback tries to resume a just-cleared session, which is the
+// old pre-noResume behavior. In standalone mode (the common case for a
+// user pressing Restart in the UI) the local persister's real
+// implementation is used and gates the fallback correctly.
+func (s *RemoteChatSessionService) IsResetFlagged(ctx context.Context, projectID string) (bool, error) {
+	return false, nil
+}
+
 func (s *RemoteChatSessionService) GetResumable(ctx context.Context, projectID string) (*models.ChatSessionState, error) {
 	resp, err := s.do(ctx, http.MethodGet, "/api/v1/projects/"+projectID+"/chat-session/resumable", nil)
 	if err != nil {

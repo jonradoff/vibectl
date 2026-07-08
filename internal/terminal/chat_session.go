@@ -36,6 +36,12 @@ type ChatSessionPersister interface {
 	// sessions that have been marked dead (the JSONL may still exist under
 	// an old/moved directory encoding).
 	GetLastSessionID(ctx context.Context, projectID string) (string, error)
+	// IsResetFlagged reports whether the project's chat_sessions doc carries
+	// noResume: true (set by ClearSession when the user pressed Session
+	// History → Restart). While set, chat_handler skips all on-disk fallback
+	// recovery and spawns a fresh Claude Code process. Upsert clears the
+	// flag automatically once a fresh session commits its first turn.
+	IsResetFlagged(ctx context.Context, projectID string) (bool, error)
 }
 
 // ChatHistoryArchiver is the persistence interface for completed chat session history.
