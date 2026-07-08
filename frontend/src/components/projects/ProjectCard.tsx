@@ -46,6 +46,12 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [currentSession, setCurrentSession] = useState<ChatSessionSnapshot | null>(null)
   const [isWaiting, setIsWaiting] = useState(false)
+  // Bumped by the Session History → Restart button so ChatView is force-
+  // remounted, its WebSocket reconnects, and the backend runs the fresh-
+  // spawn path (noResume flag is already set by resetChatSession by then).
+  // Without this the mounted ChatView keeps the old buffered transcript
+  // and the backend never sees a new chat_launch.
+  const [chatViewKey, setChatViewKey] = useState(0)
   const { activeProjectId, setActiveProjectId, updateProjectStatus, closeProject } = useActiveProject()
   const isActiveProject = activeProjectId === project.id
   const queryClient = useQueryClient()
@@ -473,6 +479,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
                 <ProjectStatusBar project={project} />
                 <div className="flex-1 overflow-hidden">
                   <ChatView
+                    key={chatViewKey}
                     projectId={project.id}
                     projectCode={project.code}
                     localPath={project.links.localPath}
@@ -509,6 +516,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
 
           return (
             <ChatView
+              key={chatViewKey}
               projectId={project.id}
               projectCode={project.code}
               localPath={project.links.localPath}
@@ -596,7 +604,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
           </div>
         )}
         {activeTab === 'history' && (
-          <ChatHistoryTab projectCode={project.code} projectId={project.id} currentSession={currentSession} />
+          <ChatHistoryTab projectCode={project.code} projectId={project.id} currentSession={currentSession} onSessionReset={() => setChatViewKey(k => k + 1)} />
         )}
         {activeTab === 'health' && (
           <CompactHealthChecks project={project} results={healthResults} />
@@ -1960,7 +1968,7 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
   )
 }
 
-function ChatHistoryTab({ projectCode, projectId, currentSession }: { projectCode: string; projectId: string; currentSession: ChatSessionSnapshot | null }) {
+function ChatHistoryTab({ projectCode, projectId, currentSession, onSessionReset }: { projectCode: string; projectId: string; currentSession: ChatSessionSnapshot | null; onSessionReset?: () => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [viewingCurrent, setViewingCurrent] = useState(false)
   const [showResetModal, setShowResetModal] = useState(false)
@@ -1977,6 +1985,11 @@ function ChatHistoryTab({ projectCode, projectId, currentSession }: { projectCod
       // Query to refetch history so a newly-archived session appears once
       // the ended one's archive job completes.
       queryClient.invalidateQueries({ queryKey: ['chatHistory', projectCode] })
+      // Bump the parent's chatViewKey so ChatView unmounts and remounts —
+      // the WebSocket reconnects, the backend sees a fresh chat_launch,
+      // and (because ClearSession just set noResume: true) skips all the
+      // on-disk fallbacks and spawns a genuinely fresh Claude Code.
+      onSessionReset?.()
       setShowResetModal(false)
     } catch (e) {
       setResetError(e instanceof Error ? e.message : String(e))
