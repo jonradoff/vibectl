@@ -211,6 +211,11 @@ export default function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configuredModel])
   const [showLoginModal, setShowLoginModal] = useState(false)
+  // Pre-login picker: Anthropic runs two separate authorization servers
+  // (Console for Team/Org, Claude.ai for personal Max/Pro). A user with
+  // both on the same email only sees ONE of them on any given authorize
+  // page. So we ask which one to route to before generating the PKCE URL.
+  const [showAuthSourceModal, setShowAuthSourceModal] = useState(false)
   const [showPluginManager, setShowPluginManager] = useState(false)
 
   // Dynamic plugin commands — merged with builtins for autocomplete
@@ -957,10 +962,12 @@ export default function ChatView({
     setInputText('')
     if (cmdName === '/login') {
       if (modeInfo?.mode === 'standalone') {
-        // Standalone dev: PKCE OAuth flow via WS — no keychain mutation
+        // Standalone dev: PKCE OAuth flow via WS — no keychain mutation.
+        // Ask which authorization server first (Console vs Claude.ai); the
+        // browser only opens after the pick.
         setIsReconnecting(false)
         setExitError(null)
-        sendWsMessage('login_start', { projectCode: projectCode, localPath: localPath })
+        setShowAuthSourceModal(true)
       } else {
         // Remote/client mode: use the token paste modal
         setShowLoginModal(true)
@@ -1639,6 +1646,16 @@ export default function ChatView({
               sendWsMessage('set_project_token', { token, projectCode: projectCode, localPath: localPath })
             }}
             isStandalone={modeInfo?.mode === 'standalone'}
+          />
+        )}
+
+        {showAuthSourceModal && (
+          <AuthSourcePickerModal
+            onPick={(authSource) => {
+              setShowAuthSourceModal(false)
+              sendWsMessage('login_start', { projectCode: projectCode, localPath: localPath, authSource })
+            }}
+            onClose={() => setShowAuthSourceModal(false)}
           />
         )}
 
@@ -2915,6 +2932,50 @@ function ClaudeLoginModal({ onClose, onToken, isStandalone: _isStandalone }: { o
         <div className="px-5 pb-4">
           <button onClick={onClose} className="w-full rounded-lg bg-gray-700 hover:bg-gray-600 py-2 text-sm text-gray-300 transition-colors">
             Close
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// AuthSourcePickerModal — mirrors the Claude Code CLI's login picker.
+// Anthropic runs two separate authorization servers (Console for Team/Org,
+// Claude.ai for personal Max/Pro), and a user with both on the same email
+// only sees one of them on any given authorize page. We ask upfront which
+// one to route to.
+function AuthSourcePickerModal({ onPick, onClose }: { onPick: (source: 'claude_ai' | 'console') => void; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-lg p-5 max-w-md w-full mx-4 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div>
+          <h3 className="text-base font-semibold text-white mb-1">Choose Claude account type</h3>
+          <p className="text-sm text-gray-400">
+            Anthropic runs two separate authorization servers. A single email address can be attached to one on each side, so pick which one to sign in to.
+          </p>
+        </div>
+        <div className="space-y-2">
+          <button
+            onClick={() => onPick('claude_ai')}
+            className="w-full text-left px-4 py-3 rounded-md bg-gray-800 hover:bg-gray-750 border border-gray-700 hover:border-indigo-500 transition-colors"
+          >
+            <div className="font-medium text-white">Claude.ai account</div>
+            <div className="text-xs text-gray-400 mt-0.5">Personal Max or Pro subscription (claude.ai)</div>
+          </button>
+          <button
+            onClick={() => onPick('console')}
+            className="w-full text-left px-4 py-3 rounded-md bg-gray-800 hover:bg-gray-750 border border-gray-700 hover:border-indigo-500 transition-colors"
+          >
+            <div className="font-medium text-white">Anthropic Console account</div>
+            <div className="text-xs text-gray-400 mt-0.5">Team, Org, or API-backed access (platform.claude.com)</div>
+          </button>
+        </div>
+        <div className="flex justify-end">
+          <button
+            onClick={onClose}
+            className="text-sm text-gray-400 hover:text-gray-200 px-3 py-1"
+          >
+            Cancel
           </button>
         </div>
       </div>

@@ -1389,7 +1389,18 @@ type PKCELoginParams struct {
 
 // generatePKCELogin creates PKCE parameters and an auth URL for Claude OAuth.
 // Does NOT modify the keychain — the token is managed per-project in memory.
-func generatePKCELogin() *PKCELoginParams {
+//
+// authSource picks which authorization server Anthropic routes the user to:
+//   - "console"   → platform.claude.com/oauth/authorize  (Team, Org, Console
+//                    accounts; API key-backed subscriptions)
+//   - "claude_ai" → claude.com/cai/oauth/authorize        (personal Claude.ai
+//                    Max / Pro subscriptions)
+// Empty or unrecognized values fall back to "console" to preserve prior
+// behavior. This mirrors the Claude Code CLI's own login picker: when a
+// user has both a Team org and a personal Max Pro on the same email, they
+// live on different servers and the authorize page for one never shows
+// the other as an option.
+func generatePKCELogin(authSource string) *PKCELoginParams {
 	verifierBytes := make([]byte, 32)
 	if _, err := rand.Read(verifierBytes); err != nil {
 		slog.Error("failed to generate PKCE verifier", "error", err)
@@ -1407,17 +1418,17 @@ func generatePKCELogin() *PKCELoginParams {
 	redirectURI := "https://platform.claude.com/oauth/code/callback"
 	scopes := "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 
-	// Anthropic's OAuth server: the current Claude Code CLI hits
-	// platform.claude.com/oauth/authorize (issuer) and posts the code
-	// back to platform.claude.com/v1/oauth/token. We were using the
-	// older claude.ai/oauth/authorize origin, which still issues a code
-	// but that code is not accepted by the platform.claude.com token
-	// endpoint — the origin mismatch surfaces as
-	// "invalid_request_error: Invalid request format" from the token
-	// endpoint. Pointing at platform.claude.com puts issuer and token
-	// endpoint on the same authorization server.
+	// Both authorize URLs post codes back to the same token endpoint
+	// (platform.claude.com/v1/oauth/token) — Anthropic's authorization
+	// backends are unified there. What differs is which set of accounts
+	// the authorize page offers to sign in with.
+	authorizeHost := "https://platform.claude.com/oauth/authorize"
+	if authSource == "claude_ai" {
+		authorizeHost = "https://claude.com/cai/oauth/authorize"
+	}
 	authURL := fmt.Sprintf(
-		"https://platform.claude.com/oauth/authorize?code=true&client_id=%s&response_type=code&redirect_uri=%s&scope=%s&code_challenge=%s&code_challenge_method=S256&state=%s",
+		"%s?code=true&client_id=%s&response_type=code&redirect_uri=%s&scope=%s&code_challenge=%s&code_challenge_method=S256&state=%s",
+		authorizeHost,
 		clientID,
 		url.QueryEscape(redirectURI),
 		url.QueryEscape(scopes),

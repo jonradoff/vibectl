@@ -919,15 +919,20 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 		case "login_start":
 			// Start PKCE OAuth flow: generate params, open browser, return params to frontend.
 			// Does NOT touch the keychain — token is stored per-project in memory only.
+			// authSource picks which Anthropic authorization server the user is routed
+			// to — "console" for Team/Console/Org accounts, "claude_ai" for personal
+			// Claude.ai Max / Pro subscriptions. Same-email users can have both, on
+			// different servers; without the picker the user only sees one.
 			var loginMsg struct {
 				ProjectCode string `json:"projectCode"`
-				LocalPath string `json:"localPath"`
+				LocalPath   string `json:"localPath"`
+				AuthSource  string `json:"authSource"`
 			}
 			if msg.Data != nil {
 				json.Unmarshal(msg.Data, &loginMsg)
 			}
 
-			params := generatePKCELogin()
+			params := generatePKCELogin(loginMsg.AuthSource)
 			if params == nil {
 				sendJSON("login_status", map[string]string{"status": "error", "message": "Failed to generate login parameters"})
 				continue
