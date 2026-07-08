@@ -3,6 +3,19 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## Unreleased — Context-Update Token Waste Fix
+
+### Why
+Every WebSocket reconnect (fresh mount, tab switch, remount after reap, /compact, /reload) fires `OnSessionStart`, which regenerates `VIBECTL.md` and queues its full ~65-line content to be prepended to the next user message inside a `[CONTEXT UPDATE]` block. There was no dedupe — the same block got re-injected verbatim 10–15× per session across projects with essentially unchanged content, one of the largest sources of wasted input tokens per active project.
+
+### Fixed
+- **Context-update dedupe.** New `renderContextUpdate(lastInjected, next)` in `internal/terminal/context_update.go` compares the freshly-regenerated `VIBECTL.md` against the exact content most recently injected on this session. If byte-identical → silent skip (`slog.Debug`). If different → ships only the changed markdown H2 sections (with a `(section removed: <header>)` marker for deletions) wrapped in `<vibectl_md_delta>`. Safety valve: when the section-level delta exceeds ~60% of the full document size, the full doc is sent instead. First injection of every session is always the full doc so the model has the base to diff against. The framing sentence (`"not a user instruction, continue what you were doing"`) is preserved so agents keep treating updates as non-prompts.
+- Log line changed from `"injected context update into user message"` to `"injected context update"` with a `kind` field (`full-first` / `delta` / `full-oversized`) and a `blockBytes` field so production usage patterns are auditable.
+- New per-session field `ChatSession.lastInjectedContextUpdate` (in-memory only; resets on any fresh subprocess so /compact and /reload still deliver a full-doc rebase). Not persisted to Mongo.
+
+### Tests
+- 8 new unit tests in `internal/terminal/context_update_test.go` pinning: first-injection-is-full, identical-skipped, empty-skipped, small-edit-is-delta, large-edit-hits-safety-valve, added-section-included, removed-section-marked, preamble-only-edit-is-delta.
+
 ## v0.14.10 (2026-07-07) — Concurrency Resilience: Idle Reaper + Max-Active Cap
 
 ### Why

@@ -71,8 +71,15 @@ type ChatSession struct {
 	messages    []json.RawMessage // buffered events for reconnection
 	dirty       bool              // true if messages changed since last persist
 	mu          sync.Mutex
-	lastModel            string   // model from most recent message_start (for usage tracking)
-	pendingContextUpdate string   // queued VIBECTL.md update to prepend to next user message
+	lastModel            string // model from most recent message_start (for usage tracking)
+	pendingContextUpdate string // queued VIBECTL.md update to prepend to next user message
+	// lastInjectedContextUpdate is the exact VIBECTL.md content of the most
+	// recent injection that actually reached the model on this session (post-
+	// dedupe). Used by renderContextUpdate to skip re-injection when nothing
+	// changed and to compute section-delta updates when it did. In-memory only:
+	// a fresh subprocess (initial spawn, /compact, /reload, or a reap-and-
+	// respawn) starts with "" so the first injection is always a full doc.
+	lastInjectedContextUpdate string
 	stderrMu             sync.Mutex
 	stderrBuf            []string // recent stderr lines, capped at 50
 	proxy                *recordingProxy // optional cache-optimizer trace recorder
@@ -181,11 +188,23 @@ func (s *ChatSession) SendMessage(text string) error {
 		return fmt.Errorf("SESSION_ENDED: stdin closed. Reset the session to start a fresh one.")
 	}
 
-	// Prepend pending context update if available
+	// Prepend pending context update if available. Dedupe against the most
+	// recently *injected* content on this session so unchanged regenerations
+	// (the common case: every reconnect fires OnSessionStart) don't re-inject
+	// the same ~65-line block. When content differs, ship only the changed
+	// sections rather than the full doc. See renderContextUpdate.
 	if s.pendingContextUpdate != "" {
-		text = fmt.Sprintf("[CONTEXT UPDATE] Project status refreshed:\n\n<vibectl_md>\n%s\n</vibectl_md>\n\nThis is an automated context update, not a user instruction. Continue with whatever you were doing.\n\n---\n\n%s", s.pendingContextUpdate, text)
+		block, kind := renderContextUpdate(s.lastInjectedContextUpdate, s.pendingContextUpdate)
+		if block != "" {
+			text = block + text
+			s.lastInjectedContextUpdate = s.pendingContextUpdate
+			slog.Info("injected context update",
+				"projectID", s.ProjectCode, "kind", kind, "blockBytes", len(block))
+		} else {
+			slog.Debug("skipped duplicate context update",
+				"projectID", s.ProjectCode, "kind", kind)
+		}
 		s.pendingContextUpdate = ""
-		slog.Info("injected context update into user message", "projectID", s.ProjectCode)
 	}
 
 	msg := map[string]interface{}{
