@@ -1447,19 +1447,73 @@ func exchangeCodeForToken(code, codeVerifier, clientID, redirectURI string) (str
 	}
 	defer resp.Body.Close()
 
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return "", fmt.Errorf("read token response body: %w", readErr)
+	}
+
+	// The Anthropic OAuth token endpoint returns `error` as an OBJECT on
+	// failure (not a string as spec'd by RFC 6749 §5.2). Using json.RawMessage
+	// tolerates either shape so the actual failure message reaches the user
+	// instead of a misleading "cannot unmarshal object into Go struct field
+	// .error of type string" decode error.
 	var tokenResp struct {
-		AccessToken string `json:"access_token"`
-		Error       string `json:"error"`
-		ErrorDesc   string `json:"error_description"`
+		AccessToken string          `json:"access_token"`
+		Error       json.RawMessage `json:"error"`
+		ErrorDesc   string          `json:"error_description"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return "", fmt.Errorf("failed to parse token response: %w", err)
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		// Fall back to the raw body — better to show HTML/gibberish than
+		// swallow a diagnostic that's sitting right there.
+		return "", fmt.Errorf("failed to parse token response (HTTP %d): %w; body: %s",
+			resp.StatusCode, err, previewBody(body))
 	}
-	if tokenResp.Error != "" {
-		return "", fmt.Errorf("%s: %s", tokenResp.Error, tokenResp.ErrorDesc)
+	if tokenResp.AccessToken != "" {
+		return tokenResp.AccessToken, nil
 	}
-	if tokenResp.AccessToken == "" {
-		return "", fmt.Errorf("no access_token in response (HTTP %d)", resp.StatusCode)
+	if len(tokenResp.Error) > 0 && string(tokenResp.Error) != "null" {
+		return "", fmt.Errorf("oauth error (HTTP %d): %s%s",
+			resp.StatusCode, decodeOAuthError(tokenResp.Error), suffixIfDesc(tokenResp.ErrorDesc))
 	}
-	return tokenResp.AccessToken, nil
+	return "", fmt.Errorf("no access_token in response (HTTP %d); body: %s",
+		resp.StatusCode, previewBody(body))
+}
+
+// decodeOAuthError renders the token endpoint's `error` field as a readable
+// string whether it came back as a bare string, an object with "message" /
+// "type", or something unexpected. Falls back to the raw JSON so we never
+// silently lose the failure reason.
+func decodeOAuthError(raw json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		if msg, ok := obj["message"].(string); ok && msg != "" {
+			if t, ok := obj["type"].(string); ok && t != "" {
+				return t + ": " + msg
+			}
+			return msg
+		}
+		if t, ok := obj["type"].(string); ok && t != "" {
+			return t
+		}
+	}
+	return string(raw)
+}
+
+func suffixIfDesc(desc string) string {
+	if desc == "" {
+		return ""
+	}
+	return " — " + desc
+}
+
+func previewBody(b []byte) string {
+	const max = 400
+	if len(b) > max {
+		return string(b[:max]) + "…"
+	}
+	return string(b)
 }
