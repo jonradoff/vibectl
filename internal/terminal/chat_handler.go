@@ -237,6 +237,23 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 										planText := extractPlanText(block.Input)
 										go h.planLogger(activeProjectID, block.ID, planText)
 									}
+									// Trace-log AskUserQuestion emissions so we can
+									// tell whether Claude Code is actually blocking
+									// on our tool_result_response reply — a matched
+									// pair of "AskUserQuestion emitted" then
+									// "delivering tool_result_response" with the same
+									// ID means we're doing our part; anything else
+									// means the assistant continued without waiting.
+									if block.Type == "tool_use" && block.Name == "AskUserQuestion" {
+										qCount := 0
+										if qs, ok := block.Input["questions"].([]interface{}); ok {
+											qCount = len(qs)
+										}
+										slog.Info("AskUserQuestion emitted by claude",
+											"projectID", activeProjectID,
+											"toolUseID", block.ID,
+											"questions", qCount)
+									}
 								}
 							}
 							// Capture code deltas on prompt completion (result events)
@@ -659,12 +676,20 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				continue
 			}
 			if activeProjectID == "" || tr.ToolUseID == "" {
+				slog.Warn("tool_result_response ignored — no context",
+					"projectID", activeProjectID, "toolUseID", tr.ToolUseID,
+					"contentLen", len(tr.Content))
 				continue
 			}
 			sess := h.manager.GetSession(activeProjectID)
 			if sess == nil {
+				slog.Warn("tool_result_response ignored — no session",
+					"projectID", activeProjectID, "toolUseID", tr.ToolUseID)
 				continue
 			}
+			slog.Info("delivering tool_result_response to claude",
+				"projectID", activeProjectID, "toolUseID", tr.ToolUseID,
+				"contentLen", len(tr.Content), "isError", tr.IsError)
 			if err := sess.SendToolResult(tr.ToolUseID, tr.Content, tr.IsError); err != nil {
 				slog.Error("failed to send tool result", "projectID", activeProjectID, "error", err)
 				if strings.HasPrefix(err.Error(), "SESSION_ENDED") {
