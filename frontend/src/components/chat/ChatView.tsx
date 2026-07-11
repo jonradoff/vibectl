@@ -2173,7 +2173,21 @@ interface AskQuestion {
 // and falls back to content otherwise ("Fix X").
 function TodoListCard({ block, compact }: { block: ToolUseBlock; compact?: boolean }) {
   type Todo = { content?: string; status?: string; activeForm?: string }
-  const raw = (block.input.todos as Todo[] | undefined) || []
+  // The `todos` field CAN be missing, a stringified array, or an object with
+  // wrong shape depending on historical Claude Code versions in the replayed
+  // transcript. Guard with Array.isArray — an unwrapped `|| []` does NOT
+  // catch objects (they're truthy) and the ".filter is not a function"
+  // TypeError takes the whole ChatView down when the transcript replays.
+  const rawRaw = (block.input as { todos?: unknown }).todos
+  let raw: Todo[] = []
+  if (Array.isArray(rawRaw)) {
+    raw = rawRaw as Todo[]
+  } else if (typeof rawRaw === 'string') {
+    try {
+      const parsed = JSON.parse(rawRaw)
+      if (Array.isArray(parsed)) raw = parsed as Todo[]
+    } catch { /* leave empty */ }
+  }
   const todos = raw.filter(t => t && (t.content || t.activeForm))
   if (todos.length === 0) return null
 
