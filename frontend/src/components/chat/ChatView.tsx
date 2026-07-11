@@ -107,6 +107,14 @@ interface LoginCodePromptMessage {
 
 type ChatMessage = UserMessage | AssistantMessage | ToolResultMessage | ControlRequestMessage | PlanModeMessage | LoginCodePromptMessage
 
+// Task tracker state — accumulated from TaskCreate/TaskUpdate calls across
+// the assistant's messages. taskId mirrors the sequential integer Claude
+// Code assigns at TaskCreate time (its input carries only subject/assignee;
+// the returned id is 1-indexed). `tasks: null` means "this message didn't
+// touch the tracker, so don't render the roll-up card here."
+type TaskItem = { taskId: string; subject: string; assignee?: string; status: string; order: number }
+type TaskSnapshot = { tasks: TaskItem[] | null }
+
 interface TextBlock {
   type: 'text'
   text: string
@@ -1306,6 +1314,62 @@ export default function ChatView({
     return 'text-gray-500'
   }, [status])
 
+  // Roll up TaskCreate/TaskUpdate calls into a per-message snapshot of the
+  // task tracker. Each Task* call is a discrete event (not a full snapshot
+  // like TodoWrite), so we accumulate state across ALL prior assistant
+  // messages and store the state AT each message index. MessageRenderer
+  // then draws one TaskListCard per message that touched tasks — showing
+  // pending/in-progress/completed check-off in place instead of a wall of
+  // repeated single-event chips.
+  //
+  // Claude Code hands out task IDs sequentially from the ORDER of
+  // TaskCreate calls (the input doesn't carry the id — the tool_result
+  // does — so we mirror the same "next integer" scheme here). Any
+  // TaskUpdate whose id we haven't seen still surfaces so nothing is
+  // silently dropped.
+  const taskStatesByIdx = useMemo(() => {
+    const states: TaskSnapshot[] = []
+    const cur = new Map<string, TaskItem>()
+    let nextId = 1
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (!block || block.type !== 'tool_use') continue
+          const name = block.name
+          const input = (block.input || {}) as Record<string, unknown>
+          if (name === 'TaskCreate') {
+            const id = String(nextId++)
+            const subject = typeof input.subject === 'string' ? input.subject : ''
+            const assignee = typeof input.assignee === 'string' ? input.assignee : undefined
+            cur.set(id, { taskId: id, subject, assignee, status: 'pending', order: nextId - 1 })
+          } else if (name === 'TaskUpdate') {
+            const id = String(input.taskId ?? '')
+            const status = typeof input.status === 'string' ? input.status : ''
+            const existing = cur.get(id)
+            if (existing) {
+              existing.status = status
+            } else if (id) {
+              cur.set(id, { taskId: id, subject: '(unknown task)', status, order: 0 })
+            }
+          }
+          // TaskOutput / TaskGet don't mutate tracker state, but their
+          // presence in a message still triggers rendering the roll-up
+          // so the user sees the current list even if the message only
+          // read a task.
+        }
+      }
+      // Snapshot AFTER processing this message, plus a flag for whether
+      // this message touched tasks at all (renderer uses the flag to
+      // decide whether to draw the card).
+      const touched =
+        msg.role === 'assistant' &&
+        Array.isArray(msg.content) &&
+        msg.content.some(b => b && b.type === 'tool_use' && (b.name === 'TaskCreate' || b.name === 'TaskUpdate' || b.name === 'TaskOutput' || b.name === 'TaskGet'))
+      states.push({ tasks: touched ? Array.from(cur.values()) : null })
+    }
+    return states
+  }, [messages])
+
   return (
     <div className="flex flex-col h-full bg-gray-900">
       {/* Status bar */}
@@ -1458,7 +1522,7 @@ export default function ChatView({
               })
             }} />
           }
-          return <MessageRenderer key={i} message={msg} compact={compact} onControlResponse={handleControlResponse} onPlanResponse={handlePlanResponse} onQuestionAnswer={handleQuestionAnswer} answeredQuestions={answeredQuestions} />
+          return <MessageRenderer key={i} message={msg} compact={compact} onControlResponse={handleControlResponse} onPlanResponse={handlePlanResponse} onQuestionAnswer={handleQuestionAnswer} answeredQuestions={answeredQuestions} taskState={taskStatesByIdx[i]} />
         })}
 
         {isStreaming && streamingText && (
@@ -2062,12 +2126,13 @@ function PermissionPrompt({ message, onRespond, compact }: {
   )
 }
 
-const MessageRenderer = memo(function MessageRenderer({ message, compact, onControlResponse, onPlanResponse, onQuestionAnswer, answeredQuestions }: {
+const MessageRenderer = memo(function MessageRenderer({ message, compact, onControlResponse, onPlanResponse, onQuestionAnswer, answeredQuestions, taskState }: {
   message: ChatMessage; compact?: boolean
   onControlResponse?: (requestId: string, behavior: 'allow' | 'deny', message?: string) => void
   onPlanResponse?: (requestId: string, accept: boolean, feedback?: string) => void
   onQuestionAnswer?: (toolUseId: string, answers: Record<string, string | string[]>) => void
   answeredQuestions?: Record<string, Record<string, string | string[]>>
+  taskState?: TaskSnapshot
 }) {
   if (message.role === 'user') {
     return (
@@ -2098,7 +2163,16 @@ const MessageRenderer = memo(function MessageRenderer({ message, compact, onCont
     return null
   }
 
-  // Assistant message
+  // Assistant message. When the message touches the Task tracker
+  // (TaskCreate/TaskUpdate/TaskOutput/TaskGet), collapse every Task* block
+  // into ONE TaskListCard placed where the FIRST Task* block appears, and
+  // suppress the individual Task* renders. Non-Task blocks stay in place
+  // and render normally. Result: instead of "TaskCreate ➕", "TaskCreate ➕",
+  // "TaskUpdate ◐", "TaskUpdate ●", ... the log shows a single checklist
+  // that reflects the tracker's current state at this point in the
+  // conversation, with pending / current / done clearly checked off.
+  const touchesTasks = !!taskState?.tasks && taskState.tasks.length > 0
+  let taskCardEmitted = false
   return (
     <div className="space-y-2">
       {message.content.map((block: ContentBlock, i: number) => {
@@ -2110,6 +2184,16 @@ const MessageRenderer = memo(function MessageRenderer({ message, compact, onCont
           )
         }
         if (block.type === 'tool_use') {
+          const isTaskBlock =
+            block.name === 'TaskCreate' ||
+            block.name === 'TaskUpdate' ||
+            block.name === 'TaskOutput' ||
+            block.name === 'TaskGet'
+          if (isTaskBlock && touchesTasks) {
+            if (taskCardEmitted) return null
+            taskCardEmitted = true
+            return <TaskListCard key={i} tasks={taskState!.tasks!} compact={compact} />
+          }
           return <ToolCallCard key={i} block={block} compact={compact} onQuestionAnswer={onQuestionAnswer} answeredQuestions={answeredQuestions} />
         }
         return null
@@ -2227,63 +2311,58 @@ function TodoListCard({ block, compact }: { block: ToolUseBlock; compact?: boole
   )
 }
 
-// TaskEventCard renders one Claude Code background-agent task tool call
-// (TaskCreate / TaskUpdate / TaskGet). Each call is a single event, not a
-// snapshot — a chain of them reads like a running task ledger. Matches the
-// same color language TodoListCard uses so the two systems look related in
-// the same log.
-function TaskEventCard({ block, compact }: { block: ToolUseBlock; compact?: boolean }) {
+// TaskListCard is the rolled-up view of Claude Code's background-agent
+// task tracker. Individual TaskCreate/TaskUpdate/TaskOutput/TaskGet
+// events are absorbed by the MessageRenderer into one card per message
+// that touches the tracker, showing the tracker's CURRENT state at that
+// point in the conversation. Empty box = pending, filled arrow = current,
+// check = completed, ✕ = failed/cancelled.
+function TaskListCard({ tasks, compact }: { tasks: TaskItem[]; compact?: boolean }) {
+  if (!tasks.length) return null
   const textSize = compact ? 'text-[11px]' : 'text-xs'
-  const input = block.input as { subject?: unknown; assignee?: unknown; taskId?: unknown; status?: unknown }
+  const done = tasks.filter(t => t.status === 'completed').length
+  const doing = tasks.filter(t => t.status === 'in_progress' || t.status === 'running').length
+  const failed = tasks.filter(t => t.status === 'failed' || t.status === 'cancelled').length
 
-  if (block.name === 'TaskCreate') {
-    const subject = typeof input.subject === 'string' ? input.subject : ''
-    const assignee = typeof input.assignee === 'string' ? input.assignee : ''
-    return (
-      <div className={`rounded-lg border border-indigo-800/40 bg-indigo-950/25 px-3 py-1.5 flex items-center gap-2 ${textSize}`}>
-        <span className="text-indigo-300 shrink-0" aria-hidden>➕</span>
-        <span className="text-indigo-300 font-medium uppercase tracking-wider text-[10px] shrink-0">Task</span>
-        <span className="text-gray-100 flex-1 truncate">{subject || '(no subject)'}</span>
-        {assignee && (
-          <span className="text-[10px] text-indigo-300/70 shrink-0 uppercase tracking-wide">→ {assignee}</span>
-        )}
-      </div>
-    )
-  }
-
-  if (block.name === 'TaskUpdate') {
-    const taskId = String(input.taskId ?? '')
-    const status = typeof input.status === 'string' ? input.status : ''
-    const isDone = status === 'completed'
-    const isDoing = status === 'in_progress' || status === 'running'
-    const isBad = status === 'failed' || status === 'cancelled'
-    const icon = isDone ? '●' : isDoing ? '◐' : isBad ? '✕' : '○'
-    const rowBg = isDone
-      ? 'border-emerald-800/40 bg-emerald-950/20'
-      : isDoing
-        ? 'border-indigo-800/40 bg-indigo-950/25'
-        : isBad
-          ? 'border-rose-800/40 bg-rose-950/20'
-          : 'border-gray-700/50 bg-gray-800/40'
-    const iconColor = isDone ? 'text-emerald-400' : isDoing ? 'text-indigo-300' : isBad ? 'text-rose-400' : 'text-gray-500'
-    const statusColor = isDone ? 'text-emerald-300' : isDoing ? 'text-indigo-200 font-medium' : isBad ? 'text-rose-300' : 'text-gray-300'
-    return (
-      <div className={`rounded-lg border ${rowBg} px-3 py-1.5 flex items-center gap-2 ${textSize}`}>
-        <span className={`${iconColor} shrink-0`} aria-hidden>{icon}</span>
-        <span className="text-gray-500 shrink-0 text-[10px] uppercase tracking-wider">Task #{taskId || '?'}</span>
-        <span className="text-gray-500">→</span>
-        <span className={`${statusColor} flex-1`}>{status || '(no status)'}</span>
-      </div>
-    )
-  }
-
-  // TaskGet — read-only lookup.
-  const taskId = String(input.taskId ?? '')
   return (
-    <div className={`rounded-lg border border-gray-700/50 bg-gray-800/30 px-3 py-1.5 flex items-center gap-2 ${textSize}`}>
-      <span className="text-gray-400 shrink-0" aria-hidden>🔍</span>
-      <span className="text-gray-400 shrink-0 text-[10px] uppercase tracking-wider">Task Get</span>
-      <span className="text-gray-300 flex-1">#{taskId || '?'}</span>
+    <div className="rounded-lg border border-indigo-800/40 bg-indigo-950/20 overflow-hidden">
+      <div className={`flex items-center gap-2 px-3 py-1.5 border-b border-indigo-800/30 ${textSize}`}>
+        <span className="text-indigo-300/90" aria-hidden>🎯</span>
+        <span className="text-indigo-300 font-medium uppercase tracking-wider text-[10px]">Tasks</span>
+        <span className="text-gray-500">
+          {done}/{tasks.length} done
+          {doing > 0 ? ` · ${doing} in progress` : ''}
+          {failed > 0 ? ` · ${failed} failed` : ''}
+        </span>
+      </div>
+      <ul className="px-3 py-1.5 space-y-0.5">
+        {tasks.map(t => {
+          const status = t.status || 'pending'
+          const isDone = status === 'completed'
+          const isDoing = status === 'in_progress' || status === 'running'
+          const isBad = status === 'failed' || status === 'cancelled'
+          const icon = isDone ? '☑' : isDoing ? '▶' : isBad ? '☒' : '☐'
+          const iconColor = isDone ? 'text-emerald-400' : isDoing ? 'text-indigo-300' : isBad ? 'text-rose-400' : 'text-gray-500'
+          const textColor = isDone
+            ? 'text-gray-500 line-through'
+            : isDoing
+              ? 'text-indigo-100 font-medium'
+              : isBad
+                ? 'text-rose-300 line-through'
+                : 'text-gray-300'
+          const rowBg = isDoing ? 'bg-indigo-950/30' : ''
+          return (
+            <li key={t.taskId} className={`flex items-start gap-2 ${textSize} py-0.5 px-1 rounded ${rowBg}`}>
+              <span className={`${iconColor} shrink-0 leading-5 select-none w-4 text-center`} aria-hidden>{icon}</span>
+              <span className="text-gray-600 shrink-0 leading-5 text-[10px] mt-[3px] font-mono">#{t.taskId}</span>
+              <span className={`${textColor} leading-5 flex-1 whitespace-pre-wrap`}>{t.subject || '(no subject)'}</span>
+              {t.assignee && !isDone && (
+                <span className="text-[10px] text-indigo-300/60 shrink-0 mt-[3px] uppercase tracking-wide">{t.assignee}</span>
+              )}
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }
@@ -2454,13 +2533,12 @@ const ToolCallCard = memo(function ToolCallCard({ block, compact, onQuestionAnsw
     return <TodoListCard block={block} compact={compact} />
   }
 
-  // TaskCreate / TaskUpdate / TaskGet → background-agent task tools. Unlike
-  // TodoWrite these do NOT send a full snapshot; each call is one discrete
-  // event (create a task, flip its status, look it up). Render each as a
-  // slim colored chip so a chain of them reads like a running task ledger.
-  if (block.name === 'TaskCreate' || block.name === 'TaskUpdate' || block.name === 'TaskGet') {
-    return <TaskEventCard block={block} compact={compact} />
-  }
+  // Task* blocks (TaskCreate / TaskUpdate / TaskOutput / TaskGet) are
+  // absorbed by MessageRenderer into one TaskListCard per message that
+  // touches the tracker — see the isTaskBlock branch there. Falling
+  // through to the generic tool row here shouldn't happen in practice,
+  // but stays as a safety net so an unrouted Task* block still renders
+  // instead of vanishing.
 
   const toolIcon = getToolIcon(block.name)
   const summary = getToolSummary(block.name, block.input)
