@@ -2213,6 +2213,67 @@ function TodoListCard({ block, compact }: { block: ToolUseBlock; compact?: boole
   )
 }
 
+// TaskEventCard renders one Claude Code background-agent task tool call
+// (TaskCreate / TaskUpdate / TaskGet). Each call is a single event, not a
+// snapshot — a chain of them reads like a running task ledger. Matches the
+// same color language TodoListCard uses so the two systems look related in
+// the same log.
+function TaskEventCard({ block, compact }: { block: ToolUseBlock; compact?: boolean }) {
+  const textSize = compact ? 'text-[11px]' : 'text-xs'
+  const input = block.input as { subject?: unknown; assignee?: unknown; taskId?: unknown; status?: unknown }
+
+  if (block.name === 'TaskCreate') {
+    const subject = typeof input.subject === 'string' ? input.subject : ''
+    const assignee = typeof input.assignee === 'string' ? input.assignee : ''
+    return (
+      <div className={`rounded-lg border border-indigo-800/40 bg-indigo-950/25 px-3 py-1.5 flex items-center gap-2 ${textSize}`}>
+        <span className="text-indigo-300 shrink-0" aria-hidden>➕</span>
+        <span className="text-indigo-300 font-medium uppercase tracking-wider text-[10px] shrink-0">Task</span>
+        <span className="text-gray-100 flex-1 truncate">{subject || '(no subject)'}</span>
+        {assignee && (
+          <span className="text-[10px] text-indigo-300/70 shrink-0 uppercase tracking-wide">→ {assignee}</span>
+        )}
+      </div>
+    )
+  }
+
+  if (block.name === 'TaskUpdate') {
+    const taskId = String(input.taskId ?? '')
+    const status = typeof input.status === 'string' ? input.status : ''
+    const isDone = status === 'completed'
+    const isDoing = status === 'in_progress' || status === 'running'
+    const isBad = status === 'failed' || status === 'cancelled'
+    const icon = isDone ? '●' : isDoing ? '◐' : isBad ? '✕' : '○'
+    const rowBg = isDone
+      ? 'border-emerald-800/40 bg-emerald-950/20'
+      : isDoing
+        ? 'border-indigo-800/40 bg-indigo-950/25'
+        : isBad
+          ? 'border-rose-800/40 bg-rose-950/20'
+          : 'border-gray-700/50 bg-gray-800/40'
+    const iconColor = isDone ? 'text-emerald-400' : isDoing ? 'text-indigo-300' : isBad ? 'text-rose-400' : 'text-gray-500'
+    const statusColor = isDone ? 'text-emerald-300' : isDoing ? 'text-indigo-200 font-medium' : isBad ? 'text-rose-300' : 'text-gray-300'
+    return (
+      <div className={`rounded-lg border ${rowBg} px-3 py-1.5 flex items-center gap-2 ${textSize}`}>
+        <span className={`${iconColor} shrink-0`} aria-hidden>{icon}</span>
+        <span className="text-gray-500 shrink-0 text-[10px] uppercase tracking-wider">Task #{taskId || '?'}</span>
+        <span className="text-gray-500">→</span>
+        <span className={`${statusColor} flex-1`}>{status || '(no status)'}</span>
+      </div>
+    )
+  }
+
+  // TaskGet — read-only lookup.
+  const taskId = String(input.taskId ?? '')
+  return (
+    <div className={`rounded-lg border border-gray-700/50 bg-gray-800/30 px-3 py-1.5 flex items-center gap-2 ${textSize}`}>
+      <span className="text-gray-400 shrink-0" aria-hidden>🔍</span>
+      <span className="text-gray-400 shrink-0 text-[10px] uppercase tracking-wider">Task Get</span>
+      <span className="text-gray-300 flex-1">#{taskId || '?'}</span>
+    </div>
+  )
+}
+
 function AskUserQuestionCard({ block, compact, onSubmit, answered }: {
   block: ToolUseBlock
   compact?: boolean
@@ -2377,6 +2438,14 @@ const ToolCallCard = memo(function ToolCallCard({ block, compact, onQuestionAnsw
   // that point in the conversation.
   if (block.name === 'TodoWrite') {
     return <TodoListCard block={block} compact={compact} />
+  }
+
+  // TaskCreate / TaskUpdate / TaskGet → background-agent task tools. Unlike
+  // TodoWrite these do NOT send a full snapshot; each call is one discrete
+  // event (create a task, flip its status, look it up). Render each as a
+  // slim colored chip so a chain of them reads like a running task ledger.
+  if (block.name === 'TaskCreate' || block.name === 'TaskUpdate' || block.name === 'TaskGet') {
+    return <TaskEventCard block={block} compact={compact} />
   }
 
   const toolIcon = getToolIcon(block.name)
