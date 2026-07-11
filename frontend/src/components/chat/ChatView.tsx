@@ -2162,6 +2162,57 @@ interface AskQuestion {
   multiSelect?: boolean
   options: Array<{ label: string; description?: string; preview?: string }>
 }
+// TodoListCard renders TodoWrite tool calls as a compact VSCode-style
+// checklist. Each TodoWrite call is a FULL snapshot (Claude passes the
+// entire list every time), so each rendered card is a self-contained view
+// of tracker state at that point in the conversation. Status → icon:
+//   pending      →  ○  gray
+//   in_progress  →  ◐  indigo, in a soft-pulse background
+//   completed    →  ●  emerald (with strike-through)
+// The label prefers activeForm when the item is in_progress ("Fixing X")
+// and falls back to content otherwise ("Fix X").
+function TodoListCard({ block, compact }: { block: ToolUseBlock; compact?: boolean }) {
+  type Todo = { content?: string; status?: string; activeForm?: string }
+  const raw = (block.input.todos as Todo[] | undefined) || []
+  const todos = raw.filter(t => t && (t.content || t.activeForm))
+  if (todos.length === 0) return null
+
+  const done = todos.filter(t => t.status === 'completed').length
+  const inProgress = todos.filter(t => t.status === 'in_progress').length
+  const total = todos.length
+
+  const textSize = compact ? 'text-[11px]' : 'text-xs'
+
+  return (
+    <div className="rounded-lg border border-gray-700/60 bg-gray-800/40 overflow-hidden">
+      <div className={`flex items-center gap-2 px-3 py-1.5 border-b border-gray-700/40 ${textSize}`}>
+        <span className="text-cyan-400/90">📋</span>
+        <span className="text-cyan-300 font-medium uppercase tracking-wider text-[10px]">Tasks</span>
+        <span className="text-gray-500">
+          {done}/{total} done{inProgress > 0 ? ` · ${inProgress} in progress` : ''}
+        </span>
+      </div>
+      <ul className="px-3 py-1.5 space-y-0.5">
+        {todos.map((t, i) => {
+          const status = t.status || 'pending'
+          const isDone = status === 'completed'
+          const isDoing = status === 'in_progress'
+          const label = isDoing ? (t.activeForm || t.content || '') : (t.content || t.activeForm || '')
+          const icon = isDone ? '●' : isDoing ? '◐' : '○'
+          const iconColor = isDone ? 'text-emerald-400' : isDoing ? 'text-indigo-300' : 'text-gray-500'
+          const textColor = isDone ? 'text-gray-500 line-through' : isDoing ? 'text-indigo-100 font-medium' : 'text-gray-300'
+          return (
+            <li key={i} className={`flex items-start gap-2 ${textSize} py-0.5 px-1 rounded ${isDoing ? 'bg-indigo-950/25' : ''}`}>
+              <span className={`${iconColor} shrink-0 leading-5 select-none`} aria-hidden>{icon}</span>
+              <span className={`${textColor} leading-5 flex-1 whitespace-pre-wrap`}>{label}</span>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
 function AskUserQuestionCard({ block, compact, onSubmit, answered }: {
   block: ToolUseBlock
   compact?: boolean
@@ -2319,6 +2370,13 @@ const ToolCallCard = memo(function ToolCallCard({ block, compact, onQuestionAnsw
         answered={answeredQuestions?.[block.id]}
       />
     )
+  }
+
+  // TodoWrite → VSCode-style checklist. Every call is a full snapshot of the
+  // todo list, so each rendering is a self-contained view of the tracker at
+  // that point in the conversation.
+  if (block.name === 'TodoWrite') {
+    return <TodoListCard block={block} compact={compact} />
   }
 
   const toolIcon = getToolIcon(block.name)
