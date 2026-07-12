@@ -1348,9 +1348,14 @@ export default function ChatView({
             const existing = cur.get(id)
             if (existing) {
               existing.status = status
-            } else if (id) {
-              cur.set(id, { taskId: id, subject: '(unknown task)', status, order: 0 })
             }
+            // Silently drop TaskUpdate calls that reference a taskId we've
+            // never seen a TaskCreate for. In practice this is the
+            // assistant emitting a bad taskId (seen 2026-07-12 on Stapledon:
+            // 12 creates but an update against taskId=13). Rendering a
+            // "(unknown task)" row was more confusing than useful — the
+            // real task list still reflects everything that was actually
+            // created.
           }
           // TaskOutput / TaskGet don't mutate tracker state, but their
           // presence in a message still triggers rendering the roll-up
