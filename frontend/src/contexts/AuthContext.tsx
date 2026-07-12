@@ -72,18 +72,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // via GitHub they don't need the temp password and can set one from their profile.
           setRequirePasswordChange(user.isDefaultPassword && !user.githubId);
         } catch {
-          clearStoredToken();
-          setAuthenticated(false);
-          setCurrentUser(null);
+          // /auth/me failed but the earlier /auth/status said the token is
+          // valid — treat this as a transient network / DB blip, keep the
+          // user logged in, and let the next recheck retry. Previously we
+          // forced-logout here, which under a degraded Mongo Atlas link
+          // was kicking Jon to the login screen every few minutes.
         }
+      } else if (!getStoredToken()) {
+        // No token stored → user is genuinely unauthenticated. Safe to
+        // drop into the login screen.
+        setAuthenticated(false);
+        setCurrentUser(null);
       } else {
-        clearStoredToken();
+        // We DO have a stored token but the server said tokenValid=false.
+        // Under normal operation this means the token was revoked or
+        // expired — clear it. But when Mongo is slow the backend's Verify
+        // call times out and returns tokenValid=false spuriously. Do NOT
+        // force logout here; drop authenticated so the AuthGate re-checks
+        // shortly, without wiping the token. If the token really is bad
+        // the next successful recheck (or an actual 401 from a real
+        // endpoint via the vibectl:unauthorized event) will clear it.
         setAuthenticated(false);
         setCurrentUser(null);
       }
     } catch {
-      setAuthenticated(false);
-      setCurrentUser(null);
+      // /auth/status itself errored — network/DB blip. Keep whatever auth
+      // state we already have. Do NOT flip to unauthenticated; the app
+      // was working a moment ago, no reason to drop the user.
     } finally {
       setLoading(false);
     }

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -73,17 +74,33 @@ func NewAuthHandler(userSvc *services.UserService, sessionSvc *services.AuthSess
 
 // AuthStatus returns the current auth state for the frontend.
 // This endpoint is always public.
+//
+// Bounded to 3s per DB round-trip so a degraded Mongo Atlas link can't
+// stall the endpoint for 27 seconds (observed 2026-07-11). When the DB
+// times out, `degraded: true` is set on the response so the frontend
+// knows the state is uncertain and can retry instead of dropping the
+// user's session.
 func (h *AuthHandler) AuthStatus(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	degraded := false
 
-	count, _ := h.userSvc.Count(ctx)
-	noUsers := count == 0
+	countCtx, countCancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer countCancel()
+	count, countErr := h.userSvc.Count(countCtx)
+	if countErr != nil {
+		degraded = true
+	}
+	noUsers := count == 0 && countErr == nil
 
 	var tokenValid bool
 	token := extractBearerToken(r)
 	if token != "" && !noUsers {
-		if u, err := h.sessionSvc.Verify(ctx, token); err == nil && u != nil {
+		verifyCtx, verifyCancel := context.WithTimeout(r.Context(), 3*time.Second)
+		u, err := h.sessionSvc.Verify(verifyCtx, token)
+		verifyCancel()
+		if err == nil && u != nil {
 			tokenValid = true
+		} else if err != nil {
+			degraded = true
 		}
 	}
 
@@ -95,6 +112,7 @@ func (h *AuthHandler) AuthStatus(w http.ResponseWriter, r *http.Request) {
 		"githubEnabled":           h.githubClientID != "",
 		"githubTokenConfigured":   h.githubToken != "",
 		"anthropicEnabled":        h.anthropicEnabled,
+		"degraded":                degraded,
 	})
 }
 
