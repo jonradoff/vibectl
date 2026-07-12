@@ -184,6 +184,9 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	token := extractBearerToken(r)
 	if token != "" {
 		h.sessionSvc.Revoke(r.Context(), token)
+		// Drop the middleware's verify cache entry so this token can't
+		// keep authenticating for the remainder of its cached window.
+		middleware.InvalidateAuthCache(token)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
