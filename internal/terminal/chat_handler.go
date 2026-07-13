@@ -699,6 +699,36 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				}
 			}
 
+		case "set_model":
+			// Live model swap on the running claude session — no restart.
+			// Uses Claude Code's stream-json set_model control_request (same
+			// path its /model command uses). Falls through silently if no
+			// session is live; the model override is expected to already be
+			// persisted via updateProject so the next spawn picks it up.
+			var setModelMsg struct {
+				Model string `json:"model"`
+			}
+			if err := json.Unmarshal(msg.Data, &setModelMsg); err != nil {
+				slog.Error("invalid set_model message", "error", err)
+				continue
+			}
+			if activeProjectID == "" || setModelMsg.Model == "" {
+				continue
+			}
+			sess := h.manager.GetSession(activeProjectID)
+			if sess == nil {
+				// No live session to swap; the persisted override will apply
+				// on next launch. Not an error.
+				continue
+			}
+			if err := sess.SendSetModel(setModelMsg.Model); err != nil {
+				slog.Warn("failed to send set_model, session may need restart",
+					"projectID", activeProjectID, "model", setModelMsg.Model, "error", err)
+				if strings.HasPrefix(err.Error(), "SESSION_ENDED") {
+					sendJSON("session_ended", map[string]string{"message": err.Error()})
+				}
+			}
+
 		case "interrupt":
 			// Send SIGINT to gracefully stop the running claude process.
 			if activeProjectID == "" {

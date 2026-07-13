@@ -280,6 +280,57 @@ func (s *ChatSession) SendToolResult(toolUseID, content string, isError bool) er
 	return nil
 }
 
+// SendSetModel writes a control_request to claude's stdin asking the running
+// session to switch to a new model in place. Claude Code's stream-json
+// protocol supports subtype "set_model" (verified against the shipped
+// binary — same path the CLI's own `/model` command uses). Subsequent
+// assistant turns use the new model; there is no process kill or session
+// reset, so context, subagents, and MCP state all survive.
+//
+// Returns an error only if the process is dead or stdin is closed. If the
+// model id is invalid, claude will emit a "model_unavailable" event later —
+// same failure mode as the spawn-time `--model` path — and we let the
+// frontend handle that with the existing model_unavailable UI.
+func (s *ChatSession) SendSetModel(model string) error {
+	select {
+	case <-s.exited:
+		return fmt.Errorf("SESSION_ENDED: Claude Code is no longer running")
+	default:
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.stdin == nil {
+		return fmt.Errorf("SESSION_ENDED: stdin closed")
+	}
+
+	// request_id just needs to be unique per outstanding request; a short
+	// timestamp+model prefix is fine — vibectl doesn't currently correlate
+	// control_response events back to callers.
+	reqID := fmt.Sprintf("vibectl-set-model-%d", time.Now().UnixNano())
+	msg := map[string]interface{}{
+		"type":       "control_request",
+		"request_id": reqID,
+		"request": map[string]interface{}{
+			"subtype": "set_model",
+			"model":   model,
+		},
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal set_model request: %w", err)
+	}
+	data = append(data, '\n')
+	if _, err := s.stdin.Write(data); err != nil {
+		return fmt.Errorf("write set_model to stdin: %w", err)
+	}
+	s.lastActivity = time.Now()
+	slog.Info("sent set_model to claude",
+		"projectID", s.ProjectCode, "model", model, "requestID", reqID)
+	return nil
+}
+
 // SendControlResponse writes a control_response to claude's stdin (for permission approvals/denials).
 func (s *ChatSession) SendControlResponse(requestID string, response json.RawMessage) error {
 	select {

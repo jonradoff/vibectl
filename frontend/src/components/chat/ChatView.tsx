@@ -1558,8 +1558,7 @@ export default function ChatView({
               <button onClick={() => { setShowModelPicker(false); setPickerModel('') }} className="text-gray-600 hover:text-gray-400 text-[10px] shrink-0">cancel</button>
             </div>
             <p className="text-[11px] text-indigo-200/80 leading-relaxed">
-              Picks a project-level override. Restarts the current session so Claude Code re-reads it.
-              Prefer typing directly? Use <code className="font-mono text-indigo-100">/model &lt;id&gt;</code>.
+              Picks a project-level override. Applied live to the current session — no restart, no context loss. Same protocol Claude Code's <code className="font-mono text-indigo-100">/model</code> uses.
             </p>
             <div className="flex items-center gap-2">
               <ModelPicker value={pickerModel} onChange={setPickerModel} placeholder="Pick a model" />
@@ -1577,24 +1576,19 @@ export default function ChatView({
                   // assistant event is many seconds away.
                   setCurrentModel(chosen)
                   onModelChange?.(chosen)
-                  if (wsRef.current?.readyState === WebSocket.OPEN) {
-                    wsRef.current.send(JSON.stringify({ type: 'kill' }))
-                  }
+                  // Live swap via stream-json set_model control_request.
+                  // Backend routes through ChatSession.SendSetModel; the
+                  // running claude process continues on the new model
+                  // without a spawn/kill. If no session is live, the
+                  // updateProject above ensures the next launch picks up
+                  // the override — no explicit restart needed either way.
+                  sendWsMessage('set_model', { model: chosen })
                   setShowModelPicker(false)
                   setPickerModel('')
-                  persistentWs.delete(projectCode)
-                  persistentMessages.delete(projectCode)
-                  persistentStreamingText.delete(projectCode)
-                  setTimeout(() => {
-                    if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
-                    setMessages([])
-                    setStreamingText('')
-                    setResetKey(k => k + 1)
-                  }, 200)
                 }}
                 className="px-2 py-1 text-[10px] font-medium rounded bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white hover:bg-indigo-600"
               >
-                Save & restart
+                Apply
               </button>
             </div>
           </div>
