@@ -136,17 +136,18 @@ func (s *ChatSessionService) GetLastSessionID(ctx context.Context, projectCode s
 // found with session ID"), so the next launch starts fresh instead of trying
 // to resume the dead ID again.
 //
-// Also sets noResume: true so the resilience fallbacks in chat_handler
-// (cross-dir session lookup, chat_history archive scan, latest-on-disk) skip
-// this project until the next successful fresh spawn (Upsert clears the flag).
-// Without this, a user-initiated Reset would immediately be undone by the
-// fallbacks finding the just-abandoned session on disk and resuming it.
+// Does NOT set noResume — the on-disk fallbacks in chat_handler (cross-dir
+// session lookup, chat_history archive scan, latest-on-disk) should still
+// fire on the next launch so a legitimate prior conversation survives the
+// orphan-clear. Only user-initiated Reset should gate those fallbacks; use
+// SetNoResume for that path. Credit exhaustion + orphan-clear used to
+// silently strand STPL/LOOM history behind the gate; splitting the two
+// behaviors is the fix.
 func (s *ChatSessionService) ClearSession(ctx context.Context, projectCode string) error {
 	filter := bson.D{{Key: "projectCode", Value: projectCode}}
 	update := bson.D{
 		{Key: "$set", Value: bson.D{
 			{Key: "status", Value: "dead"},
-			{Key: "noResume", Value: true},
 			{Key: "updatedAt", Value: time.Now().UTC()},
 		}},
 		{Key: "$unset", Value: bson.D{{Key: "claudeSessionId", Value: ""}}},
@@ -161,6 +162,33 @@ func (s *ChatSessionService) ClearSession(ctx context.Context, projectCode strin
 	// If a reset does nothing, we want to see it in logs.
 	if res.MatchedCount == 0 {
 		slog.Warn("ClearSession matched 0 documents — projectCode mismatch?",
+			"projectCode", projectCode)
+	}
+	return nil
+}
+
+// SetNoResume flips the noResume gate on a project's chat_sessions doc. Only
+// user-initiated Reset should call this — it tells chat_handler's launch
+// path to skip all on-disk fallbacks and spawn a genuinely fresh Claude
+// Code process. The flag is cleared automatically by Upsert once a fresh
+// session commits its first turn. Also clears claudeSessionId as a
+// courtesy so an accidental resume of the just-abandoned ID can't happen.
+func (s *ChatSessionService) SetNoResume(ctx context.Context, projectCode string) error {
+	filter := bson.D{{Key: "projectCode", Value: projectCode}}
+	update := bson.D{
+		{Key: "$set", Value: bson.D{
+			{Key: "status", Value: "dead"},
+			{Key: "noResume", Value: true},
+			{Key: "updatedAt", Value: time.Now().UTC()},
+		}},
+		{Key: "$unset", Value: bson.D{{Key: "claudeSessionId", Value: ""}}},
+	}
+	res, err := s.collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		slog.Warn("SetNoResume matched 0 documents — projectCode mismatch?",
 			"projectCode", projectCode)
 	}
 	return nil

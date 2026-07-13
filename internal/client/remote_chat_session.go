@@ -115,6 +115,16 @@ func (s *RemoteChatSessionService) ClearSession(ctx context.Context, projectID s
 	return nil
 }
 
+// SetNoResume is a best-effort remote call. Delegated mode's remote server
+// doesn't currently expose a dedicated endpoint for it, so we fall back to
+// the existing ClearSession — which in remote mode still fires the
+// "unset claudeSessionId" behavior via the /clear endpoint. Orphan-clear
+// behavior is a bit off in delegated mode but the standalone path (where
+// Reset actually lives in the UI) is unaffected.
+func (s *RemoteChatSessionService) SetNoResume(ctx context.Context, projectID string) error {
+	return s.ClearSession(ctx, projectID)
+}
+
 // IsResetFlagged reports whether the remote chat_sessions doc carries
 // noResume: true (set by ClearSession when the user pressed Restart in
 // Session History). Delegated mode: the remote server doesn't currently
