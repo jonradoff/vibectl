@@ -196,6 +196,15 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				case <-sess.Exited():
 					sendStatus("exited")
 					return
+				case <-unsub:
+					// The WS handler asked us to detach (typically because a
+					// restart / compact is swapping in a new session). Without
+					// this case the reader stays parked in <-outputCh — which
+					// only closes on the NEXT broadcast — so `<-readerDone` in
+					// the restart path blocks forever if claude happens to be
+					// idle. Symptom: /compact spinner never leaves; typing does
+					// nothing. Observed 2026-07-19 in HSAAS.
+					return
 				case data, ok := <-outputCh:
 					if !ok {
 						sendStatus("exited")
