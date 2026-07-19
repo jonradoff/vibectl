@@ -948,17 +948,26 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			h.manager.SetProjectToken(pid, tokenMsg.Token)
 			slog.Info("per-project Claude token set", "projectID", pid)
 
-			// Tear down old session if one exists
+			// Tear down old session if one exists, capturing its session ID
+			// and buffered messages so the new spawn can --resume the SAME
+			// conversation under the new account. Previously we called
+			// StartSession, which lost every prior turn — an account switch
+			// was silently destructive. Now the account changes, the
+			// transcript stays.
 			if unsubscribe != nil {
 				close(unsubscribe)
 				unsubscribe = nil
 			}
 			oldSess := h.manager.GetSession(pid)
 			lp := tokenMsg.LocalPath
+			var oldSessionID string
+			var savedMessages []json.RawMessage
 			if oldSess != nil {
 				if lp == "" {
 					lp = oldSess.LocalPath
 				}
+				oldSessionID = oldSess.SessionID
+				savedMessages = oldSess.Messages()
 				oldSess.Close()
 			}
 			if readerDone != nil {
@@ -967,8 +976,13 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			}
 			h.manager.RemoveSession(pid)
 
-			// Start fresh session (new account = new session, don't resume)
-			newSess, startErr := h.manager.StartSession(pid, lp)
+			var newSess *ChatSession
+			var startErr error
+			if oldSessionID != "" {
+				newSess, startErr = h.manager.ResumeSession(pid, lp, oldSessionID, savedMessages)
+			} else {
+				newSess, startErr = h.manager.StartSession(pid, lp)
+			}
 			if startErr != nil {
 				slog.Error("failed to restart with new token", "error", startErr)
 				sendJSON("error", map[string]string{"message": startErr.Error()})
@@ -1048,17 +1062,23 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 
 			h.manager.SetProjectToken(pid, token)
 
-			// Tear down old session
+			// Tear down old session, capturing session ID + buffered messages
+			// so we can --resume the SAME conversation under the new account.
+			// See notes on set_project_token above.
 			if unsubscribe != nil {
 				close(unsubscribe)
 				unsubscribe = nil
 			}
 			oldSess := h.manager.GetSession(pid)
 			lp := exchangeMsg.LocalPath
+			var oldSessionID string
+			var savedMessages []json.RawMessage
 			if oldSess != nil {
 				if lp == "" {
 					lp = oldSess.LocalPath
 				}
+				oldSessionID = oldSess.SessionID
+				savedMessages = oldSess.Messages()
 				oldSess.Close()
 			}
 			if readerDone != nil {
@@ -1067,7 +1087,13 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			}
 			h.manager.RemoveSession(pid)
 
-			newSess, startErr := h.manager.StartSession(pid, lp)
+			var newSess *ChatSession
+			var startErr error
+			if oldSessionID != "" {
+				newSess, startErr = h.manager.ResumeSession(pid, lp, oldSessionID, savedMessages)
+			} else {
+				newSess, startErr = h.manager.StartSession(pid, lp)
+			}
 			if startErr != nil {
 				sendJSON("login_status", map[string]string{"status": "error", "message": startErr.Error()})
 				activeProjectID = ""
