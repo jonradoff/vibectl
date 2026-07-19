@@ -1196,6 +1196,29 @@ func (m *ChatManager) ResumeSession(projectID, localPath, claudeSessionID string
 }
 
 // KillSession kills the process for the given project.
+// KillLiveSession terminates any running Claude Code subprocess for a
+// project WITHOUT writing anything to the chat_sessions doc. Unlike
+// KillSession — which calls MarkDead — this preserves whatever status /
+// claudeSessionId the caller just wrote. Used by the "Adopt session"
+// path so the just-set claudeSessionId doesn't get clobbered to
+// status=dead a millisecond later.
+//
+// No error if there's no live session; the operation is a no-op.
+func (m *ChatManager) KillLiveSession(projectID string) error {
+	m.mu.Lock()
+	sess, ok := m.sessions[projectID]
+	if ok {
+		delete(m.sessions, projectID)
+	}
+	m.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	err := sess.Close()
+	slog.Info("live chat session killed (no DB write)", "projectID", projectID, "sessionID", sess.ID)
+	return err
+}
+
 func (m *ChatManager) KillSession(projectID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

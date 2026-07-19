@@ -499,6 +499,18 @@ export const getChatHistoryEntry = (historyId: string) =>
 export const resetChatSession = (projectCode: string) =>
   request<void>(`/projects/${projectCode}/chat-session/reset`, { method: 'POST' });
 
+// Adopt an archived / on-disk Claude Code session as the project's current
+// resumable session. Backend swaps chat_sessions.claudeSessionId to point at
+// this ID, clears any noResume gate, and terminates any currently-running
+// subprocess (without a MarkDead write that would clobber the adoption).
+// Next chat_launch on this project resumes THAT session. Takes projectCode
+// (see resetChatSession's comment about the URL routing/semantics).
+export const adoptChatSession = (projectCode: string, claudeSessionId: string, localPath: string) =>
+  request<void>(`/projects/${projectCode}/chat-session/adopt`, {
+    method: 'POST',
+    body: JSON.stringify({ claudeSessionId, localPath }),
+  });
+
 // ---- VIBECTL.md ----
 export const generateVibectlMd = (projectId: string) =>
   request<{ generated: boolean }>(`/projects/${projectId}/vibectl-md/generate`, { method: 'POST' });

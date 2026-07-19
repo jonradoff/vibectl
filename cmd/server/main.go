@@ -538,6 +538,7 @@ func main() {
 	chatHistoryHandler := handlers.NewChatHistoryHandler(chatHistoryService)
 	chatSessionHandler := handlers.NewChatSessionHandler(chatSessionService, chatHistoryService)
 	chatSessionHandler.ResetSession = chatManager.ResetSession
+	chatSessionHandler.KillLiveSession = chatManager.KillLiveSession
 	planHandler := handlers.NewPlanHandler(planService)
 	intentHandler := handlers.NewIntentHandler(intentService, intentExtractor, projectService)
 

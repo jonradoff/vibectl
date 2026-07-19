@@ -21,6 +21,11 @@ type ChatSessionHandler struct {
 	// silently remounts), then clear the persisted claudeSessionId. Wired
 	// to chatManager.ResetSession in cmd/server/main.go.
 	ResetSession func(projectID string) error
+	// KillLiveSession is an optional hook that terminates a running
+	// subprocess WITHOUT writing anything to the DB. Used by Adopt so the
+	// just-written claudeSessionId isn't clobbered by MarkDead. Wired to
+	// chatManager.KillLiveSession in cmd/server/main.go.
+	KillLiveSession func(projectID string) error
 }
 
 func NewChatSessionHandler(svc *services.ChatSessionService, chs *services.ChatHistoryService) *ChatSessionHandler {
@@ -36,7 +41,46 @@ func (h *ChatSessionHandler) Routes() func(chi.Router) {
 		r.Get("/resumable", h.GetResumable)
 		r.Post("/archive", h.Archive)
 		r.Post("/reset", h.Reset)
+		r.Post("/adopt", h.Adopt)
 	}
+}
+
+// Adopt points the project's chat_sessions doc at an existing Claude Code
+// session ID so the next launch resumes THAT session. Used by the Session
+// History "Resume this session" button — restores an archived conversation
+// (from chat_history) or an orphaned on-disk JSONL (post-credit-exhaustion,
+// post-account-swap, etc.) without a mongosh escape hatch.
+//
+// Also tears down any currently-running Claude Code process for this
+// project so the frontend's next chat_launch takes the resume path
+// cleanly instead of reconnecting to whatever session was live.
+func (h *ChatSessionHandler) Adopt(w http.ResponseWriter, r *http.Request) {
+	projectCode := chi.URLParam(r, "id")
+	var req struct {
+		ClaudeSessionID string `json:"claudeSessionId"`
+		LocalPath       string `json:"localPath"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+		return
+	}
+	if req.ClaudeSessionID == "" || req.LocalPath == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "claudeSessionId and localPath are required", "BAD_REQUEST")
+		return
+	}
+	if err := h.svc.AdoptSession(r.Context(), projectCode, req.ClaudeSessionID, req.LocalPath); err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, err.Error(), "ADOPT_ERROR")
+		return
+	}
+	// Kill any live process for this project — ResetSession does the reap
+	// with the right suppress-system_error / broadcast-session_reaped
+	// wiring, but we do NOT want its SetNoResume side effect (that would
+	// undo the adoption we just wrote). Use KillLiveSession which the
+	// hook wires to ChatManager.KillLiveSession — kill only, no DB write.
+	if h.KillLiveSession != nil {
+		_ = h.KillLiveSession(projectCode)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Reset performs a hard reset: kills the running Claude Code subprocess (if

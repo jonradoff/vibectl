@@ -167,6 +167,37 @@ func (s *ChatSessionService) ClearSession(ctx context.Context, projectCode strin
 	return nil
 }
 
+// AdoptSession points a project's chat_sessions doc at an existing Claude
+// Code session ID + local path so the next launch resumes THAT session
+// instead of whatever the doc had before. Used by the Session History
+// "Resume this session" button to revive an archived / on-disk transcript.
+//
+// Clears noResume (an adoption is the opposite of a user Reset) and marks
+// the session resumable so the launch path's GetResumable check picks it up.
+func (s *ChatSessionService) AdoptSession(ctx context.Context, projectCode, sessionID, localPath string) error {
+	filter := bson.D{{Key: "projectCode", Value: projectCode}}
+	update := bson.D{
+		{Key: "$set", Value: bson.D{
+			{Key: "projectCode", Value: projectCode},
+			{Key: "claudeSessionId", Value: sessionID},
+			{Key: "localPath", Value: localPath},
+			{Key: "status", Value: "resumable"},
+			{Key: "updatedAt", Value: time.Now().UTC()},
+		}},
+		{Key: "$unset", Value: bson.D{{Key: "noResume", Value: ""}}},
+	}
+	opts := options.UpdateOne().SetUpsert(true)
+	res, err := s.collection.UpdateOne(ctx, filter, update, opts)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 && res.UpsertedCount == 0 {
+		slog.Warn("AdoptSession matched 0 documents and did not upsert — projectCode mismatch?",
+			"projectCode", projectCode)
+	}
+	return nil
+}
+
 // SetNoResume flips the noResume gate on a project's chat_sessions doc. Only
 // user-initiated Reset should call this — it tells chat_handler's launch
 // path to skip all on-disk fallbacks and spawn a genuinely fresh Claude

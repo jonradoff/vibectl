@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 // react-router-dom not needed — issue detail shown inline
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listIssues, updateProject, createIssue, transitionIssueStatus, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, resetChatSession, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode, checkDir, getGitStatus, gitCommit } from '../../api/client'
+import { listIssues, updateProject, createIssue, transitionIssueStatus, archiveProject, runHealthCheck, getHealthHistory, listChatHistory, getChatHistoryEntry, resetChatSession, adoptChatSession, listActivityLog, getSelfInfo, triggerRebuild, getCloneSSEUrl, getPullSSEUrl, getSettings, detectFlyToml, detectStartSh, listUnits, addUnit, detachUnit, attachUnit, getProject, listProjects, listAllTags, listIntents, patchIntent, exportProjectToRemote, getDelegationStatus, getViewMode, checkDir, getGitStatus, gitCommit } from '../../api/client'
 import type { Intent } from '../../types'
 import type { Project, ProjectSummary, Issue, IssueType, Priority, HealthCheckConfig, DeploymentConfig, HealthCheckResult, HealthRecord, ChatHistorySummary, ActivityLogEntry } from '../../types'
 import { statusTransitions, typeColors, priorityColors } from '../../types'
@@ -604,7 +604,7 @@ export default function ProjectCard({ summary, embedded }: ProjectCardProps) {
           </div>
         )}
         {activeTab === 'history' && (
-          <ChatHistoryTab projectCode={project.code} currentSession={currentSession} onSessionReset={() => setChatViewKey(k => k + 1)} />
+          <ChatHistoryTab projectCode={project.code} localPath={project.links.localPath || ''} currentSession={currentSession} onSessionReset={() => setChatViewKey(k => k + 1)} />
         )}
         {activeTab === 'health' && (
           <CompactHealthChecks project={project} results={healthResults} />
@@ -1968,7 +1968,7 @@ function CompactSettings({ project, currentUserRole, onClone }: { project: Proje
   )
 }
 
-function ChatHistoryTab({ projectCode, currentSession, onSessionReset }: { projectCode: string; currentSession: ChatSessionSnapshot | null; onSessionReset?: () => void }) {
+function ChatHistoryTab({ projectCode, localPath, currentSession, onSessionReset }: { projectCode: string; localPath: string; currentSession: ChatSessionSnapshot | null; onSessionReset?: () => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [viewingCurrent, setViewingCurrent] = useState(false)
   const [showResetModal, setShowResetModal] = useState(false)
@@ -2127,25 +2127,57 @@ function ChatHistoryTab({ projectCode, currentSession, onSessionReset }: { proje
         const startDate = new Date(item.startedAt)
         const endDate = new Date(item.endedAt)
         const duration = Math.round((endDate.getTime() - startDate.getTime()) / 60000)
+        // No cross-check against currentSession — ChatSessionSnapshot doesn't
+        // carry the claudeSessionId. Adopting the currently-active session is
+        // idempotent on the DB side (the record already points there); the
+        // WS remount that follows is momentary. Worth the simplicity.
+        const isCurrent = false
 
         return (
-          <button
+          <div
             key={item.id}
-            onClick={() => setSelectedId(item.id)}
-            className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-700/50 border-b border-gray-700/30 transition-colors"
+            className="w-full flex items-center gap-1 border-b border-gray-700/30 hover:bg-gray-700/40 transition-colors"
           >
-            <div className="flex-1 min-w-0">
-              <div className="text-xs text-gray-300">
-                {startDate.toLocaleDateString()} {startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            <button
+              onClick={() => setSelectedId(item.id)}
+              className="flex-1 flex items-center gap-2 px-3 py-2 text-left min-w-0"
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-gray-300">
+                  {startDate.toLocaleDateString()} {startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </div>
+                <div className="text-[10px] text-gray-500">
+                  {duration > 0 ? `${duration}m` : '<1m'} &middot; {item.messageCount} messages
+                  {isCurrent && <span className="text-emerald-400 ml-2">&middot; current</span>}
+                </div>
               </div>
-              <div className="text-[10px] text-gray-500">
-                {duration > 0 ? `${duration}m` : '<1m'} &middot; {item.messageCount} messages
-              </div>
-            </div>
-            <svg className="w-3 h-3 text-gray-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-            </svg>
-          </button>
+              <svg className="w-3 h-3 text-gray-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+              </svg>
+            </button>
+            {!isCurrent && item.claudeSessionId && (
+              <button
+                onClick={async (e) => {
+                  e.stopPropagation()
+                  try {
+                    await adoptChatSession(projectCode, item.claudeSessionId, localPath)
+                    queryClient.invalidateQueries({ queryKey: ['chatHistory', projectCode] })
+                    // Kill the cached WS + bump ChatView so the remount opens
+                    // a fresh connection whose chat_launch hits the resume
+                    // path pointing at the newly-adopted session ID.
+                    killChatConnection(projectCode)
+                    onSessionReset?.()
+                  } catch (err) {
+                    console.error('failed to adopt session', err)
+                  }
+                }}
+                title={`Resume this session (${item.claudeSessionId.slice(0, 8)}…)`}
+                className="shrink-0 mr-3 px-2 py-1 text-[10px] font-medium rounded bg-indigo-700/70 hover:bg-indigo-600 text-white"
+              >
+                Resume
+              </button>
+            )}
+          </div>
         )
       })}
     </div>
