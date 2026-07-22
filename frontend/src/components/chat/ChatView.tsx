@@ -521,7 +521,16 @@ export default function ChatView({
         const s = statusData.status
         setStatus(s)
         onStatusChange?.(s)
-        if (s === 'reconnected' || s === 'started' || s === 'restarted') {
+        // 'resumed' is what the backend sends when the launch took the
+        // GetResumable path, the chat_sessions cross-dir fallback, the
+        // chat_history archive fallback, or the latest-on-disk fallback —
+        // ALL legitimate ways to land in a live session. Without it in
+        // this gate, isReplaying stays true forever after replay finishes
+        // and the input sits on "Loading chat session..." even though the
+        // transcript is fully rendered. Same story if we ever add more
+        // resume-flavored statuses — treat any non-{connecting,error,exited,disconnected}
+        // terminal status as "replay complete".
+        if (s === 'reconnected' || s === 'started' || s === 'restarted' || s === 'resumed') {
           // Replay is done — trigger scroll after React renders
           isReplayingRef.current = false; setIsReplaying(false)
           userScrolledUpRef.current = false
@@ -966,7 +975,7 @@ export default function ChatView({
   // Flush any queued messages when we reconnect (but not while compacting — wait for restarted)
   useEffect(() => {
     if (compactingRef.current) return
-    const connected = ['started', 'connected', 'reconnected', 'restarted'].includes(status)
+    const connected = ['started', 'connected', 'reconnected', 'restarted', 'resumed'].includes(status)
     if (connected && pendingMessagesRef.current.length > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
       for (const text of pendingMessagesRef.current) {
         wsRef.current.send(JSON.stringify({
@@ -1305,10 +1314,10 @@ export default function ChatView({
     }
   }
 
-  const isConnected = ['connecting', 'started', 'connected', 'reconnected', 'restarted'].includes(status)
+  const isConnected = ['connecting', 'started', 'connected', 'reconnected', 'restarted', 'resumed'].includes(status)
 
   const statusColor = useMemo(() => {
-    if (['started', 'connected', 'reconnected', 'restarted'].includes(status)) return 'text-green-400'
+    if (['started', 'connected', 'reconnected', 'restarted', 'resumed'].includes(status)) return 'text-green-400'
     if (['connecting'].includes(status)) return 'text-yellow-400'
     if (['error'].includes(status)) return 'text-red-400'
     return 'text-gray-500'
