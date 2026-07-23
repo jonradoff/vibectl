@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listProjectPrompts, ensureDir, getClaudeAuthStatus, getStoredToken, submitClaudeLoginCode, submitClaudeTokenDirect, listMCPServers, getSubscriptionUsage, listPluginCommands, getProjectContextHealth, getAdapterStatus, updateProject } from '../../api/client'
 import { ModelPicker } from '../shared/ModelPicker'
 import type { Project } from '../../types'
@@ -222,14 +222,23 @@ export default function ChatView({
   const [pickerModel, setPickerModel] = useState('')
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [currentModel, setCurrentModel] = useState<string>(configuredModel || '')
+  const queryClient = useQueryClient()
 
-  // Keep in sync when the configured model changes — either from empty
-  // (initial seed) or when the picker writes a new project override. Without
-  // the second case the chip would keep showing the previous live model
-  // until the next assistant event fired, which after a Save & restart is
-  // misleading.
+  // Seed currentModel from configuredModel ONLY while we still have no live
+  // signal (no user pick, no message_start). Once currentModel is set —
+  // either by user picking through the chip or by an assistant event — it
+  // is the source of truth and configuredModel must not overwrite it.
+  //
+  // Old code overwrote unconditionally whenever configuredModel !== currentModel,
+  // which caused this bug: user picks opus → updateProject writes to DB →
+  // setCurrentModel("opus") → but the React Query cache still says fable-5 →
+  // next render the prop is stale "fable-5" → effect fires "fable-5 !==
+  // opus" → currentModel reverts to fable-5 → chip flips back → header chip
+  // flips back via onModelChange. Confirmed by Jon: LOOM changed to opus,
+  // both chips showed opus, later reverted to fable-5 while claude actually
+  // stayed on opus.
   useEffect(() => {
-    if (configuredModel && configuredModel !== currentModel) {
+    if (!currentModel && configuredModel) {
       setCurrentModel(configuredModel)
       onModelChange?.(configuredModel)
     }
@@ -1577,6 +1586,13 @@ export default function ChatView({
                   const chosen = pickerModel
                   try {
                     await updateProject(projectId, { model: chosen } as Partial<Project>)
+                    // Refresh the projects list cache so the fresh model
+                    // reaches ProjectCard's `project` prop. Without this the
+                    // configuredModel prop keeps ferrying the old value on
+                    // every re-render and any consumer that syncs from it
+                    // (or its downstream state) can revert to fable-5.
+                    queryClient.invalidateQueries({ queryKey: ['projects'] })
+                    queryClient.invalidateQueries({ queryKey: ['project', projectId] })
                   } catch (e) {
                     console.error('failed to save model override', e)
                   }
@@ -1619,6 +1635,13 @@ export default function ChatView({
                   const chosen = pickerModel
                   try {
                     await updateProject(projectId, { model: chosen } as Partial<Project>)
+                    // Refresh the projects list cache so the fresh model
+                    // reaches ProjectCard's `project` prop. Without this the
+                    // configuredModel prop keeps ferrying the old value on
+                    // every re-render and any consumer that syncs from it
+                    // (or its downstream state) can revert to fable-5.
+                    queryClient.invalidateQueries({ queryKey: ['projects'] })
+                    queryClient.invalidateQueries({ queryKey: ['project', projectId] })
                   } catch (e) {
                     console.error('failed to save model override', e)
                   }
