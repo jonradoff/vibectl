@@ -2411,6 +2411,15 @@ function AskUserQuestionCard({ block, compact, onSubmit, answered }: {
     return init
   })
   const [others, setOthers] = useState<Record<string, string>>({})
+  // Per-question Skip flag. Claude Code's own AskUserQuestion prompt
+  // ships a Skip button on EACH question ("AskUserQuestion always
+  // includes a Skip button and a free-text input box"). Without it,
+  // multi-question prompts get stuck: user answers one, doesn't want to
+  // answer the others, Send button stays disabled forever → assistant
+  // hits its USER_DIALOG_TIMEOUT_MS and moves on with "user didn't
+  // answer". Log evidence: 20+ AskUserQuestion emitted, only 2
+  // tool_result_response delivered before this fix.
+  const [skipped, setSkipped] = useState<Record<string, boolean>>({})
 
   if (questions.length === 0) return null
 
@@ -2438,6 +2447,8 @@ function AskUserQuestionCard({ block, compact, onSubmit, answered }: {
   }
 
   const toggle = (question: string, label: string, multi: boolean) => {
+    // Interacting with any option un-skips the question.
+    setSkipped(prev => (prev[question] ? { ...prev, [question]: false } : prev))
     setSelections(prev => {
       const cur = new Set(prev[question] || [])
       if (multi) {
@@ -2449,12 +2460,28 @@ function AskUserQuestionCard({ block, compact, onSubmit, answered }: {
     })
   }
 
+  const toggleSkip = (question: string) => {
+    setSkipped(prev => ({ ...prev, [question]: !prev[question] }))
+    if (!skipped[question]) {
+      // When flipping to skipped, clear any partial selection / other-text
+      // so the eventual answer is unambiguous.
+      setSelections(prev => ({ ...prev, [question]: new Set<string>() }))
+      setOthers(prev => ({ ...prev, [question]: '' }))
+    }
+  }
+
   const submit = () => {
     if (!onSubmit) return
     const answers: Record<string, string | string[]> = {}
     for (const q of questions) {
+      if (skipped[q.question]) {
+        // Skipped questions send an empty string / empty array — the
+        // assistant reads this as "user declined to answer" the same
+        // way Claude Code CLI does when its Skip button is clicked.
+        answers[q.question] = q.multiSelect ? [] : ''
+        continue
+      }
       const picked = Array.from(selections[q.question] || [])
-      // Merge "Other" free-text if provided.
       const other = (others[q.question] || '').trim()
       const final = other ? [...picked, other] : picked
       if (q.multiSelect) {
@@ -2467,6 +2494,7 @@ function AskUserQuestionCard({ block, compact, onSubmit, answered }: {
   }
 
   const allAnsweredable = questions.every(q => {
+    if (skipped[q.question]) return true
     const picks = selections[q.question]
     const other = (others[q.question] || '').trim()
     return (picks && picks.size > 0) || other.length > 0
@@ -2480,11 +2508,28 @@ function AskUserQuestionCard({ block, compact, onSubmit, answered }: {
       </div>
       {questions.map((q, qi) => {
         const multi = !!q.multiSelect
+        const isSkipped = !!skipped[q.question]
         return (
-          <div key={qi} className="space-y-2">
-            {q.header && <div className="text-[10px] font-semibold text-indigo-400 uppercase tracking-wide">{q.header}</div>}
-            <div className={`${compact ? 'text-xs' : 'text-sm'} text-gray-200`}>{q.question}</div>
-            <div className="space-y-1.5">
+          <div key={qi} className={`space-y-2 ${isSkipped ? 'opacity-50' : ''}`}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                {q.header && <div className="text-[10px] font-semibold text-indigo-400 uppercase tracking-wide">{q.header}</div>}
+                <div className={`${compact ? 'text-xs' : 'text-sm'} text-gray-200`}>{q.question}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => toggleSkip(q.question)}
+                className={`shrink-0 text-[10px] uppercase tracking-wider font-medium px-2 py-1 rounded border transition-colors ${
+                  isSkipped
+                    ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+                    : 'bg-transparent border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+                }`}
+                title={isSkipped ? 'Un-skip this question' : 'Skip this question (send no answer)'}
+              >
+                {isSkipped ? 'Skipped' : 'Skip'}
+              </button>
+            </div>
+            <div className={`space-y-1.5 ${isSkipped ? 'pointer-events-none' : ''}`}>
               {q.options.map((opt, oi) => {
                 const checked = (selections[q.question] || new Set<string>()).has(opt.label)
                 return (
