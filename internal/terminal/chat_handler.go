@@ -976,6 +976,18 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			}
 			h.manager.RemoveSession(pid)
 
+			// If the process already exited (common case: OAuth token
+			// expired mid-turn, claude errored out, exit goroutine ran
+			// before the user clicked Login), oldSess is nil so we have
+			// no in-memory sessionID. Fall back to whatever the DB last
+			// persisted — same session ID the on-disk JSONL is keyed on,
+			// which --resume will happily reattach to under the new token.
+			if oldSessionID == "" && h.manager.ChatSessionService != nil {
+				if lastID, err := h.manager.ChatSessionService.GetLastSessionID(context.Background(), pid); err == nil && lastID != "" {
+					oldSessionID = lastID
+				}
+			}
+
 			var newSess *ChatSession
 			var startErr error
 			if oldSessionID != "" {
@@ -1086,6 +1098,18 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				readerDone = nil
 			}
 			h.manager.RemoveSession(pid)
+
+			// If the process already exited (common case: OAuth token
+			// expired mid-turn, claude errored out, exit goroutine ran
+			// before the user clicked Login), oldSess is nil so we have
+			// no in-memory sessionID. Fall back to whatever the DB last
+			// persisted — same session ID the on-disk JSONL is keyed on,
+			// which --resume will happily reattach to under the new token.
+			if oldSessionID == "" && h.manager.ChatSessionService != nil {
+				if lastID, err := h.manager.ChatSessionService.GetLastSessionID(context.Background(), pid); err == nil && lastID != "" {
+					oldSessionID = lastID
+				}
+			}
 
 			var newSess *ChatSession
 			var startErr error

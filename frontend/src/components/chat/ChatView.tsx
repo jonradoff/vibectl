@@ -1702,9 +1702,21 @@ export default function ChatView({
               )}
               {isNotLoggedIn ? (
                 <div className="flex items-center gap-2">
-                  <p className="text-[10px] text-gray-400 flex-1">Authenticate Claude Code on the server to enable chat sessions.</p>
+                  <p className="text-[10px] text-gray-400 flex-1">Authenticate Claude Code on the server. Your current conversation will be resumed after login.</p>
                   <button
-                    onClick={() => setShowLoginModal(true)}
+                    onClick={() => {
+                      // Standalone → PKCE flow (opens AuthSourcePickerModal
+                      // to route Console vs Claude.ai). Remote/client mode →
+                      // paste-token modal. Same routing the /login slash
+                      // command uses; without it the token-expiry panel's
+                      // Login button always fell into the paste modal even
+                      // in standalone mode where PKCE is expected.
+                      if (modeInfo?.mode === 'standalone') {
+                        setShowAuthSourceModal(true)
+                      } else {
+                        setShowLoginModal(true)
+                      }
+                    }}
                     className="shrink-0 rounded bg-indigo-600 hover:bg-indigo-500 px-2.5 py-1 text-xs font-medium text-white transition-colors"
                   >
                     Login to Claude
