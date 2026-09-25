@@ -173,13 +173,22 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 		return sendRaw(b)
 	}
 
+	var activeProjectID string
+
 	sendStatus := func(status string) {
 		if err := sendJSON("status", map[string]string{"status": status}); err != nil {
 			slog.Error("failed to send chat status", "status", status, "error", err)
 		}
+		// Whenever a session (re)attaches, tell the frontend which credential
+		// it runs on so a pinned /login token is visible — and clearable —
+		// instead of silently overriding native auth.
+		switch status {
+		case "started", "resumed", "reconnected", "restarted":
+			if activeProjectID != "" {
+				sendJSON("auth_info", h.manager.AuthInfoFor(activeProjectID))
+			}
+		}
 	}
-
-	var activeProjectID string
 
 	// startReader subscribes to claude's stdout stream and forwards events.
 	startReader := func(sess *ChatSession) chan struct{} {
@@ -380,6 +389,18 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			// Regenerate VIBECTL.md so the agent reads fresh project context.
 			if h.OnSessionStart != nil && launch.ProjectCode != "__workspace__" {
 				go h.OnSessionStart(launch.ProjectCode)
+			}
+
+			// A live session whose pinned token already failed auth is a
+			// zombie: the process stays up but every turn 401s. Don't
+			// reconnect to it — tear it down and fall through to the resume
+			// paths below, which respawn (--resume, same transcript) on the
+			// next credential (see resolveSpawnToken).
+			if sess := h.manager.GetSession(launch.ProjectCode); sess != nil && sess.IsAlive() && sess.AuthFailed() {
+				slog.Info("live session's pinned token failed auth; respawning instead of reconnecting",
+					"projectID", launch.ProjectCode, "sessionID", sess.SessionID)
+				sess.Close()
+				h.manager.RemoveSession(launch.ProjectCode)
 			}
 
 			// Check for existing live session (reconnection).
@@ -946,7 +967,6 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 			}
 
 			h.manager.SetProjectToken(pid, tokenMsg.Token)
-			slog.Info("per-project Claude token set", "projectID", pid)
 
 			// Tear down old session if one exists, capturing its session ID
 			// and buffered messages so the new spawn can --resume the SAME
@@ -1028,10 +1048,17 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				continue
 			}
 
-			// Open browser on macOS
-			if err := exec.Command("open", params.AuthURL).Start(); err != nil {
-				slog.Error("failed to open browser", "error", err, "url", params.AuthURL[:80])
-			}
+			// Open browser on macOS. Run (not just Start) in the background so
+			// a non-zero exit from `open` is logged — Start alone only fails if
+			// the binary is missing, which hid "the browser never opened"
+			// reports. The frontend also renders the authUrl as a link.
+			go func(authURL string) {
+				if out, err := exec.Command("open", authURL).CombinedOutput(); err != nil {
+					slog.Error("failed to open browser for Claude login", "error", err, "output", strings.TrimSpace(string(out)))
+				} else {
+					slog.Info("opened browser for Claude login")
+				}
+			}(params.AuthURL)
 
 			sendJSON("login_params", map[string]string{
 				"authUrl":      params.AuthURL,
@@ -1057,7 +1084,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				continue
 			}
 
-			token, exchangeErr := exchangeCodeForToken(exchangeMsg.Code, exchangeMsg.CodeVerifier, exchangeMsg.ClientID, exchangeMsg.RedirectURI, exchangeMsg.State)
+			token, expiresAt, exchangeErr := exchangeCodeForToken(exchangeMsg.Code, exchangeMsg.CodeVerifier, exchangeMsg.ClientID, exchangeMsg.RedirectURI, exchangeMsg.State)
 			if exchangeErr != nil {
 				sendJSON("login_status", map[string]string{"status": "error", "message": exchangeErr.Error()})
 				continue
@@ -1072,7 +1099,7 @@ func (h *ChatWebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.R
 				continue
 			}
 
-			h.manager.SetProjectToken(pid, token)
+			h.manager.SetProjectTokenWithExpiry(pid, token, "login", expiresAt)
 
 			// Tear down old session, capturing session ID + buffered messages
 			// so we can --resume the SAME conversation under the new account.

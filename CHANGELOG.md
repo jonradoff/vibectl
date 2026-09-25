@@ -3,6 +3,28 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## Unreleased — Pinned Claude logins can no longer wedge a session
+
+### Why
+RZR (2026-09-25) sat on `401 OAuth access token has expired` and nothing the user tried recovered it. The project had a per-project token pinned by the in-app `/login`, which vibectl injects as `CLAUDE_CODE_OAUTH_TOKEN`. Claude Code can't refresh an injected token, and the env var overrides the keychain, so a fresh `claude auth login` in a terminal was ignored. "Reset Session" just reconnected to the live-but-dead process, and every respawn reused the same expired pin.
+
+### Fixed
+- **Automatic fallback when a pinned token expires.** When a session on an injected token (per-project pin or the stored token file) reports an auth failure (`authentication_error`, "OAuth access token has expired", revoked or invalid credentials), the backend blacklists that token by fingerprint, clears the pin, and broadcasts a typed `pinned_token_expired` event *before* the failing `result`. If Claude Code has its own login (keychain / `~/.claude/.credentials.json`), ChatView suppresses the login panel, respawns via `set_project_token ""` (`--resume`, same transcript), then asks the resumed session to continue. With no native login, the normal login UI appears as before. Native-auth sessions are never touched.
+- **Respawns skip dead pins.** `resolveSpawnToken` drops a pin that is past its known expiry or has already failed auth, and skips a blacklisted stored token file, so `restart`, `/compact`, `/reload`, and reaper respawns fall back to native auth instead of reusing it. Re-pinning the same token explicitly clears it from the blacklist.
+- **Launch no longer reconnects to a zombie.** If the live session's pinned token has failed auth, `launch` tears it down and falls through to the resume paths instead of replaying into a process that 401s on every turn. This is the "Reset Session did nothing" case.
+- **`/login` now records the token's expiry.** The PKCE exchange keeps `expires_in` (it used to be discarded) and logs `per-project Claude token set` with its origin, fingerprint, and expiry. Previously only the paste path logged anything.
+- **`/login` browser fallback.** The inline code prompt shows the authorize URL as a link, and the server now logs whether `open` actually succeeded (it used `Start()` before, so a failed exit was never seen).
+
+### Added
+- **`auth_info` WS event + header chip.** Sent after every `started` / `resumed` / `reconnected` / `restarted` status. When a session runs on an injected token, the chat header shows an amber "Pinned login · expires HH:MM" (or "Stored token") chip. If a native login exists, clicking it switches back to the default login and keeps the conversation.
+- **"Use my default login" button** on the not-logged-in panel, shown whenever the session is pinned and a native login exists.
+
+### Changed
+- **The paste-token modal points at `claude setup-token`.** That command issues a long-lived (~1 year) token. The old instructions said to copy `oauthToken` from `claude auth status --json`, which gives a short-lived token that expires within hours once injected. The server's validation error message was updated to match.
+
+### Deferred
+- **Refreshing pinned `/login` tokens.** The idea: store the PKCE `refresh_token` and refresh ahead of expiry, respawning between turns. Skipped because it re-implements Claude Code's refresh logic, and the fallback above plus `setup-token` cover the failure. Revisit if per-project account switching becomes routine.
+
 ## v0.14.12 (2026-07-08) — /login Account Picker, Session Reset Finisher
 
 ### Why

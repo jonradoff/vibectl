@@ -94,6 +94,12 @@ VibeCtl spawns Claude Code processes in stream-json mode (`-p --input-format str
 - **Do NOT pass `CLAUDE_CODE_OAUTH_TOKEN`** from the macOS keychain. Claude Code manages its own token refresh cycle via the keychain. Forcing a snapshot as an env var causes 401s when the token rotates.
 - Only set `CLAUDE_CODE_OAUTH_TOKEN` for **explicitly user-provided tokens**: per-project tokens set via `/login`, or tokens stored in the persistent token file (`~/.vibectl/.claude-oauth-token` or `/data/.claude-oauth-token`).
 - Reading credentials is fine for **read-only purposes** (e.g., computing a stable hash for usage tracking identity, subscription usage API), but never inject them into the process environment.
+- **Injected tokens can't be refreshed by Claude Code, and they override the keychain.** A pin that expires used to wedge the project: `claude auth login` was ignored, and every respawn reused the dead token. Invariants (see `internal/terminal/pinned_token.go`):
+  - Every spawn resolves its credential through `resolveSpawnToken`, which skips pins past their known expiry and any token already blacklisted after an auth failure. Never read `projectTokens` directly in a spawn path.
+  - On an auth failure from an injected token, `handlePinnedAuthFailure` blacklists it and broadcasts `pinned_token_expired` **before** the failing `result`. The frontend respawns onto native auth when `nativeAvailable`. Native-auth failures still go to the login UI.
+  - `launch` must not reconnect to a live session whose `AuthFailed()` is true. Tear it down and resume instead.
+  - `auth_info` goes out after every attach status, so the UI always shows whether a session is pinned.
+  - Direct users who need a pasted token to `claude setup-token` (long-lived), not a short-lived access token.
 - **Credential location changes between Claude Code versions.** Always check both: (1) macOS keychain service `Claude Code-credentials` account `$USER`, and (2) `~/.claude/.credentials.json` → `claudeAiOauth.accessToken`. The `readClaudeTokenFromKeychain()` function handles both.
 
 ## Session resume (`--resume`)

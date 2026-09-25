@@ -103,6 +103,17 @@ interface PlanModeMessage {
 interface LoginCodePromptMessage {
   role: 'login_code_prompt'
   text: string
+  authUrl?: string
+}
+
+// Which credential the project's Claude Code process runs on (backend
+// `auth_info` event). "project"/"stored" = vibectl injected a token that
+// Claude Code can't refresh; "native" = Claude Code's own keychain login.
+interface AuthInfo {
+  source: 'native' | 'project' | 'stored'
+  origin?: string
+  expiresAt?: string
+  nativeAvailable: boolean
 }
 
 type ChatMessage = UserMessage | AssistantMessage | ToolResultMessage | ControlRequestMessage | PlanModeMessage | LoginCodePromptMessage
@@ -218,6 +229,11 @@ export default function ChatView({
   const [compactingLabel, setCompactingLabel] = useState<string | null>(null)
   const compactingRef = useRef(false)
   const [exitError, setExitError] = useState<{ exitCode: number; stderr: string[] } | null>(null)
+  const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null)
+  // Set while auto-recovering from an expired pinned token: suppresses the
+  // login panel for the dead turn's auth errors, then nudges the resumed
+  // session to continue once the respawn reports 'restarted'.
+  const pinnedFallbackRef = useRef(false)
   const [modelUnavailable, setModelUnavailable] = useState<{ message: string } | null>(null)
   const [pickerModel, setPickerModel] = useState('')
   const [showModelPicker, setShowModelPicker] = useState(false)
@@ -548,6 +564,14 @@ export default function ChatView({
           compactingRef.current = false
           setExitError(null)
           setReplayDone(n => n + 1)
+          if (s === 'restarted' && pinnedFallbackRef.current) {
+            pinnedFallbackRef.current = false
+            const text = 'Your previous turn failed because the pinned Claude login expired. The session has been resumed on the default login — continue where you left off.'
+            setMessages((prev) => [...prev, { role: 'user' as const, text }])
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: 'user_message', data: { text } }))
+            }
+          }
           // Flush any externally queued messages (e.g., from feedback prompt dispatch)
           if (pendingExternalRef.current.length > 0) {
             const queued = pendingExternalRef.current.splice(0)
@@ -578,7 +602,33 @@ export default function ChatView({
         setMessages((prev) => [...prev, {
           role: 'login_code_prompt',
           text: 'Complete authentication in the browser, then paste the code here.',
+          authUrl: lp.authUrl,
         }])
+        break
+      }
+
+      case 'auth_info': {
+        setAuthInfo(data.data as AuthInfo)
+        break
+      }
+
+      case 'pinned_token_expired': {
+        // The token vibectl injected for this project (in-app /login or a
+        // pasted token) has expired or been revoked, and Claude Code can't
+        // refresh an injected token. The backend already dropped the pin.
+        // If Claude Code has its own login to fall back to, respawn onto it
+        // (--resume keeps the transcript) instead of showing the login panel.
+        // Without a native login there's nothing to switch to, so the usual
+        // login UI takes over.
+        const d = data.data as { nativeAvailable?: boolean } | undefined
+        if (!d?.nativeAvailable) break
+        pinnedFallbackRef.current = true
+        setExitError(null)
+        setCompactingLabel('Pinned Claude login expired — switching to your default login and resuming...')
+        compactingRef.current = true
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'set_project_token', data: { token: '', projectCode, localPath } }))
+        }
         break
       }
 
@@ -819,6 +869,10 @@ export default function ChatView({
             resultMsg.includes('authentication_error') ||
             resultMsg.includes('401')
           )
+          if ((isNotLoggedInResult || isAuthError) && pinnedFallbackRef.current) {
+            // Auto-recovering onto the default login (pinned_token_expired).
+            break
+          }
           if (isNotLoggedInResult || isAuthError) {
             // Show login UI — auto-restart loops with bad credentials
             setExitError({ exitCode: 1, stderr: [resultMsg || 'Authentication failed'] })
@@ -937,6 +991,10 @@ export default function ChatView({
         const lowerMsg = errorMessage.toLowerCase()
         const isNotLoggedInError = lowerMsg.includes('not logged in') || lowerMsg.includes('please run /login') || lowerMsg.includes('run claude login')
 
+        if ((isNotLoggedInError || isAuthError) && pinnedFallbackRef.current) {
+          // Auto-recovering onto the default login (pinned_token_expired).
+          break
+        }
         if (isNotLoggedInError || isAuthError) {
           // Show the login button UI — both "not logged in" and auth failures
           // need user action (auto-restart loops with bad credentials)
@@ -1000,6 +1058,16 @@ export default function ChatView({
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
     wsRef.current.send(JSON.stringify({ type, data }))
   }, [])
+
+  // Drop this project's pinned token and resume the same conversation on
+  // Claude Code's own login (the one `claude auth login` manages).
+  const switchToDefaultLogin = useCallback(() => {
+    setIsReconnecting(false)
+    setExitError(null)
+    setCompactingLabel('Switching to your default Claude login and resuming...')
+    compactingRef.current = true
+    sendWsMessage('set_project_token', { token: '', projectCode, localPath })
+  }, [sendWsMessage, projectCode, localPath])
 
   const executeSlashCommand = useCallback((cmdName: string) => {
     setInputText('')
@@ -1430,6 +1498,28 @@ export default function ChatView({
               {contextHealth.grade} {contextHealth.score}
             </span>
           )}
+          {authInfo && authInfo.source !== 'native' && (() => {
+            const exp = authInfo.expiresAt ? new Date(authInfo.expiresAt) : null
+            const expired = !!exp && exp.getTime() < Date.now()
+            const label = authInfo.source === 'stored' ? 'Stored token' : 'Pinned login'
+            const expText = exp ? ` · ${expired ? 'expired' : 'expires'} ${exp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''
+            return (
+              <button
+                onClick={authInfo.nativeAvailable ? switchToDefaultLogin : undefined}
+                disabled={!authInfo.nativeAvailable}
+                className={`rounded px-1.5 py-0.5 text-[10px] font-medium border transition-colors ${
+                  expired ? 'bg-red-900/40 border-red-700/40 text-red-300' : 'bg-amber-900/30 border-amber-700/40 text-amber-300'
+                } ${authInfo.nativeAvailable ? 'hover:bg-amber-900/50 cursor-pointer' : 'cursor-default'}`}
+                title={
+                  `This session uses a ${authInfo.source === 'stored' ? 'stored token file' : `token set via ${authInfo.origin === 'login' ? '/login' : 'paste'}`} instead of your normal Claude Code login. ` +
+                  'Claude Code cannot refresh it, and it overrides `claude auth login`.' +
+                  (authInfo.nativeAvailable ? ' Click to switch back to your default login (conversation is kept).' : '')
+                }
+              >
+                {label}{expText}
+              </button>
+            )
+          })()}
           {(status === 'disconnected' || status === 'error' || status === 'exited' || status === 'claude_error' || status === 'reaped') && (
             <button
               onClick={() => {
@@ -1531,7 +1621,7 @@ export default function ChatView({
 
         {messages.map((msg, i) => {
           if (msg.role === 'login_code_prompt') {
-            return <LoginCodePrompt key={i} onSubmit={(code) => {
+            return <LoginCodePrompt key={i} authUrl={msg.authUrl} onSubmit={(code) => {
               const pkce = loginPkceRef.current
               if (!pkce) return
               sendWsMessage('login_exchange', {
@@ -1703,6 +1793,15 @@ export default function ChatView({
               {isNotLoggedIn ? (
                 <div className="flex items-center gap-2">
                   <p className="text-[10px] text-gray-400 flex-1">Authenticate Claude Code on the server. Your current conversation will be resumed after login.</p>
+                  {authInfo && authInfo.source !== 'native' && authInfo.nativeAvailable && (
+                    <button
+                      onClick={switchToDefaultLogin}
+                      title="Drop this project's pinned token and resume on your normal Claude Code login (e.g. after running `claude auth login` in a terminal)"
+                      className="shrink-0 rounded bg-gray-700 hover:bg-gray-600 px-2.5 py-1 text-xs font-medium text-white transition-colors"
+                    >
+                      Use my default login
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       // Standalone → PKCE flow (opens AuthSourcePickerModal
@@ -1948,7 +2047,7 @@ export default function ChatView({
 
 // --- Inline Login Code Prompt ---
 
-function LoginCodePrompt({ onSubmit }: { onSubmit: (code: string) => void }) {
+function LoginCodePrompt({ onSubmit, authUrl }: { onSubmit: (code: string) => void; authUrl?: string }) {
   const [code, setCode] = useState('')
   const [submitted, setSubmitted] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -1965,6 +2064,11 @@ function LoginCodePrompt({ onSubmit }: { onSubmit: (code: string) => void }) {
     <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-3 space-y-2">
       <p className="text-xs text-indigo-300 font-medium">Complete authentication in the browser, then paste the code below.</p>
       <p className="text-[10px] text-indigo-200/60">The code is shown on the page after you sign in. It expires quickly — paste it right away.</p>
+      {authUrl && (
+        <p className="text-[10px] text-indigo-200/70">
+          Browser didn't open? <a href={authUrl} target="_blank" rel="noopener noreferrer" className="underline hover:text-indigo-100">Open the Claude login page</a>.
+        </p>
+      )}
       <div className="flex gap-2">
         <input
           ref={inputRef}
@@ -3236,8 +3340,9 @@ function ClaudeLoginModal({ onClose, onToken, isStandalone: _isStandalone }: { o
                 <p className="text-xs text-gray-300 font-medium mb-1">Paste a Claude OAuth token</p>
                 <p className="text-xs text-gray-400 mb-3">
                   Open a terminal and run:<br />
-                  <code className="text-indigo-300 font-mono">claude auth status --json</code><br />
-                  Copy the <code className="text-indigo-300 font-mono">oauthToken</code> value — it starts with <span className="font-mono text-indigo-300">sk-ant-oat01-…</span><br />
+                  <code className="text-indigo-300 font-mono">claude setup-token</code><br />
+                  Paste the long-lived token it prints — it starts with <span className="font-mono text-indigo-300">sk-ant-oat01-…</span> and lasts about a year.
+                  Short-lived tokens from a normal login expire within hours and can't be refreshed once pasted here.<br />
                   <span className="text-yellow-400/80 mt-1 block">Not the code from the browser OAuth page — that is an authorization code, not a token.</span>
                 </p>
                 <textarea

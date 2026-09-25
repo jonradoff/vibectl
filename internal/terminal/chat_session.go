@@ -67,6 +67,15 @@ type ChatSession struct {
 	LocalPath   string
 	SessionID   string         // Claude session ID from init event
 	TokenHash   string         // SHA256 of OAuth token used — stable identity per login
+	// AuthSource is which credential this spawn runs on (AuthSourceNative /
+	// AuthSourceProject / AuthSourceStored). AuthOrigin and AuthExpiresAt
+	// describe a per-project pin. authToken is the injected token ("" for
+	// native) — kept so an auth failure can blacklist exactly that token.
+	AuthSource    string
+	AuthOrigin    string
+	AuthExpiresAt time.Time
+	authToken     string
+	authFailed    bool // pinned credential 401'd; guarded by mu
 	UserID      *bson.ObjectID // vibectl user who owns this session (nil in standalone)
 	UserName    string
 	StartedAt   time.Time
@@ -492,7 +501,11 @@ type IntentExtractorFunc func(entry *models.ChatHistoryEntry)
 
 type ChatManager struct {
 	sessions            map[string]*ChatSession
-	projectTokens       map[string]string // per-project Claude OAuth tokens (for account switching)
+	// projectTokens / expiredTokens have their own lock (tokMu) because
+	// startProcess resolves the spawn token while m.mu is already held.
+	projectTokens       map[string]pinnedToken // per-project Claude OAuth tokens (for account switching)
+	expiredTokens       map[string]bool        // fingerprints of injected tokens that failed auth
+	tokMu               sync.Mutex
 	mu                  sync.RWMutex
 	skipPermissions     bool
 	ChatSessionService  ChatSessionPersister
@@ -533,7 +546,8 @@ type ChatManager struct {
 func NewChatManager(chatSessionService ChatSessionPersister, chatHistoryService ChatHistoryArchiver) *ChatManager {
 	return &ChatManager{
 		sessions:            make(map[string]*ChatSession),
-		projectTokens:       make(map[string]string),
+		projectTokens:       make(map[string]pinnedToken),
+		expiredTokens:       make(map[string]bool),
 		skipPermissions:     true, // default to accept-all
 		ChatSessionService:  chatSessionService,
 		ChatHistoryService:  chatHistoryService,
@@ -571,25 +585,6 @@ func (m *ChatManager) GetSession(projectID string) *ChatSession {
 	return m.sessions[projectID]
 }
 
-// SetProjectToken sets a per-project Claude OAuth token for account switching.
-// The token will be injected into the Claude process environment when the session starts.
-func (m *ChatManager) SetProjectToken(projectID, token string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if token == "" {
-		delete(m.projectTokens, projectID)
-	} else {
-		m.projectTokens[projectID] = token
-	}
-}
-
-// GetProjectToken returns the per-project token, if set.
-func (m *ChatManager) GetProjectToken(projectID string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.projectTokens[projectID]
-}
-
 // PreserveCurrentTokenForAllSessions snapshots the given token as the per-project
 // token for every active session that doesn't already have one. Call this before
 // `claude auth login` changes the global keychain credential, so existing sessions
@@ -597,9 +592,11 @@ func (m *ChatManager) GetProjectToken(projectID string) string {
 func (m *ChatManager) PreserveCurrentTokenForAllSessions(token string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.tokMu.Lock()
+	defer m.tokMu.Unlock()
 	for pid := range m.sessions {
-		if m.projectTokens[pid] == "" {
-			m.projectTokens[pid] = token
+		if m.projectTokens[pid].Token == "" {
+			m.projectTokens[pid] = pinnedToken{Token: token, Origin: "preserved", SetAt: time.Now()}
 			slog.Info("preserved token for existing session", "projectID", pid)
 		}
 	}
@@ -684,16 +681,13 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 	}
 	env = filtered
 	// Per-project token takes priority (account switching via /login).
-	// Falls back to globally stored token file.
+	// Falls back to globally stored token file. Pins past their known expiry
+	// or that already failed auth are skipped (see resolveSpawnToken).
 	// Do NOT read from keychain here — let Claude Code handle its own auth
 	// natively (it manages token refresh). We only read keychain below for
 	// the usage tracking hash.
-	var oauthToken string
-	if token := m.projectTokens[projectID]; token != "" {
-		oauthToken = token
-	} else if token := getStoredClaudeToken(); token != "" {
-		oauthToken = token
-	}
+	oauthToken, authSource, pin := m.resolveSpawnToken(projectID)
+	slog.Info("spawn auth", "projectID", projectID, "source", authSource, "origin", pin.Origin)
 	if oauthToken != "" {
 		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+oauthToken)
 	}
@@ -758,6 +752,10 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 		ProjectCode:  projectID,
 		LocalPath:    localPath,
 		TokenHash:    tokenHash,
+		AuthSource:    authSource,
+		AuthOrigin:    pin.Origin,
+		AuthExpiresAt: pin.ExpiresAt,
+		authToken:     oauthToken,
 		StartedAt:    time.Now().UTC(),
 		lastActivity: time.Now(),
 		Cmd:          cmd,
@@ -829,6 +827,9 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 				if data, marshalErr := json.Marshal(evt); marshalErr == nil {
 					sess.broadcast(data)
 				}
+			}
+			if isPinnedAuthFailure(line) {
+				m.handlePinnedAuthFailure(sess, line)
 			}
 			if strings.Contains(lower, "error") ||
 				strings.Contains(lower, "not logged in") ||
@@ -924,6 +925,11 @@ func (m *ChatManager) startProcess(projectID, localPath string, extraArgs ...str
 						Result  string `json:"result"`
 					}
 					if json.Unmarshal(line, &r) == nil && r.IsError {
+						// Broadcast before the result itself so the frontend
+						// knows to auto-recover instead of showing login UI.
+						if isPinnedAuthFailure(r.Result) {
+							m.handlePinnedAuthFailure(sess, r.Result)
+						}
 						lower := strings.ToLower(r.Result)
 						if strings.Contains(lower, "issue with the selected model") ||
 							strings.Contains(lower, "model not found") ||
@@ -1533,7 +1539,9 @@ func generatePKCELogin(authSource string) *PKCELoginParams {
 // but Anthropic's server requires it — omitting state returns
 // "invalid_request_error: Invalid request format" before the code is even
 // validated.
-func exchangeCodeForToken(code, codeVerifier, clientID, redirectURI, state string) (string, error) {
+//
+// Returns the access token and its expiry (zero if the server didn't say).
+func exchangeCodeForToken(code, codeVerifier, clientID, redirectURI, state string) (string, time.Time, error) {
 	// Claude's auth success page returns codes in "code#state" format —
 	// the state fragment there is client-side CSRF validation only, not
 	// part of the code, so strip anything after the '#' before posting.
@@ -1559,13 +1567,13 @@ func exchangeCodeForToken(code, codeVerifier, clientID, redirectURI, state strin
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("token exchange request failed: %w", err)
+		return "", time.Time{}, fmt.Errorf("token exchange request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		return "", fmt.Errorf("read token response body: %w", readErr)
+		return "", time.Time{}, fmt.Errorf("read token response body: %w", readErr)
 	}
 
 	// The Anthropic OAuth token endpoint returns `error` as an OBJECT on
@@ -1575,23 +1583,28 @@ func exchangeCodeForToken(code, codeVerifier, clientID, redirectURI, state strin
 	// .error of type string" decode error.
 	var tokenResp struct {
 		AccessToken string          `json:"access_token"`
+		ExpiresIn   int64           `json:"expires_in"`
 		Error       json.RawMessage `json:"error"`
 		ErrorDesc   string          `json:"error_description"`
 	}
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
 		// Fall back to the raw body — better to show HTML/gibberish than
 		// swallow a diagnostic that's sitting right there.
-		return "", fmt.Errorf("failed to parse token response (HTTP %d): %w; body: %s",
+		return "", time.Time{}, fmt.Errorf("failed to parse token response (HTTP %d): %w; body: %s",
 			resp.StatusCode, err, previewBody(body))
 	}
 	if tokenResp.AccessToken != "" {
-		return tokenResp.AccessToken, nil
+		var expiresAt time.Time
+		if tokenResp.ExpiresIn > 0 {
+			expiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+		}
+		return tokenResp.AccessToken, expiresAt, nil
 	}
 	if len(tokenResp.Error) > 0 && string(tokenResp.Error) != "null" {
-		return "", fmt.Errorf("oauth error (HTTP %d): %s%s",
+		return "", time.Time{}, fmt.Errorf("oauth error (HTTP %d): %s%s",
 			resp.StatusCode, decodeOAuthError(tokenResp.Error), suffixIfDesc(tokenResp.ErrorDesc))
 	}
-	return "", fmt.Errorf("no access_token in response (HTTP %d); body: %s",
+	return "", time.Time{}, fmt.Errorf("no access_token in response (HTTP %d); body: %s",
 		resp.StatusCode, previewBody(body))
 }
 

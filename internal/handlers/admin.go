@@ -277,7 +277,10 @@ func (h *AdminHandler) ClaudeLoginCode(w http.ResponseWriter, r *http.Request) {
 }
 
 // ClaudeTokenDirect handles POST /api/v1/admin/claude-token-direct.
-// Stores a Claude OAuth token that was obtained externally (e.g. from claude auth status on a local machine).
+// Stores a Claude OAuth token that was obtained externally — ideally from
+// `claude setup-token`, which issues a long-lived (~1 year) token. Short-lived
+// access tokens copied from a normal login can't be refreshed once injected
+// via CLAUDE_CODE_OAUTH_TOKEN and expire within hours.
 func (h *AdminHandler) ClaudeTokenDirect(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Token string `json:"token"`
@@ -297,7 +300,7 @@ func (h *AdminHandler) ClaudeTokenDirect(w http.ResponseWriter, r *http.Request)
 	if !strings.HasPrefix(token, "sk-ant-") {
 		middleware.WriteError(w, http.StatusBadRequest,
 			"This looks like an authorization code, not an OAuth token. "+
-				"Run 'claude auth status --json' and copy the oauthToken value (starts with sk-ant-oat01-...).",
+				"Run 'claude setup-token' in a terminal and paste the long-lived token it prints (starts with sk-ant-oat01-...).",
 			"INVALID_TOKEN_FORMAT")
 		return
 	}
