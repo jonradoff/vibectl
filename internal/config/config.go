@@ -8,7 +8,7 @@ import (
 )
 
 // Version is set at build time via ldflags.
-var Version = "0.14.12"
+var Version = "0.14.13"
 
 type Config struct {
 	MongoDBURI           string

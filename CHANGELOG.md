@@ -3,7 +3,7 @@
 All notable changes to VibeCtl are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## Unreleased — Pinned Claude logins can no longer wedge a session
+## v0.14.13 (2026-09-25) — Pinned Claude logins can no longer wedge a session
 
 ### Why
 RZR (2026-09-25) sat on `401 OAuth access token has expired` and nothing the user tried recovered it. The project had a per-project token pinned by the in-app `/login`, which vibectl injects as `CLAUDE_CODE_OAUTH_TOKEN`. Claude Code can't refresh an injected token, and the env var overrides the keychain, so a fresh `claude auth login` in a terminal was ignored. "Reset Session" just reconnected to the live-but-dead process, and every respawn reused the same expired pin.
@@ -21,6 +21,14 @@ RZR (2026-09-25) sat on `401 OAuth access token has expired` and nothing the use
 
 ### Changed
 - **The paste-token modal points at `claude setup-token`.** That command issues a long-lived (~1 year) token. The old instructions said to copy `oauthToken` from `claude auth status --json`, which gives a short-lived token that expires within hours once injected. The server's validation error message was updated to match.
+
+### Also in this release (commits since v0.14.12 that never got an entry)
+- **Auth resilience:** a transient error no longer forces a logout, on either the frontend or the backend (`350a1fa`). Token verification is cached, bounded, and tolerates stale results, so it copes with a slow connection (`0799d5a`). `ClearSession` is now separate from `SetNoResume` (`d8596ff`).
+- **/login:** the conversation is kept when you switch accounts (`3e490e8`), and the transcript is kept when OAuth expires mid-turn (`cf4b41f`).
+- **Session lifecycle:** fixed a restart deadlock by making the reader exit when unsubscribe closes (`0cf57b4`). The `resumed` status now counts as replay-complete, so the input box no longer gets stuck (`82ec9ec`). Session History rows have a "Resume" button (`146b47e`). The /compact and reconnect banners are pinned above the input (`6c3c0f5`).
+- **Model selection:** switching models happens live over stream-json `set_model` with no restart (`298d3d1`), and a stale `project.model` no longer overwrites the model you picked (`3ec4db4`).
+- **Chat rendering:** VSCode-style TodoWrite and Task* renderers with a stateful roll-up (`c31436c`, `e110797`, `df0da59`). A non-array `todos` field no longer crashes the view (`dd7ef95`), and a TaskUpdate against an unknown ID is dropped (`f1fd53e`).
+- **AskUserQuestion:** each question has its own Skip button (`1220e92`), and the round-trip is traced in the logs (`2df4599`).
 
 ### Deferred
 - **Refreshing pinned `/login` tokens.** The idea: store the PKCE `refresh_token` and refresh ahead of expiry, respawning between turns. Skipped because it re-implements Claude Code's refresh logic, and the fallback above plus `setup-token` cover the failure. Revisit if per-project account switching becomes routine.
